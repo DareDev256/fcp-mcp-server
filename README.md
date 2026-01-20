@@ -1,6 +1,6 @@
-# Final Cut Pro MCP Server
+# FCPXML MCP
 
-> **The first AI-powered MCP server for Final Cut Pro.** Analyze timelines, detect flash frames, create montages with pacing curves, generate A/B roll edits, sync cuts to beats — all through natural language conversation with Claude.
+Batch operations and analysis for Final Cut Pro XML files via Claude.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -9,81 +9,54 @@
 
 ---
 
-## What This Does
+## What This Is
 
-Connect Claude to your Final Cut Pro projects. Ask questions, make edits, generate rough cuts.
+A Model Context Protocol (MCP) server that reads and writes FCPXML files. Claude can analyze your timelines, make batch edits, and generate new sequences.
+
+## What This Is NOT
+
+- **Not a plugin** that runs inside Final Cut Pro
+- **Not real-time editing** — you export XML, modify it, then reimport
+- **Not a replacement** for manual editing when you need visual feedback
+
+## The Workflow
 
 ```
-You: "Validate my timeline for any issues"
-
-Claude: Timeline Health: 87%
-        - 3 flash frames detected (< 2 frames each) ⚠️
-        - 1 gap found at 00:02:15:00
-        - All media references valid ✅
-
-You: "Fix the flash frames and fill the gap"
-
-Claude: Fixed 3 flash frames (extended previous clips).
-        Filled 1 gap by extending adjacent clip.
-        Saved to project_fixed.fcpxml
-
-You: "Create a 30-second montage from my broll, accelerating pace"
-
-Claude: Generated montage: 18 clips
-        Pacing: 2s cuts → 0.5s cuts (builds energy)
-        Saved to montage.fcpxml
-
-You: "Now create an A/B roll edit: interviews as main, broll as cutaways"
-
-Claude: Generated A/B roll: 12 interview segments, 11 broll cutaways
-        Total: 3m 15s alternating between A and B roll
-        Saved to ab_roll.fcpxml
-
-You: "Import my beat markers and snap the cuts to the music"
-
-Claude: Added 96 beat markers from beats.json
-        Adjusted 23 cuts to align with beats (avg shift: 3 frames)
-        Your edit is now synced to the music!
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Final Cut Pro  │────▶│   Claude +      │────▶│  Final Cut Pro  │
+│  Export XML     │     │   MCP Server    │     │  Import XML     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-## Features
+1. **Export from FCP**: `File → Export XML...`
+2. **Run MCP tools**: Analyze, modify, generate via Claude
+3. **Import back to FCP**: `File → Import → XML`
 
-### Read & Analysis Operations
-- **Analyze timelines** — Duration, resolution, clip count, pacing metrics
-- **List clips** — With timecodes, durations, and keyword metadata
-- **List library clips** — See all source media available for insertion
-- **Extract markers** — Chapter markers, TODOs, standard markers (YouTube chapter format too)
-- **Find issues** — Flash frames (< 0.5s), overly long clips (> 30s)
-- **Export** — EDL, CSV for handoffs to color/audio
+This is a roundtrip workflow. Each edit cycle requires an export and import.
 
-### Speed Cutting Analysis (v0.3.0)
-- **Detect flash frames** — Find ultra-short clips with severity levels (critical < 2 frames, warning < 6 frames)
-- **Detect duplicates** — Find clips using the same source media
-- **Detect gaps** — Find unintentional gaps in the timeline
-- **Validate timeline** — Comprehensive health check with score (0-100%)
+---
 
-### Write Operations
-- **Add markers** — Single or batch, auto-generate at cuts or intervals
-- **Insert clips** — Add library clips to timeline at any position with subclip support
-- **Trim clips** — Adjust in/out points with ripple
-- **Reorder clips** — Move clips to new positions
-- **Add transitions** — Cross-dissolve, fade to black, etc.
-- **Change speed** — Slow motion or speed up
-- **Split & delete** — Non-destructive timeline editing
+## When To Use This
 
-### Speed Cutting Write (v0.3.0)
-- **Fix flash frames** — Auto-fix by extending neighbors or deleting
-- **Rapid trim** — Batch trim all clips to max duration for fast montages
-- **Fill gaps** — Close gaps by extending adjacent clips
+### Good For
 
-### AI-Powered Generation
-- **Auto rough cut** — Generate a complete timeline from keywords, duration, and pacing preferences
-- **Generate montage** — Create rapid-fire montages with pacing curves (accelerating, decelerating, pyramid)
-- **Generate A/B roll** — Documentary-style alternating edits between main content and cutaways
+| Use Case | Why It Works |
+|----------|--------------|
+| **Batch marker insertion** | Add 100 chapter markers from a transcript in one operation |
+| **QC before delivery** | Find flash frames, gaps, duplicates programmatically |
+| **Data extraction** | Export EDL, CSV, chapter markers for handoffs |
+| **Template generation** | Create rough cuts from tagged clips automatically |
+| **Automated assembly** | Build montages from keywords and pacing rules |
+| **Timeline health checks** | Validate timing, find issues, get stats |
 
-### Beat Sync (v0.3.0)
-- **Import beat markers** — Import from external audio analysis (JSON)
-- **Snap to beats** — Align cuts to nearest beat markers for music-synced edits
+### Not Ideal For
+
+| Use Case | Why Not |
+|----------|---------|
+| **Creative editing decisions** | No visual feedback — you can't see results until reimport |
+| **Real-time adjustments** | Export/import cycle is slow for iterative changes |
+| **Fine-tuning cuts** | Adjusting by a few frames is faster in FCP directly |
+| **Anything visual** | Color, framing, motion — need to see it |
 
 ---
 
@@ -121,9 +94,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 `File → Export XML...` (saves as `.fcpxml`)
 
-### 4. Start Editing with AI
+### 4. Use the Tools
 
-Open Claude Desktop and start talking to your timeline.
+Open Claude Desktop and start working with your timeline.
 
 ---
 
@@ -133,7 +106,7 @@ Open Claude Desktop and start talking to your timeline.
 | Tool | Description |
 |------|-------------|
 | `list_projects` | Find all FCPXML files in a directory |
-| `analyze_timeline` | Get comprehensive stats on duration, resolution, pacing |
+| `analyze_timeline` | Get stats on duration, resolution, pacing |
 | `list_clips` | List all clips with timecodes, durations, keywords |
 | `list_library_clips` | List all source clips available in the library |
 | `list_markers` | Extract markers with timestamps (YouTube chapter format) |
@@ -142,15 +115,15 @@ Open Claude Desktop and start talking to your timeline.
 | `list_keywords` | Extract all keywords/tags from project |
 | `export_edl` | Generate EDL for color/audio handoffs |
 | `export_csv` | Export timeline data to CSV |
-| `analyze_pacing` | AI analysis with suggestions |
+| `analyze_pacing` | Get pacing metrics with suggestions |
 
-### Speed Cutting Analysis (v0.3.0) — 4 tools
+### QC & Validation — 4 tools
 | Tool | Description |
 |------|-------------|
 | `detect_flash_frames` | Find ultra-short clips with severity (critical/warning) |
 | `detect_duplicates` | Find clips using same source media |
 | `detect_gaps` | Find unintentional gaps in timeline |
-| `validate_timeline` | Comprehensive health check with score |
+| `validate_timeline` | Health check with score (0-100%) |
 
 ### Editing (Write) — 9 tools
 | Tool | Description |
@@ -165,21 +138,21 @@ Open Claude Desktop and start talking to your timeline.
 | `delete_clips` | Remove clips with optional ripple |
 | `split_clip` | Split a clip at specified timecodes |
 
-### Speed Cutting Write (v0.3.0) — 3 tools
+### Batch Fixes — 3 tools
 | Tool | Description |
 |------|-------------|
 | `fix_flash_frames` | Auto-fix flash frames (extend neighbors or delete) |
 | `rapid_trim` | Batch trim clips to max duration |
 | `fill_gaps` | Close gaps by extending adjacent clips |
 
-### AI-Powered — 3 tools
+### Generation — 3 tools
 | Tool | Description |
 |------|-------------|
 | `auto_rough_cut` | Generate timeline from keywords, duration, pacing |
 | `generate_montage` | Create montages with pacing curves (accelerating/decelerating/pyramid) |
 | `generate_ab_roll` | Documentary-style A/B roll alternating edits |
 
-### Beat Sync (v0.3.0) — 2 tools
+### Beat Sync — 2 tools
 | Tool | Description |
 |------|-------------|
 | `import_beat_markers` | Import beat markers from JSON audio analysis |
@@ -189,91 +162,46 @@ Open Claude Desktop and start talking to your timeline.
 
 ## Usage Examples
 
-### Analyze Your Edit
+### Timeline Analysis
 
 ```
 "Analyze my latest FCP project"
-"What's the pacing like in the first half vs the second half?"
-"Find all clips shorter than 1 second"
-"Extract chapter markers for my YouTube description"
+"List all clips shorter than 1 second"
+"Extract chapter markers for YouTube description"
+"Run a health check on my timeline"
 ```
 
-### Make Edits
+### Batch Edits
 
 ```
-"Add a chapter marker at 00:01:30:00 called 'Intro'"
-"Trim 2 seconds off the end of clip 'Interview_02'"
-"Move the outro to the beginning"
-"Add a cross-dissolve to every clip"
+"Add chapter markers at these timestamps: [list]"
+"Trim 2 seconds off the end of every interview clip"
+"Add a cross-dissolve between all clips"
+"Fix all flash frames by extending previous clips"
 ```
 
-### Insert Library Clips
+### Data Export
 
 ```
-"What clips do I have available in my library?"
-"Insert Broll_City at the end of the timeline"
-"Put Interview_A at 00:01:25:00, just use seconds 10-20"
-"Add Broll_Studio after the first Interview clip"
+"Export an EDL for the colorist"
+"Generate a CSV of all clips with timecodes"
+"List all clips tagged 'interview' with durations"
 ```
 
-### Generate Rough Cuts
+### Automated Assembly
 
 ```
-"Create a 3-minute rough cut using clips tagged 'broll', fast pacing"
-"Generate a rough cut with these segments:
-  - Intro (30s, 'intro' keyword)
-  - Main content (2min, 'interview' keyword)
-  - Outro (15s, 'outro' keyword)"
+"Create a 3-minute rough cut using clips tagged 'broll'"
+"Generate a montage with accelerating pacing"
+"Build an A/B roll: interviews as main, broll as cutaways"
 ```
 
-### Speed Cutting (v0.3.0)
-
-```
-"Validate my timeline for any issues"
-"Find all flash frames in my timeline"
-"Fix the flash frames by extending the previous clips"
-"Trim all clips to max 2 seconds for a fast montage"
-"Fill all the gaps in my timeline"
-```
-
-### Montage & A/B Roll (v0.3.0)
-
-```
-"Create a 30-second montage from my broll, accelerating pace"
-"Generate a montage that starts slow and ends fast (pyramid curve)"
-"Create an A/B roll: interviews as A, broll as B, 3 minutes"
-"Make a documentary-style edit alternating between talking heads and cutaways"
-```
-
-### Beat Sync (v0.3.0)
+### Beat Sync
 
 ```
 "Import beat markers from beats.json"
-"Snap all my cuts to the beat markers"
-"Align cuts to beats, prefer earlier beats within 6 frames"
+"Snap all cuts to the nearest beat"
 ```
-
----
-
-## How It Works
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Claude        │────▶│   MCP Server    │────▶│   FCPXML Files  │
-│   Desktop       │◀────│   (Python)      │◀────│   (Your Edits)  │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │
-        │                       ▼
-        │               Parse & Modify
-        │               FCPXML via Python
-        │                       │
-        └───────────────────────┘
-              Natural Language
-```
-
-1. **Export from FCP**: `File → Export XML`
-2. **Talk to Claude**: Analyze, suggest, modify
-3. **Import back**: `File → Import → XML`
 
 ---
 
@@ -285,8 +213,8 @@ fcp-mcp-server/
 ├── fcpxml/
 │   ├── __init__.py
 │   ├── parser.py          # Read FCPXML → Python + library clip listing
-│   ├── writer.py          # Python → FCPXML, speed cutting, gap filling
-│   ├── rough_cut.py       # AI-powered rough cut, montage, A/B roll generation
+│   ├── writer.py          # Python → FCPXML, batch fixes, gap filling
+│   ├── rough_cut.py       # Rough cut, montage, A/B roll generation
 │   └── models.py          # Timeline, Clip, Marker, TimeValue, PacingCurve
 ├── docs/
 │   └── specs/             # Design specs and schemas
@@ -314,54 +242,45 @@ fcp-mcp-server/
 
 ## Why This Exists
 
-After directing 350+ music videos, I know the pain of repetitive editing tasks:
-- Counting cuts for every video
-- Extracting chapter markers manually
-- Finding flash frames by scrubbing
+After directing 350+ music videos, I got tired of repetitive editing tasks:
+- Counting cuts manually
+- Extracting chapter markers one by one
+- Finding flash frames by scrubbing through footage
 - Building rough cuts clip by clip
 
-Now I just ask Claude.
+These are batch operations that don't need visual feedback. Export the XML, let Claude handle it, import the result.
 
 ---
 
 ## Releases
 
-### v0.3.0 — Speed Cutting & AI-Powered Generation (Latest)
-*The ultimate speed editor: detect issues, fix them instantly, generate montages*
+### v0.3.0 — Batch Operations & Generation (Latest)
 
-- **Speed Cutting Analysis:** `detect_flash_frames`, `detect_duplicates`, `detect_gaps`, `validate_timeline`
-- **Speed Cutting Write:** `fix_flash_frames`, `rapid_trim`, `fill_gaps`
-- **AI Generation:** `generate_montage` with pacing curves (accelerating/decelerating/pyramid), `generate_ab_roll` for documentary-style edits
-- **Beat Sync:** `import_beat_markers`, `snap_to_beats` for music-synced edits
+- **QC Tools:** `detect_flash_frames`, `detect_duplicates`, `detect_gaps`, `validate_timeline`
+- **Batch Fixes:** `fix_flash_frames`, `rapid_trim`, `fill_gaps`
+- **Generation:** `generate_montage` with pacing curves, `generate_ab_roll` for documentary-style edits
+- **Beat Sync:** `import_beat_markers`, `snap_to_beats`
 - Timeline health scoring (0-100%)
 - Flash frame severity levels (critical < 2 frames, warning < 6 frames)
 - 32 tools total
 
 ### v0.2.1 — Library Clip Insertion
-*Insert clips from your library onto the timeline*
 
 - **New:** `list_library_clips` — See all source media available for insertion
 - **New:** `insert_clip` — Add library clips at any position with subclip support
-- Position options: `start`, `end`, timecode, or `after:clip_name`
-- Subclip support via in/out points
-- Automatic ripple to shift subsequent clips
 - 21 tools total
 
-### v0.2.0 — Comprehensive Timeline Editing
-*Full creative control over your timeline*
+### v0.2.0 — Timeline Editing
 
-- **New write tools:** `trim_clip`, `reorder_clips`, `add_transition`, `change_speed`, `delete_clips`, `split_clip`, `batch_add_markers`
-- **New AI tool:** `auto_rough_cut` — Generate rough cuts from keywords, duration, pacing
-- TimeValue model for precise rational time math
+- **Write tools:** `trim_clip`, `reorder_clips`, `add_transition`, `change_speed`, `delete_clips`, `split_clip`, `batch_add_markers`
+- **Generation:** `auto_rough_cut` — Generate rough cuts from keywords
 - 19 tools total
 
 ### v0.1.0 — Initial Release
-*The foundation: read and analyze*
 
 - Core FCPXML parsing (v1.8 - v1.11)
 - Timeline analysis and clip listing
 - Marker extraction (chapters, TODOs, standard)
-- Flash frame and long clip detection
 - EDL/CSV export
 - 10 tools total
 
@@ -398,7 +317,7 @@ PRs welcome. If you're a video editor who codes (or a coder who edits), let's bu
 
 ## Credits
 
-Built by [@DareDev256](https://github.com/DareDev256) — Former music video director (350+ videos for Chief Keef, Migos, Masicka), now building AI tools for creators.
+Built by [@DareDev256](https://github.com/DareDev256) — Former music video director (350+ videos for Chief Keef, Migos, Masicka), now building tools for creators.
 
 ---
 
