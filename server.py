@@ -60,7 +60,7 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 PROJECTS_DIR = os.environ.get("FCP_PROJECTS_DIR", os.path.expanduser("~/Movies"))
@@ -1429,7 +1429,7 @@ async def list_tools() -> list[Tool]:
             }
         ),
 
-        # ===== TRANSCRIPT INTELLIGENCE (v0.13.0) =====
+        # ===== TRANSCRIPT INTELLIGENCE (v0.13.1) =====
         Tool(
             name="transcribe_media",
             description="Transcribe each clip's source media locally with word-level timestamps (faster-whisper). Writes a _transcript.json next to each media file (reused by edit_by_transcript / remove_filler_words so media is only transcribed once) and optionally an SRT for captions. Requires the optional [transcribe] extra; degrades to an install hint without it.",
@@ -3144,7 +3144,7 @@ async def handle_detect_beats(arguments: dict) -> Sequence[TextContent]:
     return _text_result(result_text)
 
 
-# ===== TRANSCRIPT INTELLIGENCE (v0.13.0) =====
+# ===== TRANSCRIPT INTELLIGENCE (v0.13.1) =====
 
 TRANSCRIBE_MAX_MEDIA = 10
 

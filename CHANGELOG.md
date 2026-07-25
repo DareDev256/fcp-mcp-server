@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1] - 2026-07-24
+
+Registry release. Adds the `mcp-name` ownership marker to the README (required
+by the official MCP registry to bind the PyPI package to
+`io.github.DareDev256/fcpxml-mcp-server`) and trims `server.json`'s description
+to the registry's 100-char limit. No code changes.
+
 ## [0.13.0] - 2026-07-23
 
 **Transcript Intelligence** — text-based editing lands. 59 → 62 tools.

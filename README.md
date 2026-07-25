@@ -655,3 +655,6 @@ Built by [@DareDev256](https://github.com/DareDev256) — former music video dir
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- MCP registry ownership marker -->
+`mcp-name: io.github.DareDev256/fcpxml-mcp-server`
