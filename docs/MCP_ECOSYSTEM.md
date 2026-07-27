@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ```
 Claude Desktop
-├── fcpxml-mcp-server    → Final Cut Pro timeline operations
+├── fcp-mcp-server       → Final Cut Pro timeline operations
 ├── gitnexus             → Codebase knowledge graph + architecture analysis
 ├── filesystem           → General file read/write
 └── your-custom-server   → Whatever you build

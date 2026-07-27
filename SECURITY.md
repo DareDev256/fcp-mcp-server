@@ -8,7 +8,7 @@ Please report vulnerabilities privately, not via public issues or PRs.
 **Security** tab and click **Report a vulnerability**. This opens a private
 advisory only the maintainer can see.
 
-**Fallback:** email `dare@jamesdare.com` with subject `[SECURITY] fcpxml-mcp-server`.
+**Fallback:** email `dare@jamesdare.com` with subject `[SECURITY] fcp-mcp-server`.
 
 You can expect an acknowledgment within 48 hours and a fix or mitigation plan
 within 7 days for confirmed issues. Reporters are credited in the CHANGELOG

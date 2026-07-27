@@ -48,10 +48,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/DareDev256/fcpxml-mcp-server"
-Repository = "https://github.com/DareDev256/fcpxml-mcp-server.git"
-Issues = "https://github.com/DareDev256/fcpxml-mcp-server/issues"
-Changelog = "https://github.com/DareDev256/fcpxml-mcp-server/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/DareDev256/fcp-mcp-server"
+Repository = "https://github.com/DareDev256/fcp-mcp-server.git"
+Issues = "https://github.com/DareDev256/fcp-mcp-server/issues"
+Changelog = "https://github.com/DareDev256/fcp-mcp-server/blob/main/CHANGELOG.md"
 
 [project.scripts]
 fcp-mcp-server = "server:main_sync"

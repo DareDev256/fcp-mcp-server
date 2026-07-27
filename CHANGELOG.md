@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+**Repo renamed `fcpxml-mcp-server` → `fcp-mcp-server`** to match the PyPI
+distribution name. The GitHub *About* link had been pointing at
+`pypi.org/project/fcpxml-mcp-server/` — a slug that never existed on PyPI — so
+every visitor who clicked it got a 404 while `uvx fcp-mcp-server` worked fine.
+Homepage now points at the real package; clone URLs, CI badge, and
+`[project.urls]` follow the new slug. GitHub redirects the old slug, so existing
+clones, forks, and links keep working.
+
+The MCP registry identity stays `io.github.DareDev256/fcpxml-mcp-server`,
+unchanged — it is bound to the `mcp-name` marker inside the *published* 0.13.1
+PyPI README, and changing it would orphan the registry entry and require a new
+PyPI release. Registry name ≠ install name is legal and intentional.
+
+No code changes; 0.13.1 on PyPI is untouched.
+
 ## [0.13.1] - 2026-07-24
 
 Registry release. Adds the `mcp-name` ownership marker to the README (required

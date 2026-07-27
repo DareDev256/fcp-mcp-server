@@ -2,7 +2,7 @@
 
 **The bridge between Final Cut Pro and AI. 62 tools that turn timeline XML into structured data Claude can read, edit, and generate.**
 
-[![CI](https://github.com/DareDev256/fcpxml-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcpxml-mcp-server/actions)
+[![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-1.0-green.svg)](https://modelcontextprotocol.io/)
@@ -190,10 +190,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ### From source (contributors)
 
 ```bash
-git clone https://github.com/DareDev256/fcpxml-mcp-server.git
-cd fcpxml-mcp-server
+git clone https://github.com/DareDev256/fcp-mcp-server.git
+cd fcp-mcp-server
 pip install -e .
-# then point your MCP client at: python /path/to/fcpxml-mcp-server/server.py
+# then point your MCP client at: python /path/to/fcp-mcp-server/server.py
 ```
 
 ### Use It
@@ -409,7 +409,7 @@ Select these from Claude's prompt menu (⌘/) — they chain multiple tools auto
 ## Architecture
 
 ```
-fcpxml-mcp-server/        ~9.4k lines Python
+fcp-mcp-server/           ~9.4k lines Python
 ├── server.py              MCP entry point — 62 tools, 5 prompts, resource discovery
 │                          _resolve_io_paths() / _setup_modifier() / _setup_generator()
 │                          _format_clip_table() / _markdown_table() / _format_batch_result()
