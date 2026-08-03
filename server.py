@@ -47,6 +47,7 @@ from fcpxml.models import (
     TimeValue,
 )
 from fcpxml.parser import FCPXMLParser
+from fcpxml.preview import render_timeline_html
 from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.templates import ClipSpec, apply_template, list_templates
 from fcpxml.transcribe import (
@@ -561,12 +562,30 @@ async def list_resources() -> list[Resource]:
             description=f"FCPXML project: {p.name} ({format_duration(0)})",
             mimeType="application/xml",
         ))
+        resources.append(Resource(
+            uri=f"preview://{f}",
+            name=f"{p.stem} (visual preview)",
+            description=f"HTML timeline preview: {p.name}",
+            mimeType="text/html",
+        ))
     return resources
 
 
 @server.read_resource()
 async def read_resource(uri: str) -> str:
     """Read an FCPXML file and return a summary."""
+    if str(uri).startswith("preview://"):
+        try:
+            filepath = _validate_filepath(
+                str(uri).replace("preview://", ""), ('.fcpxml', '.fcpxmld')
+            )
+        except (ValueError, FileNotFoundError) as e:
+            return str(e)
+        _project, tl = _parse_project(filepath)
+        if not tl:
+            return f"No timelines found in {filepath}"
+        return render_timeline_html(tl)
+
     filepath = str(uri).replace("file://", "")
     try:
         filepath = _validate_filepath(filepath, ('.fcpxml', '.fcpxmld'))
