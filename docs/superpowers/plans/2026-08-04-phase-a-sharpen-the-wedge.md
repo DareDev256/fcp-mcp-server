@@ -627,11 +627,33 @@ class TestRenderTimelineHTML:
             assert clip.name in html
 
     def test_clip_widths_are_proportional_to_duration(self):
-        """A clip twice as long must render twice as wide."""
+        """A clip twice as long must render twice as wide.
+
+        Asserting that the string 'width:' appears would pass even if every
+        clip rendered identically, which is the bug this guards against.
+        """
+        import re
+
         tl = _timeline()
+        if len(tl.clips) < 2:
+            pytest.skip("sample timeline needs at least two clips")
         html = render_timeline_html(tl)
-        assert "width:" in html
-        assert "%" in html
+
+        widths = [float(w) for w in re.findall(r"width:([\d.]+)%", html)]
+        assert len(widths) == len(tl.clips), "one width per clip"
+
+        total = float(tl.duration.seconds)
+        for width, clip in zip(widths, tl.clips):
+            expected = max((float(clip.duration.seconds) / total) * 100, 0.4)
+            assert abs(width - expected) < 0.01, (
+                f"{clip.name}: rendered {width}%, expected {expected}%"
+            )
+
+        # And the relationship holds between clips, not just against the formula.
+        longest = max(range(len(tl.clips)), key=lambda i: tl.clips[i].duration.seconds)
+        shortest = min(range(len(tl.clips)), key=lambda i: tl.clips[i].duration.seconds)
+        if tl.clips[longest].duration.seconds > tl.clips[shortest].duration.seconds:
+            assert widths[longest] > widths[shortest]
 
     def test_escapes_clip_names_that_contain_markup(self):
         """A clip called <script> must not become a script tag."""
