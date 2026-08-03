@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-04
+
+### Added
+
+**Seven grouped tools replace 62 flat ones in the advertised tool list.**
+`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`.
+Each takes `{"action": "...", "args": {...}}` and dispatches into exactly the
+same 62 handlers as before, so behaviour is unchanged. The tool schema
+injected into every conversation drops from 34,409 characters (what actually
+shipped, the flat 62-tool list) to 5,258 characters for the 7 groups — an
+84.7% reduction — before the user types anything.
+
+**Nothing breaks.** `call_tool` resolves handlers from `TOOL_HANDLERS`, a
+registry independent of what `list_tools` advertises, so an existing config
+calling `trim_clip` by name keeps working. Set `FCP_MCP_LEGACY_TOOLS=1` to
+advertise the original 62 alongside the 7 groups. They will not be removed
+before 1.0.
+
+**HTML timeline preview.** Reading `preview://<path>` returns a self-contained
+HTML render of the timeline: proportional clip blocks sized to duration,
+connected clips shown on their own lane rows, marker ticks, all values
+HTML-escaped, served as `text/html`. Editing FCPXML was previously blind, with
+no way to see a cut short of importing it into Final Cut Pro.
+
+**A `final-cut-pro` Claude Code skill** in `skill/`, wrapping the server with
+workflow order and the FCPXML gotchas that tool descriptions have no room for.
+Closes the design question raised in #2.
+
+**Daily scheduled CI.** The mcp 2.0 break (see 0.13.2 below) went unnoticed
+for a week because main's last run predated it by a day. The suite now also
+runs on a `schedule` trigger at 06:00 UTC daily, plus `workflow_dispatch` for
+manual runs, in addition to the existing push/PR triggers.
+
 ## [0.13.2] - 2026-08-04
 
 ### Fixed

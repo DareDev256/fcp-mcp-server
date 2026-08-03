@@ -1,6 +1,6 @@
 # FCPXML MCP
 
-**The bridge between Final Cut Pro and AI. 62 tools that turn timeline XML into structured data Claude can read, edit, and generate.**
+**The bridge between Final Cut Pro and AI. 7 grouped tools (62 underlying operations) that turn timeline XML into structured data Claude can read, edit, and generate.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,8 +8,8 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP-1.0-green.svg)](https://modelcontextprotocol.io/)
 [![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![Tests](https://img.shields.io/badge/tests-1032_passing-brightgreen.svg)](#testing)
-[![Suites](https://img.shields.io/badge/suites-24-blue.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1072_passing-brightgreen.svg)](#testing)
+[![Suites](https://img.shields.io/badge/suites-27-blue.svg)](#testing)
 
 **Hardened for real libraries:** 132 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
 
@@ -302,7 +302,69 @@ Select these from Claude's prompt menu (⌘/) — they chain multiple tools auto
 
 ---
 
+## Tools
+
+As of v0.14.0, the MCP tool list Claude sees by default is **7 grouped
+verbs**, not 62 flat tool names:
+
+| Group | Covers |
+|-------|--------|
+| `inspect` | Read-only understanding — stats, clips, markers, keywords, EDL/CSV, pacing |
+| `diagnose` | Finding problems — flash frames, gaps, duplicates, health score |
+| `edit` | Changing clips — markers, trim, reorder, transitions, speed, split, silence removal |
+| `mark` | Markers and chapters — batch add, SRT/VTT import, beat import |
+| `generate` | Building new structure — rough cuts, montages, A/B roll, templates |
+| `transcript` | Local Whisper transcription and transcript-driven cuts |
+| `deliver` | Getting the timeline out — NLE export, reformat, relink, push-to-FCP |
+
+Each call has the same shape: `{"action": "trim_clip", "args": {...}}`. The
+`action` is one of the 62 original tool names below; `args` is whatever that
+tool always took. The group dispatches straight into the same handler — the
+behavior is identical, only the schema Claude sees up front is smaller. An
+unknown or cross-group action returns an error listing the valid actions for
+that group, so a wrong guess is recoverable in one turn.
+
+**Grouping is what's advertised, not what's callable.** `call_tool` resolves
+every one of the 62 flat names from a handler registry that doesn't care what
+`list_tools` chose to show — an existing MCP config that calls `trim_clip`
+directly keeps working with no changes. If you'd rather see all 62 flat tools
+(e.g. for debugging, or a client that doesn't like the grouped shape), set:
+
+```bash
+FCP_MCP_LEGACY_TOOLS=1
+```
+
+This advertises the original 62 alongside the 7 groups. They will not be
+removed before a 1.0 release.
+
+### See the timeline before you touch it
+
+Reading the `preview://<path>` MCP resource (any FCPXML path the server can
+already reach) returns a self-contained HTML render of the timeline: clip
+blocks sized proportionally to duration, connected clips on their own lane
+rows above/below the primary storyline, and marker ticks — all values
+HTML-escaped, served as `text/html`. Point your MCP client's resource viewer
+at it, or fetch it directly, to see a cut without opening Final Cut Pro.
+
+### Claude Code skill
+
+A `final-cut-pro` skill ships in `skill/`, wrapping this server with the
+workflow order (`inspect` → `diagnose` → read `preview://` → `edit`) and the
+FCPXML gotchas that don't fit in a tool description. Install it alongside the
+MCP server:
+
+```bash
+git clone https://github.com/DareDev256/fcp-mcp-server
+ln -s "$PWD/fcp-mcp-server/skill" ~/.claude/skills/final-cut-pro
+```
+
+---
+
 ## All 62 Tools
+
+The 62 tools below are the operations behind the 7 groups in
+[Tools](#tools) — every `action` value the groups accept, unchanged from
+prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 
 | Category | Tools | What It Does |
 |----------|------:|--------------|
@@ -325,8 +387,9 @@ Select these from Claude's prompt menu (⌘/) — they chain multiple tools auto
 | **Templates** | 2 | Pre-built timeline structures (intro/outro, lower thirds, music video) |
 | **Effects** | 1 | List FCP transition effects with UUIDs |
 | **Media** | 1 | Bulk relink moved/renamed media (rewrite `media-rep` src paths) |
+| **Transcript Intelligence** | 3 | Local Whisper transcription, transcript-driven cuts, filler-word removal |
 | **Live (macOS)** | 2 | Push FCPXML into the running FCP (zero-click Apple-event import); list open libraries |
-| | **59** | |
+| | **62** | |
 
 <details>
 <summary><strong>Full tool reference (click to expand)</strong></summary>
@@ -389,6 +452,7 @@ Select these from Claude's prompt menu (⌘/) — they chain multiple tools auto
 |----------|----------|---------|-------------|
 | `FCP_PROJECTS_DIR` | No | `~/Movies` | Root directory for FCPXML file discovery via `list_projects` |
 | `FCPXML_DTD_DIR` | No | FCP app bundle | Directory of Apple `FCPXMLv*_*.dtd` files for DTD validation (auto-detected from the installed Final Cut Pro) |
+| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the original 62 flat tools alongside the 7 grouped tools |
 
 ---
 
@@ -410,7 +474,10 @@ Select these from Claude's prompt menu (⌘/) — they chain multiple tools auto
 
 ```
 fcp-mcp-server/           ~9.4k lines Python
-├── server.py              MCP entry point — 62 tools, 5 prompts, resource discovery
+├── server.py              MCP entry point — 7 grouped tools advertised by default
+│                          (TOOL_GROUPS), dispatching into 62 flat handlers
+│                          (TOOL_HANDLERS); 5 prompts, resource discovery.
+│                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the 62 flat tools.
 │                          _resolve_io_paths() / _setup_modifier() / _setup_generator()
 │                          _format_clip_table() / _markdown_table() / _format_batch_result()
 │                          _raw_markers_to_batch()
@@ -427,10 +494,12 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── diff.py            Timeline comparison engine (identity matching, threshold docs)
 │   ├── export.py          DaVinci Resolve v1.9 + FCP7 XMEML v5 export
 │   ├── media_intel.py     Real media analysis — audio silence detection via bounded ffmpeg subprocess
+│   ├── preview.py         Standalone HTML timeline render, served as preview://<path>
 │   ├── safe_xml.py        Centralized defusedxml wrappers (XXE/entity-bomb protection) + serialize_xml()
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
-├── tests/                 1033 tests across 24 suites
+├── skill/                 final-cut-pro Claude Code skill wrapping this server
+├── tests/                 1076 tests across 27 suites (1072 pass, 4 skip without ffmpeg/FCP)
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -451,6 +520,12 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── test_bundles.py    .fcpxmld bundles, sidecar preservation, FCPXML 1.13/1.14 tolerance
 │   ├── test_relink.py     Bulk media relink (URL + plain paths, dry run, segment matching)
 │   ├── test_media_intel.py  silencedetect parsing, timeline mapping, real-WAV integration, handler
+│   ├── test_transcribe.py Phrase/filler span matching, range merge/invert algebra, Whisper handlers
+│   ├── test_validation.py Pydantic input validation models
+│   ├── test_live.py       push_to_fcp / list_fcp_libraries (Apple events, mocked + live-gated)
+│   ├── test_tool_groups.py  7 TOOL_GROUPS dispatch to the 62 TOOL_HANDLERS, legacy flag, schema size
+│   ├── test_preview.py    preview:// HTML timeline render
+│   ├── test_skill.py      final-cut-pro skill structure
 │   └── test_dtd_validation.py  Output validated against Apple's shipped DTDs (skips without FCP)
 ├── docs/
 │   ├── WORKFLOWS.md       8 production workflow recipes
@@ -546,7 +621,7 @@ Before v0.6.20, the 4-part SMPTE parser silently dropped frames — `01:00:10:12
 | **Rational time, never floats** | All durations are fractions (`600/2400s`) matching FCPXML's native format — zero rounding errors across trim, split, speed |
 | **Non-destructive by default** | Modified files get `_modified`, `_chapters` suffixes. Originals are never overwritten |
 | **Single source of truth** | `MarkerType` enum owns serialization: `from_string()` for input, `from_xml_element()` for parsing, `xml_attrs` for writing. `INCOMPLETE` is canonical; `TODO` is a backward-compat alias (same object) |
-| **Security-first** | 10-layer defense-in-depth across all 59 handlers — see [Security](#security) for the full matrix |
+| **Security-first** | 10-layer defense-in-depth across all 62 handlers — see [Security](#security) for the full matrix |
 | **Dispatch, not conditionals** | `TOOL_HANDLERS` dict maps names → async handlers. No 1000-line if/elif |
 
 ---
@@ -568,7 +643,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1033 tests across 24 suites covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
+1076 tests across 27 suites (1072 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
 
 ---
 
@@ -624,7 +699,11 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **Silence auto-removal** — `remove_media_silence` cuts real silence with ripple — *v0.11.0*
 - [x] **Beat detection** — `detect_beats` (librosa) chains into beat markers + snap-to-beats — *v0.12.0*
 - [x] **Transcript-based editing** — local Whisper transcription, edit_by_transcript (remove/keep_only), filler-word removal — *v0.13.0*
-- [ ] **Media intelligence** — scene detection, shot understanding, preview-without-FCP
+- [x] **7 grouped tools** — `inspect`/`diagnose`/`edit`/`mark`/`generate`/`transcript`/`deliver` replace the 62 flat tools as the advertised default, cutting the schema footprint 84.7%; `FCP_MCP_LEGACY_TOOLS=1` keeps the 62 available — *v0.14.0*
+- [x] **`preview://` HTML timeline render** — see a cut without opening Final Cut Pro — *v0.14.0*
+- [x] **`final-cut-pro` Claude Code skill** — workflow order + FCPXML gotchas — *v0.14.0*
+- [x] **Daily scheduled CI** — catches upstream dependency breaks within 24h — *v0.14.0*
+- [ ] **Media intelligence** — scene detection, shot understanding
 - [ ] **Live bridges** — optional SpliceKit / CommandPost adapters for in-app control when installed
 - [ ] Audio sync detection
 - [ ] Premiere Pro native XML support
