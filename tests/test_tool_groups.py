@@ -74,7 +74,13 @@ class TestGroupDispatch:
 
     def test_unknown_group_is_rejected(self):
         result = asyncio.run(server.handle_group("nonexistent", {"action": "list_clips"}))
-        assert "nonexistent" in result[0].text
+        text = result[0].text
+        assert "nonexistent" in text
+        # The error must enumerate the real groups, not just echo the bad
+        # name back — this is what catches a regression in the group list
+        # as more groups are added.
+        assert "inspect" in text
+        assert "diagnose" in text
 
     @pytest.mark.parametrize("bad_args", ["foo", ["a", "b"], 42])
     def test_non_dict_args_is_rejected_not_raised(self, bad_args):
@@ -98,3 +104,26 @@ class TestGroupTool:
         assert tool.inputSchema["properties"]["action"]["enum"] == actions
         assert tool.inputSchema["required"] == ["action"]
         assert tool.inputSchema["properties"]["args"]["type"] == "object"
+
+
+class TestGroupCoverage:
+    EXPECTED_GROUPS = {
+        "inspect", "diagnose", "edit", "mark", "generate", "transcript", "deliver",
+    }
+
+    def test_all_seven_groups_present(self):
+        assert set(server.TOOL_GROUPS) == self.EXPECTED_GROUPS
+
+    def test_every_handler_belongs_to_exactly_one_group(self):
+        """No orphaned tool, no tool reachable from two groups."""
+        seen = {}
+        for group, spec in server.TOOL_GROUPS.items():
+            for action in spec["actions"]:
+                assert action not in seen, f"{action} in both {seen.get(action)} and {group}"
+                seen[action] = group
+        missing = set(server.TOOL_HANDLERS) - set(seen)
+        assert not missing, f"handlers in no group: {sorted(missing)}"
+
+    def test_group_count_is_a_real_reduction(self):
+        assert len(server.TOOL_GROUPS) <= 8
+        assert len(server.TOOL_HANDLERS) >= 62

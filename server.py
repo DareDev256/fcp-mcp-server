@@ -3792,7 +3792,8 @@ TOOL_HANDLERS = {
 # GROUPED TOOL FACADE
 #
 # 62 flat tools cost ~9,000 tokens of schema in every conversation before the
-# user types anything. These 7 groups advertise the same capability for a
+# user types anything. These 7 groups (inspect, diagnose, edit, mark,
+# generate, transcript, deliver) advertise the same capability for a
 # fraction of that. They dispatch straight into TOOL_HANDLERS, so behaviour is
 # identical and every legacy tool name keeps working whether or not it is
 # advertised in list_tools.
@@ -3809,6 +3810,72 @@ TOOL_GROUPS: dict[str, dict] = {
             "list_markers", "list_roles", "list_keywords", "list_effects",
             "list_templates", "list_library_clips", "list_compound_clips",
             "list_connected_clips", "filter_by_role",
+        ],
+    },
+    "diagnose": {
+        "description": (
+            "Find problems in a timeline: gaps, flash frames, duplicates, dead "
+            "air, and beat structure. Read-only. Run before editing."
+        ),
+        "actions": [
+            "validate_timeline", "detect_gaps", "detect_duplicates",
+            "detect_flash_frames", "detect_silence_candidates",
+            "detect_media_silence", "detect_beats", "find_short_cuts",
+            "find_long_clips", "diff_timelines",
+        ],
+    },
+    "edit": {
+        "description": (
+            "Change clips on the timeline: insert, delete, trim, split, reorder, "
+            "retime, and attach audio, B-roll or transitions. Writes a new file."
+        ),
+        "actions": [
+            "insert_clip", "delete_clips", "trim_clip", "split_clip",
+            "reorder_clips", "change_speed", "rapid_trim", "add_transition",
+            "add_audio", "add_connected_clip", "assign_role", "fill_gaps",
+            "fix_flash_frames", "remove_silence_candidates",
+        ],
+    },
+    "mark": {
+        "description": (
+            "Add or import markers and chapters, including from SRT/VTT "
+            "subtitles, transcripts, and beat analysis."
+        ),
+        "actions": [
+            "add_marker", "batch_add_markers", "import_srt_markers",
+            "import_transcript_markers", "import_beat_markers", "snap_to_beats",
+        ],
+    },
+    "generate": {
+        "description": (
+            "Build new timeline structure from source clips: rough cuts, "
+            "montages, A/B roll, templates and compound clips."
+        ),
+        "actions": [
+            "auto_rough_cut", "generate_ab_roll", "generate_montage",
+            "apply_template", "create_compound_clip", "flatten_compound_clip",
+        ],
+    },
+    "transcript": {
+        "description": (
+            "Transcribe source media locally and edit the timeline by what was "
+            "SAID rather than by timecode. Also removes filler words and real "
+            "measured silence."
+        ),
+        "actions": [
+            "transcribe_media", "edit_by_transcript", "remove_filler_words",
+            "remove_media_silence",
+        ],
+    },
+    "deliver": {
+        "description": (
+            "Get the edit out: export to other NLEs, CSV, EDL and stems, "
+            "reformat, relink media, or push straight into a running Final Cut Pro."
+        ),
+        "actions": [
+            "export_csv", "export_edl", "export_fcp7_xml", "export_resolve_xml",
+            "export_role_stems", "reformat_timeline", "relink_media",
+            "push_to_fcp", "list_fcp_libraries",
         ],
     },
 }
