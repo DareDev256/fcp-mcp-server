@@ -358,13 +358,14 @@ Extend `TOOL_GROUPS` in `server.py` with these entries, after the existing `insp
     "edit": {
         "description": (
             "Change clips on the timeline: insert, delete, trim, split, reorder, "
-            "retime, and attach audio, B-roll or transitions. Writes a new file."
+            "retime, remove silence, and attach audio, B-roll or transitions. "
+            "Writes a new file."
         ),
         "actions": [
             "insert_clip", "delete_clips", "trim_clip", "split_clip",
             "reorder_clips", "change_speed", "rapid_trim", "add_transition",
             "add_audio", "add_connected_clip", "assign_role", "fill_gaps",
-            "fix_flash_frames", "remove_silence_candidates",
+            "fix_flash_frames", "remove_silence_candidates", "remove_media_silence",
         ],
     },
     "mark": {
@@ -390,12 +391,10 @@ Extend `TOOL_GROUPS` in `server.py` with these entries, after the existing `insp
     "transcript": {
         "description": (
             "Transcribe source media locally and edit the timeline by what was "
-            "SAID rather than by timecode. Also removes filler words and real "
-            "measured silence."
+            "SAID rather than by timecode. Also removes filler words."
         ),
         "actions": [
             "transcribe_media", "edit_by_transcript", "remove_filler_words",
-            "remove_media_silence",
         ],
     },
     "deliver": {
