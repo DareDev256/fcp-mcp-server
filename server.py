@@ -750,8 +750,8 @@ Please:
 # TOOL DEFINITIONS
 # ============================================================================
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+def _legacy_tool_list() -> list[Tool]:
+    """The original 62 flat tools. Still dispatchable; advertised only on opt-in."""
     return [
         # ===== READ TOOLS =====
         Tool(
@@ -1657,6 +1657,26 @@ async def list_tools() -> list[Tool]:
             }
         ),
     ]
+
+
+def _legacy_tools_enabled() -> bool:
+    """Advertise the original 62 flat tools alongside the groups.
+
+    Off by default so new users pay the small schema cost. Existing configs
+    that call flat tool names keep working either way, because call_tool
+    dispatches from TOOL_HANDLERS and never consults this list.
+    """
+    return os.environ.get("FCP_MCP_LEGACY_TOOLS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    tools = [_group_tool(name) for name in TOOL_GROUPS]
+    if _legacy_tools_enabled():
+        tools.extend(_legacy_tool_list())
+    return tools
 
 
 # ============================================================================
@@ -3955,9 +3975,11 @@ def _group_tool(name: str) -> Tool:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     handler = TOOL_HANDLERS.get(name)
-    if not handler:
+    if not handler and name not in TOOL_GROUPS:
         return _text_result(f"Unknown tool: {name}")
     try:
+        if name in TOOL_GROUPS:
+            return await handle_group(name, arguments)
         return await handler(arguments)
     except _NoTimelineError:
         return _no_timeline()

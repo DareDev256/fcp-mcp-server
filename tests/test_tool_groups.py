@@ -1,5 +1,6 @@
 """Grouped tool facade: 7 verbs dispatching into the existing 62 handlers."""
 import asyncio
+import json
 
 import pytest
 
@@ -127,3 +128,54 @@ class TestGroupCoverage:
     def test_group_count_is_a_real_reduction(self):
         assert len(server.TOOL_GROUPS) <= 8
         assert len(server.TOOL_HANDLERS) >= 62
+
+
+class TestLegacyGating:
+    def test_default_advertises_only_groups(self, monkeypatch):
+        monkeypatch.delenv("FCP_MCP_LEGACY_TOOLS", raising=False)
+        tools = asyncio.run(server.list_tools())
+        assert {t.name for t in tools} == set(server.TOOL_GROUPS)
+
+    def test_opt_in_advertises_groups_plus_legacy(self, monkeypatch):
+        monkeypatch.setenv("FCP_MCP_LEGACY_TOOLS", "1")
+        tools = asyncio.run(server.list_tools())
+        names = {t.name for t in tools}
+        assert "trim_clip" in names
+        assert "edit" in names
+        assert len(names) >= 62 + len(server.TOOL_GROUPS)
+
+    def test_hidden_tools_still_dispatch(self, monkeypatch):
+        """The whole compat story. Hidden from list_tools, still callable."""
+        monkeypatch.delenv("FCP_MCP_LEGACY_TOOLS", raising=False)
+        tools = asyncio.run(server.list_tools())
+        assert "list_projects" not in {t.name for t in tools}
+        assert "list_projects" in server.TOOL_HANDLERS
+
+    def test_schema_payload_is_substantially_smaller(self, monkeypatch):
+        monkeypatch.delenv("FCP_MCP_LEGACY_TOOLS", raising=False)
+        grouped = asyncio.run(server.list_tools())
+        monkeypatch.setenv("FCP_MCP_LEGACY_TOOLS", "1")
+        legacy = asyncio.run(server.list_tools())
+
+        def size(ts):
+            return len(json.dumps(
+                [{"n": t.name, "d": t.description, "s": t.inputSchema} for t in ts]
+            ))
+
+        assert size(grouped) < size(legacy) * 0.35, (
+            f"grouped={size(grouped)} legacy={size(legacy)}"
+        )
+
+
+class TestCallToolGroupDispatch:
+    def test_call_tool_routes_group_name_to_handle_group(self):
+        """A group name reaches handle_group through call_tool, not 'Unknown tool'."""
+        direct = asyncio.run(server.handle_group("inspect", {}))
+        via_call_tool = asyncio.run(server.call_tool("inspect", {}))
+        assert via_call_tool[0].text == direct[0].text
+        assert via_call_tool[0].text != "Unknown tool: inspect"
+
+    def test_call_tool_flat_names_still_work(self, tmp_path):
+        result = asyncio.run(server.call_tool("list_projects", {"directory": str(tmp_path)}))
+        assert result and hasattr(result[0], "text")
+        assert result[0].text != "Unknown tool: list_projects"
