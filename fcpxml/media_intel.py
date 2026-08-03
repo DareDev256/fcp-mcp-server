@@ -156,6 +156,10 @@ def detect_silence(
             [
                 "ffmpeg", "-hide_banner", "-nostdin",
                 "-i", str(file_path),
+                # -vn: silence detection only needs the audio stream. Without it
+                # ffmpeg decodes the full video track into the null muxer, which
+                # blows past PROBE_TIMEOUT_SECONDS on long/high-bitrate files.
+                "-vn",
                 "-af", f"silencedetect=noise={float(noise_db)}dB:d={float(min_duration)}",
                 "-f", "null", "-",
             ],

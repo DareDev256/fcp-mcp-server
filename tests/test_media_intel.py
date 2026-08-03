@@ -110,6 +110,37 @@ class TestDetectSilenceBounds:
         assert detect_silence("/nonexistent/path/audio.wav") is None
 
 
+class TestDetectSilenceCommand:
+    """Silence detection must not decode the video stream (-vn): without it
+    ffmpeg decodes every video frame into the null muxer, which blows past
+    PROBE_TIMEOUT_SECONDS on long/high-bitrate camera files."""
+
+    def test_video_decoding_is_disabled(self, tmp_path, monkeypatch):
+        import subprocess
+
+        from fcpxml import media_intel
+
+        media_file = tmp_path / "clip.mov"
+        media_file.write_bytes(b"\x00")
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=SAMPLE_STDERR)
+
+        monkeypatch.setattr(media_intel.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr(media_intel.subprocess, "run", fake_run)
+
+        result = detect_silence(str(media_file))
+
+        assert result == [(1.0, 3.0)]
+        cmd = captured["cmd"]
+        assert "-vn" in cmd
+        # Must sit between the input and the null-muxer output to take effect.
+        assert cmd.index("-i") < cmd.index("-vn") < cmd.index("-f")
+
+
 def _write_tone_silence_tone_wav(path: str, rate: int = 48000) -> None:
     """1s 440Hz tone, 2s silence, 1s 440Hz tone."""
     def tone(seconds: float) -> bytes:
