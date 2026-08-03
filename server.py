@@ -3788,6 +3788,97 @@ TOOL_HANDLERS = {
 }
 
 
+# ============================================================================
+# GROUPED TOOL FACADE
+#
+# 62 flat tools cost ~9,000 tokens of schema in every conversation before the
+# user types anything. These 7 groups advertise the same capability for a
+# fraction of that. They dispatch straight into TOOL_HANDLERS, so behaviour is
+# identical and every legacy tool name keeps working whether or not it is
+# advertised in list_tools.
+# ============================================================================
+
+TOOL_GROUPS: dict[str, dict] = {
+    "inspect": {
+        "description": (
+            "Read a timeline or project without changing it. Use this first to "
+            "understand what you are working with."
+        ),
+        "actions": [
+            "list_projects", "analyze_timeline", "analyze_pacing", "list_clips",
+            "list_markers", "list_roles", "list_keywords", "list_effects",
+            "list_templates", "list_library_clips", "list_compound_clips",
+            "list_connected_clips", "filter_by_role",
+        ],
+    },
+}
+
+
+def _group_action_error(group: str, action: str | None) -> list[TextContent]:
+    """Reject an action while telling the caller what it should have used."""
+    if group not in TOOL_GROUPS:
+        return _text_result(
+            f"Unknown tool group: {group}. "
+            f"Valid groups: {', '.join(sorted(TOOL_GROUPS))}"
+        )
+    valid = ", ".join(TOOL_GROUPS[group]["actions"])
+    if not action:
+        return _text_result(
+            f"The '{group}' tool requires an 'action'. Valid actions: {valid}"
+        )
+    return _text_result(
+        f"Unknown action '{action}' for '{group}'. Valid actions: {valid}"
+    )
+
+
+async def handle_group(group: str, arguments: dict) -> list[TextContent]:
+    """Dispatch a grouped tool call into the flat TOOL_HANDLERS registry."""
+    if group not in TOOL_GROUPS:
+        return _group_action_error(group, None)
+
+    action = arguments.get("action")
+    if not action or action not in TOOL_GROUPS[group]["actions"]:
+        return _group_action_error(group, action)
+
+    handler = TOOL_HANDLERS.get(action)
+    if handler is None:
+        # Only reachable if TOOL_GROUPS names an action with no handler, which
+        # test_every_group_action_resolves_to_a_real_handler exists to prevent.
+        return _text_result(f"No handler registered for action: {action}")
+
+    return await handler(arguments.get("args") or {})
+
+
+def _group_tool(name: str) -> Tool:
+    """Build the advertised Tool schema for one group."""
+    spec = TOOL_GROUPS[name]
+    return Tool(
+        name=name,
+        description=(
+            f"{spec['description']} "
+            f"Actions: {', '.join(spec['actions'])}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": spec["actions"],
+                    "description": "Which operation to run.",
+                },
+                "args": {
+                    "type": "object",
+                    "description": (
+                        "Arguments for the chosen action, e.g. "
+                        "{\"filepath\": \"/path/to/project.fcpxml\"}."
+                    ),
+                },
+            },
+            "required": ["action"],
+        },
+    )
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     handler = TOOL_HANDLERS.get(name)
