@@ -8,10 +8,10 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP-1.0-green.svg)](https://modelcontextprotocol.io/)
 [![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![Tests](https://img.shields.io/badge/tests-1072_passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1089_passing-brightgreen.svg)](#testing)
 [![Suites](https://img.shields.io/badge/suites-27-blue.svg)](#testing)
 
-**Hardened for real libraries:** 132 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
+**Hardened for real libraries:** 134 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
 
 ![FCPXML MCP demo — transcript-based editing](docs/assets/demo.gif)
 
@@ -292,13 +292,20 @@ Each tool returns structured text that Claude synthesizes into the summary you s
 
 Select these from Claude's prompt menu (⌘/) — they chain multiple tools automatically.
 
-| Prompt | What It Does |
-|--------|-------------|
-| **qc-check** | Full quality control — flash frames, gaps, duplicates, health score |
-| **youtube-chapters** | Extract chapter markers formatted for YouTube descriptions |
-| **rough-cut** | Guided rough cut — shows clips, suggests structure, generates |
-| **timeline-summary** | Quick overview — stats, pacing, keywords, markers, assessment |
-| **cleanup** | Find and auto-fix flash frames and gaps |
+| Prompt | What It Does | Grouped calls it drives |
+|--------|-------------|-------------------------|
+| **qc-check** | Full quality control — flash frames, gaps, duplicates, health score | `diagnose` → `validate_timeline`, `detect_flash_frames`, `detect_gaps`, `detect_duplicates`; then `edit` → `fix_flash_frames`, `fill_gaps` |
+| **youtube-chapters** | Extract chapter markers formatted for YouTube descriptions | `inspect` → `list_markers`, `analyze_pacing` |
+| **rough-cut** | Guided rough cut — shows clips, suggests structure, generates | `inspect` → `list_library_clips`, `list_keywords`; then `generate` → `auto_rough_cut` |
+| **timeline-summary** | Quick overview — stats, pacing, keywords, markers, assessment | `inspect` → `analyze_timeline`, `analyze_pacing`, `list_keywords`, `list_markers` |
+| **cleanup** | Find and auto-fix flash frames and gaps | `diagnose` → `validate_timeline`; then `edit` → `fix_flash_frames`, `fill_gaps` |
+
+Every call takes the grouped form — the tool name is the group, and the
+operation goes in `action`:
+
+```json
+{ "action": "validate_timeline", "args": { "filepath": "/path/to/project.fcpxml" } }
+```
 
 ---
 
@@ -499,7 +506,7 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1076 tests across 27 suites (1072 pass, 4 skip without ffmpeg/FCP)
+├── tests/                 1093 tests across 27 suites (1089 pass, 4 skip without ffmpeg/FCP)
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -548,19 +555,17 @@ Found a vulnerability? Report it privately via the repo's **Security → Report 
 | **Output sandbox** | All generation, write, export, beat sync, subtitle, and reformat handlers enforce `_validate_output_path(anchor_dir=...)` — restricts writes to descendants of the source file's directory, blocking LLM-generated path escapes |
 | **Subprocess bounds** | `_ensure_video_asset()` bounds-checks duration (0 < d ≤ 3600s), fps (1–240), width/height (even, ≤ 7680×4320) before `subprocess.run()` — blocks `inf`/`NaN`, negative values, odd dimensions, string injection, and oversized resolutions that could hang or exhaust ffmpeg |
 | **Speed validation** | `handle_change_speed` validates speed is positive and ≤100 before any math — prevents ZeroDivisionError crash and nonsensical results |
-| **Directory listing** | Confined to `FCP_PROJECTS_DIR` when set, 10K file cap on `rglob`, symlink files skipped during discovery — prevents workspace enumeration and traversal DoS |
+| **Directory listing** | `find_fcpxml_files` only ever globs `*.fcpxml` / `*.fcpxmld` under `PROJECTS_DIR` (`FCP_PROJECTS_DIR` when set, otherwise `~/Movies`), and every discovered path is re-validated through `_validate_filepath` before it is opened |
 | **XML parsing** | `defusedxml` with explicit `forbid_entities/external=True` blocks XXE, billion laughs, entity expansion, remote DTD attacks at all 4 entry points (parser, writer, exporter, rough cut) — minidom pretty-print path also hardened via `defusedxml.minidom`. Ruff `S314`/`S320` rules enforce safe parsing in CI |
 | **JSON depth limit** | Iterative BFS depth checker rejects payloads nested beyond 50 levels — immune to RecursionError even at ~1000 nesting |
-| **Batch limits** | Marker batch operations capped at 10,000 entries — prevents memory exhaustion from adversarial payloads with millions of markers |
-| **Inline text limits** | Inline transcript arguments capped at ~1 MB — file-based inputs go through `_validate_filepath`, but inline strings from MCP tool arguments bypass file checks |
-| **Symlink filtering** | `find_fcpxml_files` skips symlinks during discovery — prevents sandbox escape via symlink chains pointing outside the allowed project directory |
+| **Symlink resolution** | `_validate_filepath` calls `Path.resolve()` *before* the extension whitelist runs, so a symlink named `innocent.fcpxml` that points at `/etc/passwd` is rejected on its resolved suffix — a symlink cannot smuggle a disallowed target past the file gate |
 | **Marker strings** | Sanitized via `_sanitize_xml_value()` — null bytes, control chars stripped before write |
 | **Role values** | Stripped of control characters before XML attribute assignment |
-| **URI parsing** | MCP resource URIs parsed via `urllib.parse.urlparse()` — rejects scheme confusion and handles percent-encoded paths correctly |
+| **Resource URI parsing** | `file://` and `preview://` URIs have their scheme removed with `str.removeprefix()` (leading match only, so a path containing the scheme string is not mangled) and are then `urllib.parse.unquote()`d before validation — so percent-encoded traversal, percent-encoded null bytes, and ordinary spaces in filenames are all decoded first and then run through the same `_validate_filepath` gate as every other path |
 | **Output suffixes** | Path separators and special characters stripped — no traversal via suffix injection |
 | **Marker types** | `completed` attribute strict-matched (`'0'`/`'1'` only) — rejects `"true"`, `"1 OR 1=1"`, whitespace-padded values |
 
-132 security-specific tests across `test_security.py` covering XXE, path traversal, sandbox boundaries, output path anchoring, input validation, subprocess bounds, minidom hardening, JSON depth limits, role sanitization, ffmpeg parameter bounds, symlink filtering, file count caps, and write-handler sandbox enforcement. Ruff `S` (bandit) rules enforced in CI — `S314`/`S320` block unsafe XML parsing, `S105` catches hardcoded passwords, `S108` flags insecure temp paths. Security events (null bytes, sandbox escapes, unhandled exceptions) are logged via Python `logging` for audit trails.
+134 security-specific tests across `test_security.py` covering XXE, path traversal, sandbox boundaries, output path anchoring, input validation, subprocess bounds, minidom hardening, JSON depth limits, role sanitization, ffmpeg parameter bounds, symlink resolution, resource-URI decoding, `preview://` rejection paths, and write-handler sandbox enforcement. Ruff `S` (bandit) rules enforced in CI — `S314`/`S320` block unsafe XML parsing, `S105` catches hardcoded passwords, `S108` flags insecure temp paths. Security events (null bytes, sandbox escapes, unhandled exceptions) are logged via Python `logging` for audit trails.
 
 ---
 
@@ -621,7 +626,7 @@ Before v0.6.20, the 4-part SMPTE parser silently dropped frames — `01:00:10:12
 | **Rational time, never floats** | All durations are fractions (`600/2400s`) matching FCPXML's native format — zero rounding errors across trim, split, speed |
 | **Non-destructive by default** | Modified files get `_modified`, `_chapters` suffixes. Originals are never overwritten |
 | **Single source of truth** | `MarkerType` enum owns serialization: `from_string()` for input, `from_xml_element()` for parsing, `xml_attrs` for writing. `INCOMPLETE` is canonical; `TODO` is a backward-compat alias (same object) |
-| **Security-first** | 10-layer defense-in-depth across all 62 handlers — see [Security](#security) for the full matrix |
+| **Security-first** | 13-layer defense-in-depth across all 62 handlers — see [Security](#security) for the full matrix |
 | **Dispatch, not conditionals** | `TOOL_HANDLERS` dict maps names → async handlers. No 1000-line if/elif |
 
 ---
@@ -643,7 +648,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1076 tests across 27 suites (1072 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
+1093 tests across 27 suites (1089 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
 
 ---
 

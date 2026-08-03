@@ -35,6 +35,80 @@ for a week because main's last run predated it by a day. The suite now also
 runs on a `schedule` trigger at 06:00 UTC daily, plus `workflow_dispatch` for
 manual runs, in addition to the existing push/PR triggers.
 
+**Minimum-dependency CI job.** Every existing job installs whatever `mcp` is
+latest, so a declared lower bound was never actually exercised. A new
+`minimum-mcp` job on Python 3.12 installs the declared floor (`mcp==1.3.0`)
+and runs the full suite.
+
+### Fixed
+
+**The declared `mcp` floor was wrong and would have broken installs.**
+`server.py` imports `mcp.server.lowlevel.helper_types.ReadResourceContents`,
+which did not exist before mcp 1.3.0 — verified: on mcp 1.2.1 the server dies
+at import with `ModuleNotFoundError` and the MCP client reports only
+"disconnected", with no traceback surfaced. The pin declared `mcp>=1.0.0` in
+both `pyproject.toml` and `requirements.txt`. Raised to `mcp>=1.3.0,<2.0.0`
+in both, with the reason recorded inline. No `try`/`except` fallback: losing
+`ReadResourceContents` means losing the `text/html` mime type, which is the
+whole point of the preview resource, so it must fail loudly rather than
+silently degrade.
+
+**`preview://` and `file://` failed on any path containing a space.** Both
+branches stripped the scheme with a global `str.replace()` and never
+unquoted. `list_resources` emits pydantic-normalized URIs, so
+`My Project.fcpxml` came back as `My%20Project.fcpxml` and the read failed
+with "File not found" — and filenames with spaces are the norm in `~/Movies`.
+Both branches now go through `_uri_to_path()`, which strips the scheme with
+`removeprefix` (leading match only, so a path containing the literal scheme
+string is no longer mangled) and `urllib.parse.unquote()`s before validation.
+
+**The five MCP prompts and the workflow docs named tools the model can no
+longer see.** They instructed the model to call `validate_timeline`,
+`fix_flash_frames`, `auto_rough_cut` and 19 other flat names that
+`list_tools` stopped advertising in this release. The flat names still
+dispatch, so nothing was broken — but it taught the model to reach for tools
+absent from its tool list, which is what this release exists to stop. All
+five prompts, the README prompts table, and `docs/WORKFLOWS.md` now use the
+grouped form. A test fails if any prompt names an action that is not
+reachable from the group it tells the model to use.
+
+**Two false and two aspirational rows in the README security matrix.** The
+"URI parsing" row claimed URIs were parsed via `urllib.parse.urlparse()` —
+there is no `urlparse` anywhere in `server.py`, and the percent-encoding bug
+above proves the encoding half was not handled either. Rewritten to describe
+what the code actually does, and backed by tests. Spot-checking the rest of
+the matrix found three more unbacked claims: "10K file cap on `rglob`" and
+"symlink files skipped during discovery" (neither exists in
+`find_fcpxml_files`), a 10,000-entry marker batch cap, and a ~1 MB inline
+transcript cap (neither implemented). The false claims are gone; the genuine
+symlink protection that does exist — `Path.resolve()` running before the
+extension whitelist — is now documented and tested in its place.
+
+**The test suite could not run against the bottom of the declared range.**
+`tests/test_preview.py` built `ReadResourceRequest` without `method=`, which
+only validates on newer mcp; on 1.3.0 both preview-resource tests failed with
+a pydantic `ValidationError` while the product worked fine.
+`tests/test_security.py` could not be collected on its own at all, because
+its `mcp` shim did not cover `mcp.server.lowlevel.helper_types`. Both fixed.
+
+### Added (tests)
+
+`preview://` shipped with no committed security coverage. Added, driven
+through the real resource read path: relative traversal, percent-encoded
+traversal, absolute paths outside the project, non-FCPXML extensions, raw and
+percent-encoded null bytes, and a symlink whose resolved target has a
+disallowed extension — plus the same rejection set re-asserted for `file://`,
+and spaces-in-filename round trips from `list_resources` through
+`read_resource` for both schemes.
+
+### Changed
+
+`pyproject.toml`'s PyPI description said "62 tools"; it now matches
+`server.json` and the README at "7 grouped tools (62 underlying operations)".
+`CLAUDE.md` said `FCP_MCP_LEGACY_TOOLS=1` advertises the flat tools
+"instead" of the groups — it is additive, 69 advertised tools, as the README
+already said correctly.
+
 ## [0.13.2] - 2026-08-04
 
 ### Fixed

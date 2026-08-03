@@ -2,6 +2,14 @@
 
 Real-world tool chains for common post-production tasks. Each recipe shows what to ask Claude and which tools fire under the hood.
 
+> **Reading the tool chains.** As of v0.14.0 the MCP client sees 7 grouped
+> verbs, not 62 flat tool names. Chains below are written `group:action` — so
+> `diagnose:validate_timeline` means calling the `diagnose` tool with
+> `{"action": "validate_timeline", "args": {...}}`. The flat names still
+> dispatch for backwards compatibility, and setting `FCP_MCP_LEGACY_TOOLS=1`
+> advertises them alongside the groups, but the grouped form is what Claude
+> can see by default.
+
 ---
 
 ## Delivery QC Pipeline
@@ -12,15 +20,15 @@ Real-world tool chains for common post-production tasks. Each recipe shows what 
 "Run a full QC check on /path/to/project.fcpxml"
 ```
 
-**Tool chain:** `analyze_timeline` → `detect_flash_frames` → `detect_gaps` → `detect_duplicates` → `validate_timeline`
+**Tool chain:** `inspect:analyze_timeline` → `diagnose:detect_flash_frames` → `diagnose:detect_gaps` → `diagnose:detect_duplicates` → `diagnose:validate_timeline`
 
-The `validate_timeline` tool returns a 0–100% health score. Anything below 80% flags specific issues. Follow up with:
+The `diagnose:validate_timeline` tool returns a 0–100% health score. Anything below 80% flags specific issues. Follow up with:
 
 ```
 "Fix all flash frames by extending previous clips, then fill any gaps"
 ```
 
-**Tool chain:** `fix_flash_frames` → `fill_gaps`
+**Tool chain:** `edit:fix_flash_frames` → `edit:fill_gaps`
 
 Both tools generate `_modified` output files — your original XML is never touched.
 
@@ -34,7 +42,7 @@ Both tools generate `_modified` output files — your original XML is never touc
 "List all markers in my timeline formatted for YouTube chapters"
 ```
 
-**Tool chain:** `list_markers` (with format filter)
+**Tool chain:** `inspect:list_markers` (with format filter)
 
 If chapters don't exist yet but you have a transcript:
 
@@ -42,7 +50,7 @@ If chapters don't exist yet but you have a transcript:
 "Import these YouTube chapters as markers: 0:00 Intro, 2:15 Topic One, 14:30 Deep Dive..."
 ```
 
-**Tool chain:** `import_transcript_markers` → `list_markers`
+**Tool chain:** `mark:import_transcript_markers` → `inspect:list_markers`
 
 For SRT/VTT subtitle files from auto-transcription services:
 
@@ -50,7 +58,7 @@ For SRT/VTT subtitle files from auto-transcription services:
 "Import chapters from /path/to/captions.srt as markers"
 ```
 
-**Tool chain:** `import_srt_markers`
+**Tool chain:** `mark:import_srt_markers`
 
 ---
 
@@ -68,14 +76,14 @@ For SRT/VTT subtitle files from auto-transcription services:
 "Create a rough cut using clips tagged 'performance' and 'broll', target 3:30 duration, accelerating pacing"
 ```
 
-**Tool chain:** `import_beat_markers` → `auto_rough_cut` or `generate_montage`
+**Tool chain:** `mark:import_beat_markers` → `generate:auto_rough_cut` or `generate:generate_montage`
 
 **Step 3 — Snap to beats:**
 ```
 "Snap all cuts to the nearest beat marker"
 ```
 
-**Tool chain:** `snap_to_beats`
+**Tool chain:** `mark:snap_to_beats`
 
 The beat JSON format expects an array of timestamps in seconds:
 ```json
@@ -92,7 +100,7 @@ The beat JSON format expects an array of timestamps in seconds:
 "Export my timeline for DaVinci Resolve and also as FCP7 XML for Premiere"
 ```
 
-**Tool chain:** `export_resolve_xml` + `export_fcp7_xml`
+**Tool chain:** `deliver:export_resolve_xml` + `deliver:export_fcp7_xml`
 
 **What changes in each export:**
 - **Resolve (FCPXML v1.9):** Compound clips flattened, unsupported attributes stripped, simpler element tree
@@ -108,7 +116,7 @@ The beat JSON format expects an array of timestamps in seconds:
 "Generate an A/B roll edit — 'interview' clips as A-roll, 'broll' clips as B-roll, 8-minute target"
 ```
 
-**Tool chain:** `generate_ab_roll`
+**Tool chain:** `generate:generate_ab_roll`
 
 The generator alternates between A-roll and B-roll clips, placing B-roll on connected lanes (above the primary storyline). This matches the standard documentary editing pattern where interview audio runs continuously and visuals cut between talking head and supplementary footage.
 
@@ -122,7 +130,7 @@ The generator alternates between A-roll and B-roll clips, placing B-roll on conn
 "Reformat my timeline to 9:16 for Instagram Reels"
 ```
 
-**Tool chain:** `reformat_timeline` (preset: `9:16`)
+**Tool chain:** `deliver:reformat_timeline` (preset: `9:16`)
 
 Available presets: `9:16` (vertical), `1:1` (square), `4:5` (portrait feed), `4:3` (classic), `16:9` (widescreen). Custom resolutions also supported.
 
@@ -138,7 +146,7 @@ Available presets: `9:16` (vertical), `1:1` (square), `4:5` (portrait feed), `4:
 "Compare /path/to/edit_v2.fcpxml with /path/to/edit_v1.fcpxml"
 ```
 
-**Tool chain:** `diff_timelines`
+**Tool chain:** `diagnose:diff_timelines`
 
 Returns structured diff: clips added, removed, moved, or trimmed. Marker changes, transition changes, and format changes are all tracked. Useful for revision logs and client communication.
 
@@ -153,7 +161,7 @@ Returns structured diff: clips added, removed, moved, or trimmed. Marker changes
 "Find silence candidates in my timeline"
 ```
 
-**Tool chain:** `detect_silence_candidates`
+**Tool chain:** `diagnose:detect_silence_candidates`
 
 Uses heuristics: gaps, ultra-short clips, naming patterns (clips named "silence", "room tone"), and duration anomalies. Results include confidence scores.
 
@@ -162,7 +170,7 @@ Uses heuristics: gaps, ultra-short clips, naming patterns (clips named "silence"
 "Remove all silence candidates with high confidence"
 ```
 
-**Tool chain:** `remove_silence_candidates` (mode: delete or mark)
+**Tool chain:** `edit:remove_silence_candidates` (mode: delete or mark)
 
 Mark mode adds markers instead of deleting — safer for first pass.
 
@@ -181,4 +189,4 @@ For custom workflows, describe the full pipeline in one message:
 interval, then export for DaVinci Resolve"
 ```
 
-The agent will chain: `analyze_timeline` → `fix_flash_frames` → `batch_add_markers` → `export_resolve_xml`, passing the modified file through each step.
+The agent will chain: `inspect:analyze_timeline` → `edit:fix_flash_frames` → `mark:batch_add_markers` → `deliver:export_resolve_xml`, passing the modified file through each step.

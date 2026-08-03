@@ -3,6 +3,8 @@ import asyncio
 import re
 import xml.etree.ElementTree as ET
 from html import escape as _escape
+from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from mcp.types import ReadResourceRequest, ReadResourceRequestParams
@@ -232,6 +234,22 @@ class TestRenderTimelineHTML:
         assert lefts[0] >= 0.0
 
 
+def _read_resource(uri: str):
+    """Drive the real ReadResourceRequest handler for `uri`.
+
+    `method=` is passed explicitly on purpose. mcp only gained a default for it
+    after 1.3.0, so omitting it makes these tests fail with a pydantic
+    ValidationError on the oldest supported SDK while the product itself works
+    fine — exactly the kind of blind spot that let the dependency floor drift.
+    """
+    handler = server_module.server.request_handlers[ReadResourceRequest]
+    request = ReadResourceRequest(
+        method="resources/read",
+        params=ReadResourceRequestParams(uri=uri),
+    )
+    return asyncio.run(handler(request)).root.contents
+
+
 class TestPreviewResourceServesHTML:
     """Drives the real ReadResourceRequest handler, not just render_timeline_html directly.
 
@@ -242,23 +260,55 @@ class TestPreviewResourceServesHTML:
     """
 
     def test_preview_uri_is_served_with_html_mime_type(self):
-        handler = server_module.server.request_handlers[ReadResourceRequest]
-        request = ReadResourceRequest(
-            params=ReadResourceRequestParams(uri="preview://examples/sample.fcpxml")
-        )
-        result = asyncio.run(handler(request))
-        contents = result.root.contents
+        contents = _read_resource("preview://examples/sample.fcpxml")
         assert len(contents) == 1
         assert contents[0].mimeType == "text/html"
         assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
 
     def test_file_uri_is_unaffected(self):
         """The pre-existing file:// branch keeps its original text/plain behaviour."""
-        handler = server_module.server.request_handlers[ReadResourceRequest]
-        request = ReadResourceRequest(
-            params=ReadResourceRequestParams(uri="file://examples/sample.fcpxml")
-        )
-        result = asyncio.run(handler(request))
-        contents = result.root.contents
+        contents = _read_resource("file://examples/sample.fcpxml")
         assert len(contents) == 1
         assert "FCPXML Project" in contents[0].text
+
+
+class TestResourceUriWithSpacesInFilename:
+    """Filenames with spaces are the norm in ~/Movies.
+
+    `list_resources` hands the client a pydantic-normalized URI, so
+    `My Project.fcpxml` comes back percent-encoded. If read_resource does not
+    unquote, every one of those reads fails with "File not found" — which
+    would make the flagship preview:// feature look broken for a large share
+    of real libraries.
+    """
+
+    @staticmethod
+    def _spaced_copy(tmp_path):
+        src = Path("examples/sample.fcpxml").read_bytes()
+        target = tmp_path / "My Project Final.fcpxml"
+        target.write_bytes(src)
+        return target
+
+    def test_preview_uri_percent_encoded_space_resolves(self, tmp_path):
+        target = self._spaced_copy(tmp_path)
+        uri = "preview://" + quote(str(target))
+        contents = _read_resource(uri)
+        assert contents[0].mimeType == "text/html"
+        assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
+
+    def test_file_uri_percent_encoded_space_resolves(self, tmp_path):
+        target = self._spaced_copy(tmp_path)
+        uri = "file://" + quote(str(target))
+        contents = _read_resource(uri)
+        assert "FCPXML Project" in contents[0].text
+        assert "File not found" not in contents[0].text
+
+    def test_list_resources_uri_round_trips_through_read(self, tmp_path, monkeypatch):
+        """End to end: whatever list_resources advertises must be readable."""
+        self._spaced_copy(tmp_path)
+        monkeypatch.setattr(server_module, "PROJECTS_DIR", str(tmp_path))
+        resources = asyncio.run(server_module.list_resources())
+        previews = [r for r in resources if str(r.uri).startswith("preview://")]
+        assert previews, "expected a preview:// resource for the spaced file"
+        contents = _read_resource(str(previews[0].uri))
+        assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")

@@ -1,6 +1,7 @@
 """Grouped tool facade: 7 verbs dispatching into the existing 62 handlers."""
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -218,3 +219,57 @@ class TestCallToolGroupDispatch:
         result = asyncio.run(server.call_tool("list_projects", {"directory": str(tmp_path)}))
         assert result and hasattr(result[0], "text")
         assert result[0].text != "Unknown tool: list_projects"
+
+
+class TestPromptsUseGroupedToolNames:
+    """The 5 MCP prompts must only name tools the model can actually see.
+
+    Since v0.14.0 `list_tools` advertises 7 grouped verbs. A prompt that says
+    "use `validate_timeline`" points the model at a name absent from its tool
+    list — it still dispatches, but it teaches the model to guess at tools,
+    which is the exact behaviour this branch exists to stop.
+    """
+
+    # "`group` with action `action`" — the only sanctioned shape.
+    PAIR = re.compile(r"`([a-z_]+)`\s+with\s+action\s+`([a-z_0-9]+)`")
+
+    @staticmethod
+    def _prompt_texts():
+        prompts = asyncio.run(server.list_prompts())
+        assert prompts, "expected built-in prompts"
+        texts = {}
+        for p in prompts:
+            args = {a.name: f"<{a.name}>" for a in (p.arguments or [])}
+            result = asyncio.run(server.get_prompt(p.name, args))
+            texts[p.name] = "\n".join(
+                m.content.text for m in result.messages
+            )
+        return texts
+
+    def test_every_named_action_is_reachable_from_the_named_group(self):
+        for prompt_name, text in self._prompt_texts().items():
+            pairs = self.PAIR.findall(text)
+            assert pairs, f"prompt '{prompt_name}' names no grouped tool call"
+            for group, action in pairs:
+                assert group in server.TOOL_GROUPS, (
+                    f"prompt '{prompt_name}' names unknown group '{group}'"
+                )
+                assert action in server.TOOL_GROUPS[group]["actions"], (
+                    f"prompt '{prompt_name}' tells the model to call "
+                    f"'{group}' with action '{action}', which is not reachable "
+                    f"from that group"
+                )
+                assert action in server.TOOL_HANDLERS, (
+                    f"prompt '{prompt_name}' names action '{action}' with no handler"
+                )
+
+    def test_no_prompt_names_a_bare_flat_tool(self):
+        """A backticked flat tool name outside the grouped form is a regression."""
+        flat_names = set(server.TOOL_HANDLERS)
+        for prompt_name, text in self._prompt_texts().items():
+            stripped = self.PAIR.sub("", text)
+            for name in re.findall(r"`([a-z_][a-z_0-9]*)`", stripped):
+                assert name not in flat_names, (
+                    f"prompt '{prompt_name}' names flat tool '{name}' outside "
+                    f"the grouped form — the model cannot see that tool"
+                )

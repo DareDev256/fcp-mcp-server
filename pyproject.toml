@@ -9,7 +9,7 @@ name = "fcp-mcp-server"
 
 version = "0.14.0"
 
-description = "MCP server for Final Cut Pro XML. 62 tools for timeline analysis, batch editing, QC, generation, multi-track support, NLE export, templates, media relink, .fcpxmld bundles, and real media analysis (silence detection + auto-removal, beat detection, local Whisper transcript editing) via Claude."
+description = "MCP server for Final Cut Pro XML. 7 grouped tools (62 underlying operations) for timeline analysis, batch editing, QC, generation, multi-track support, NLE export, templates, media relink, .fcpxmld bundles, and real media analysis (silence detection + auto-removal, beat detection, local Whisper transcript editing) via Claude."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -29,11 +29,21 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    # Upper bound is load-bearing: mcp 2.0.0 (2026-07-28) removed the low-level
-    # Server decorator API (list_tools/call_tool/list_resources/read_resource/
+    # BOTH bounds are load-bearing — keep this pin in sync with requirements.txt.
+    #
+    # Lower bound 1.3.0: server.py imports
+    # `mcp.server.lowlevel.helper_types.ReadResourceContents`, which does not
+    # exist before mcp 1.3.0. On anything older the server raises ImportError at
+    # startup and the MCP client just reports "disconnected" with no traceback.
+    # That type is what lets `preview://` return a real text/html mime type, so
+    # there is deliberately no try/except fallback — degrading to text/plain
+    # would silently break the timeline preview instead of failing loudly.
+    #
+    # Upper bound 2.0.0: mcp 2.0.0 (2026-07-28) removed the low-level Server
+    # decorator API (list_tools/call_tool/list_resources/read_resource/
     # list_prompts/get_prompt) that server.py is built on, replaced by
-    # add_request_handler. Lift this only alongside the 2.x migration.
-    "mcp>=1.0.0,<2.0.0",
+    # add_request_handler. Lift this only alongside the 2.x migration (issue #9).
+    "mcp>=1.3.0,<2.0.0",
     "defusedxml>=0.7.1",
 ]
 

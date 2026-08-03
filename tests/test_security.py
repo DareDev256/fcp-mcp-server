@@ -13,6 +13,7 @@ Covers:
 - JSON depth-limit enforcement against nested payloads
 """
 
+import asyncio
 import sys
 import types
 import xml.etree.ElementTree as ET
@@ -38,6 +39,8 @@ from fcpxml.writer import (
 if "mcp" not in sys.modules or "mcp.server" not in sys.modules:
     mcp = types.ModuleType("mcp")
     mcp_server = types.ModuleType("mcp.server")
+    mcp_server_lowlevel = types.ModuleType("mcp.server.lowlevel")
+    mcp_server_helper_types = types.ModuleType("mcp.server.lowlevel.helper_types")
     mcp_server_stdio = types.ModuleType("mcp.server.stdio")
     mcp_types = types.ModuleType("mcp.types")
 
@@ -60,6 +63,19 @@ if "mcp" not in sys.modules or "mcp.server" not in sys.modules:
 
     mcp_server_stdio.stdio_server = _FakeCtx
 
+    class ReadResourceContents:
+        """Stand-in for mcp.server.lowlevel.helper_types.ReadResourceContents.
+
+        Real one arrived in mcp 1.3.0 — see the pin comment in pyproject.toml.
+        Without this shim entry `from server import ...` explodes whenever
+        test_security.py is collected before any test that imports the real SDK.
+        """
+        def __init__(self, content, mime_type=None):
+            self.content = content
+            self.mime_type = mime_type
+
+    mcp_server_helper_types.ReadResourceContents = ReadResourceContents
+
     class TextContent:
         def __init__(self, *, type: str, text: str):
             self.type = type
@@ -72,9 +88,14 @@ if "mcp" not in sys.modules or "mcp.server" not in sys.modules:
 
     sys.modules.setdefault("mcp", mcp)
     sys.modules.setdefault("mcp.server", mcp_server)
+    sys.modules.setdefault("mcp.server.lowlevel", mcp_server_lowlevel)
+    sys.modules.setdefault(
+        "mcp.server.lowlevel.helper_types", mcp_server_helper_types
+    )
     sys.modules.setdefault("mcp.server.stdio", mcp_server_stdio)
     sys.modules.setdefault("mcp.types", mcp_types)
 
+import server as server_module  # noqa: E402
 from server import (  # noqa: E402
     _validate_directory,
     _validate_filepath,
@@ -1165,3 +1186,102 @@ class TestEnsureVideoAssetValidation:
 
         with pytest.raises(ValueError, match="height"):
             _ensure_video_asset("/fake.png", height=9999)
+
+
+# ============================================================================
+# MCP RESOURCE URI HANDLING (v0.14.0)
+#
+# `preview://` is the one new attack-reachable entry point this release adds.
+# Everything below drives the real `read_resource` coroutine — the same
+# function the MCP client reaches — rather than poking `_validate_filepath`
+# directly, so the URI-decoding step is inside the blast radius of the test.
+# ============================================================================
+
+class TestResourceUriParsing:
+    """Backs the "URI parsing" row of the README security matrix."""
+
+    def test_scheme_is_stripped_only_from_the_front(self):
+        """A global .replace() mangles any path containing the scheme string."""
+        assert (
+            server_module._uri_to_path("preview:///tmp/preview:///a.fcpxml", "preview://")
+            == "/tmp/preview:///a.fcpxml"
+        )
+
+    def test_percent_encoded_space_is_decoded(self):
+        assert (
+            server_module._uri_to_path("file:///tmp/My%20Project.fcpxml", "file://")
+            == "/tmp/My Project.fcpxml"
+        )
+
+    def test_non_matching_scheme_leaves_the_value_untouched(self):
+        """No scheme confusion: the file:// branch never eats a preview:// prefix."""
+        assert (
+            server_module._uri_to_path("preview:///tmp/a.fcpxml", "file://")
+            == "preview:///tmp/a.fcpxml"
+        )
+
+    def test_percent_encoded_traversal_is_decoded_before_validation(self):
+        """Decoding must happen BEFORE the path is validated, never after."""
+        assert (
+            server_module._uri_to_path("preview://%2e%2e/%2e%2e/etc/passwd", "preview://")
+            == "../../etc/passwd"
+        )
+
+
+class TestPreviewResourceSecurity:
+    """`preview://` must reject everything `file://` rejects."""
+
+    @staticmethod
+    def _read(uri):
+        return asyncio.run(server_module.read_resource(uri))
+
+    def _assert_rejected(self, uri):
+        result = self._read(uri)
+        assert isinstance(result, str), f"{uri} was served instead of rejected"
+        assert "<!DOCTYPE html>" not in result, f"{uri} leaked rendered content"
+        return result
+
+    def test_relative_traversal_to_etc_passwd_rejected(self):
+        self._assert_rejected("preview://../../../../etc/passwd")
+
+    def test_absolute_path_outside_the_project_rejected(self):
+        self._assert_rejected("preview:///etc/passwd")
+
+    def test_percent_encoded_traversal_rejected(self):
+        """Traversal hidden behind percent-encoding must not survive unquoting."""
+        self._assert_rejected("preview://%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd")
+
+    def test_non_fcpxml_extension_rejected(self):
+        result = self._assert_rejected("preview://server.py")
+        assert "Invalid file type" in result
+
+    def test_null_byte_rejected(self):
+        result = self._assert_rejected("preview://examples/sample.fcpxml\x00.py")
+        assert "null byte" in result
+
+    def test_percent_encoded_null_byte_rejected(self):
+        """unquote() can reintroduce a null byte — validation must run after it."""
+        result = self._assert_rejected("preview://examples/sample.fcpxml%00.py")
+        assert "null byte" in result
+
+    def test_symlink_to_disallowed_target_rejected(self, tmp_path):
+        """Extensions are checked on the RESOLVED path, so a .fcpxml symlink
+        pointing at something else cannot smuggle it through."""
+        target = tmp_path / "secrets.txt"
+        target.write_text("SECRET")
+        link = tmp_path / "innocent.fcpxml"
+        link.symlink_to(target)
+        result = self._assert_rejected(f"preview://{link}")
+        assert "Invalid file type" in result
+
+    def test_file_scheme_shares_the_same_rejections(self):
+        """The pre-existing file:// branch must not regress either."""
+        for uri in (
+            "file://../../../../etc/passwd",
+            "file:///etc/passwd",
+            "file://server.py",
+            "file://examples/sample.fcpxml\x00.py",
+        ):
+            result = self._read(uri)
+            assert isinstance(result, str)
+            assert "FCPXML Project" not in result, f"{uri} was served"

@@ -15,6 +15,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import unquote
 
 from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
@@ -572,13 +573,33 @@ async def list_resources() -> list[Resource]:
     return resources
 
 
+def _uri_to_path(uri: str, scheme: str) -> str:
+    """Turn an MCP resource URI into a filesystem path.
+
+    Two things go wrong if this is done with `str(uri).replace(scheme, "")`:
+
+    1. `replace` is global, so a path that happens to contain the literal
+       scheme string (``preview://a/preview:///b.fcpxml``) gets mangled
+       mid-path. Only the leading scheme should be removed.
+    2. `list_resources` emits pydantic-normalized URIs, so ``My Project.fcpxml``
+       comes back as ``My%20Project.fcpxml``. Without unquoting, every file
+       whose name contains a space — the norm in ``~/Movies`` — fails with
+       "File not found".
+
+    The returned path is still untrusted and must go through
+    `_validate_filepath` before use.
+    """
+    return unquote(uri.removeprefix(scheme))
+
+
 @server.read_resource()
 async def read_resource(uri: str) -> str | list[ReadResourceContents]:
     """Read an FCPXML file and return a summary."""
-    if str(uri).startswith("preview://"):
+    raw = str(uri)
+    if raw.startswith("preview://"):
         try:
             filepath = _validate_filepath(
-                str(uri).replace("preview://", ""), ('.fcpxml', '.fcpxmld')
+                _uri_to_path(raw, "preview://"), ('.fcpxml', '.fcpxmld')
             )
         except (ValueError, FileNotFoundError) as e:
             return str(e)
@@ -587,7 +608,7 @@ async def read_resource(uri: str) -> str | list[ReadResourceContents]:
             return f"No timelines found in {filepath}"
         return [ReadResourceContents(content=render_timeline_html(tl), mime_type="text/html")]
 
-    filepath = str(uri).replace("file://", "")
+    filepath = _uri_to_path(raw, "file://")
     try:
         filepath = _validate_filepath(filepath, ('.fcpxml', '.fcpxmld'))
     except (ValueError, FileNotFoundError) as e:
@@ -652,6 +673,18 @@ async def list_prompts() -> list[Prompt]:
     ]
 
 
+# Prompts must name tools the model can actually SEE. Since v0.14.0 list_tools
+# advertises 7 grouped verbs, not the 62 flat names, so every step below is
+# written as "`<group>` with action `<action>`". The flat names still dispatch,
+# but instructing the model to call one it was never shown teaches it to guess.
+# tests/test_tool_groups.py::TestPromptsUseGroupedToolNames enforces this shape.
+_PROMPT_CALLING_CONVENTION = """
+Every tool call takes the grouped form:
+  tool = the group name, arguments = {"action": "<action>", "args": {...}}
+For example: `inspect` with action `analyze_timeline` and args {"filepath": "..."}.
+"""
+
+
 @server.get_prompt()
 async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> GetPromptResult:
     args = arguments or {}
@@ -667,15 +700,16 @@ async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> GetP
                     text=f"""Run a complete quality control check on my timeline.
 
 File: {filepath}
-
+{_PROMPT_CALLING_CONVENTION}
 Please:
-1. Use `validate_timeline` to get the health score
-2. Use `detect_flash_frames` to find any ultra-short clips
-3. Use `detect_gaps` to find unintentional gaps
-4. Use `detect_duplicates` to find repeated source clips
+1. Call `diagnose` with action `validate_timeline` to get the health score
+2. Call `diagnose` with action `detect_flash_frames` to find any ultra-short clips
+3. Call `diagnose` with action `detect_gaps` to find unintentional gaps
+4. Call `diagnose` with action `detect_duplicates` to find repeated source clips
 5. Summarize all issues and recommend fixes
 
-If there are critical issues, offer to fix them automatically with `fix_flash_frames` and `fill_gaps`."""
+If there are critical issues, offer to fix them automatically: `edit` with action
+`fix_flash_frames`, then `edit` with action `fill_gaps`."""
                 ),
             )],
         )
@@ -690,11 +724,11 @@ If there are critical issues, offer to fix them automatically with `fix_flash_fr
                     text=f"""Extract chapter markers from my timeline and format them for YouTube.
 
 File: {filepath}
-
+{_PROMPT_CALLING_CONVENTION}
 Please:
-1. Use `list_markers` with format "youtube" to get chapter timestamps
+1. Call `inspect` with action `list_markers`, passing format "youtube" in args, to get chapter timestamps
 2. Format the output so I can copy-paste directly into a YouTube description
-3. If there are no chapter markers, suggest good chapter points based on the timeline structure using `analyze_pacing`"""
+3. If there are no chapter markers, suggest good chapter points based on the timeline structure using `inspect` with action `analyze_pacing`"""
                 ),
             )],
         )
@@ -711,12 +745,12 @@ Please:
 
 File: {filepath}
 Target duration: {duration}
-
+{_PROMPT_CALLING_CONVENTION}
 Please:
-1. Use `list_library_clips` to show me what clips are available
-2. Use `list_keywords` to show me the tags I can filter by
+1. Call `inspect` with action `list_library_clips` to show me what clips are available
+2. Call `inspect` with action `list_keywords` to show me the tags I can filter by
 3. Suggest a structure (segments, pacing) based on what's available
-4. Generate the rough cut with `auto_rough_cut` using my preferences
+4. Generate the rough cut with `generate` with action `auto_rough_cut` using my preferences
 5. Show me a summary of what was created"""
                 ),
             )],
@@ -732,12 +766,12 @@ Please:
                     text=f"""Give me a quick overview of my timeline.
 
 File: {filepath}
-
+{_PROMPT_CALLING_CONVENTION}
 Please:
-1. Use `analyze_timeline` for stats (duration, resolution, clip count)
-2. Use `analyze_pacing` for pacing metrics and suggestions
-3. Use `list_keywords` to show what tags are in use
-4. Use `list_markers` to show any markers
+1. Call `inspect` with action `analyze_timeline` for stats (duration, resolution, clip count)
+2. Call `inspect` with action `analyze_pacing` for pacing metrics and suggestions
+3. Call `inspect` with action `list_keywords` to show what tags are in use
+4. Call `inspect` with action `list_markers` to show any markers
 5. Give me a brief assessment of the edit"""
                 ),
             )],
@@ -753,11 +787,11 @@ Please:
                     text=f"""Help me clean up my timeline by finding and fixing common issues.
 
 File: {filepath}
-
+{_PROMPT_CALLING_CONVENTION}
 Please:
-1. Use `validate_timeline` to get the health score
-2. If there are flash frames, use `fix_flash_frames` to remove them
-3. If there are gaps, use `fill_gaps` to close them
+1. Call `diagnose` with action `validate_timeline` to get the health score
+2. If there are flash frames, call `edit` with action `fix_flash_frames` to remove them
+3. If there are gaps, call `edit` with action `fill_gaps` to close them
 4. Report what was fixed and the new health score"""
                 ),
             )],
