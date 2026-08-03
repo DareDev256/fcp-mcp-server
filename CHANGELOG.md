@@ -2,23 +2,37 @@
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-08-04
+
 ### Fixed
 
-**Pinned `mcp<2.0.0` — CI and every fresh install were broken by the SDK's 2.0
-release.** `mcp` 2.0.0 landed on PyPI 2026-07-28 and removed the low-level
-`Server` decorator API that `server.py` is built on: `list_tools`, `call_tool`,
-`list_resources`, `read_resource`, `list_prompts`, and `get_prompt` are all gone,
-replaced by `add_request_handler`. Because the dependency was declared as an
+**Pinned `mcp<2.0.0` — every fresh install had been broken since 2026-07-28.**
+`mcp` 2.0.0 landed on PyPI that day and removed the low-level `Server` decorator
+API that `server.py` is built on: `list_tools`, `call_tool`, `list_resources`,
+`read_resource`, `list_prompts`, and `get_prompt` are all gone, replaced by
+`on_*` constructor callbacks. Because the dependency was declared as an
 open-ended `mcp>=1.0.0`, every install after that date resolved to 2.0.0 and
 `server.py` failed at import with `AttributeError: 'Server' object has no
 attribute 'list_resources'`, taking six test modules down at collection time.
 
 Main's last CI run was 2026-07-27, one day before the release, so the breakage
-first surfaced on an unrelated contributor PR and looked like the PR's fault. It
+first surfaced on an unrelated contributor PR and looked like that PR's fault. It
 was not. The bound resolves to `mcp` 1.29.0; full suite green.
 
-Migrating to the 2.x handler API is tracked separately — the pin is the stopgap,
+Migrating to the 2.x callback API is tracked separately — the pin is the stopgap,
 not the answer.
+
+**`detect_media_silence` no longer decodes the video stream.** `detect_silence()`
+ran ffmpeg's `silencedetect` filter with no stream selection, so ffmpeg decoded
+the entire video track into the null muxer just to analyse audio. On long or
+high-bitrate camera files that blew past `PROBE_TIMEOUT_SECONDS` (120s) and
+silence analysis returned nothing — a 2.5GB, 971-second iPhone MOV timed out
+every time. Adding `-vn` restricts the pass to the audio stream; the same file
+now analyses in about a second with byte-identical `silencedetect` output, since
+the filter only ever looked at audio. Thanks to
+[@jardelapp](https://github.com/jardelapp) for the report and the fix (#8).
+
+### Changed
 
 **Repo renamed `fcpxml-mcp-server` → `fcp-mcp-server`** to match the PyPI
 distribution name. The GitHub *About* link had been pointing at
@@ -33,7 +47,7 @@ unchanged — it is bound to the `mcp-name` marker inside the *published* 0.13.1
 PyPI README, and changing it would orphan the registry entry and require a new
 PyPI release. Registry name ≠ install name is legal and intentional.
 
-No code changes; 0.13.1 on PyPI is untouched.
+The rename itself carried no code changes.
 
 ## [0.13.1] - 2026-07-24
 
