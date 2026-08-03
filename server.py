@@ -3846,7 +3846,14 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
         # test_every_group_action_resolves_to_a_real_handler exists to prevent.
         return _text_result(f"No handler registered for action: {action}")
 
-    return await handler(arguments.get("args") or {})
+    call_args = arguments.get("args") or {}
+    if not isinstance(call_args, dict):
+        return _text_result(
+            f"Invalid 'args' for '{group}.{action}': expected an object, "
+            f"got {type(call_args).__name__}."
+        )
+
+    return await handler(call_args)
 
 
 def _group_tool(name: str) -> Tool:

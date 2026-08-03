@@ -1,6 +1,8 @@
 """Grouped tool facade: 7 verbs dispatching into the existing 62 handlers."""
 import asyncio
 
+import pytest
+
 import server
 
 
@@ -73,3 +75,26 @@ class TestGroupDispatch:
     def test_unknown_group_is_rejected(self):
         result = asyncio.run(server.handle_group("nonexistent", {"action": "list_clips"}))
         assert "nonexistent" in result[0].text
+
+    @pytest.mark.parametrize("bad_args", ["foo", ["a", "b"], 42])
+    def test_non_dict_args_is_rejected_not_raised(self, bad_args):
+        """A non-dict 'args' must return a teaching error, never raise."""
+        result = asyncio.run(server.handle_group(
+            "inspect", {"action": "list_clips", "args": bad_args}
+        ))
+        text = result[0].text
+        assert "inspect" in text
+        assert "list_clips" in text
+        assert type(bad_args).__name__ in text
+
+
+class TestGroupTool:
+    def test_group_tool_schema_for_inspect(self):
+        tool = server._group_tool("inspect")
+        actions = server.TOOL_GROUPS["inspect"]["actions"]
+
+        assert tool.name == "inspect"
+        assert any(action in tool.description for action in actions)
+        assert tool.inputSchema["properties"]["action"]["enum"] == actions
+        assert tool.inputSchema["required"] == ["action"]
+        assert tool.inputSchema["properties"]["args"]["type"] == "object"
