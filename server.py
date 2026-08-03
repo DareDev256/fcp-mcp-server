@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from mcp.server import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     GetPromptResult,
@@ -572,7 +573,7 @@ async def list_resources() -> list[Resource]:
 
 
 @server.read_resource()
-async def read_resource(uri: str) -> str:
+async def read_resource(uri: str) -> str | list[ReadResourceContents]:
     """Read an FCPXML file and return a summary."""
     if str(uri).startswith("preview://"):
         try:
@@ -584,7 +585,7 @@ async def read_resource(uri: str) -> str:
         _project, tl = _parse_project(filepath)
         if not tl:
             return f"No timelines found in {filepath}"
-        return render_timeline_html(tl)
+        return [ReadResourceContents(content=render_timeline_html(tl), mime_type="text/html")]
 
     filepath = str(uri).replace("file://", "")
     try:
