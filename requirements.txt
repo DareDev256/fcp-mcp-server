@@ -1,5 +1,6 @@
 # MCP Server Framework
-mcp>=1.0.0
+# Pinned below 2.0.0: mcp 2.0 removed the low-level Server decorator API.
+mcp>=1.0.0,<2.0.0
 
 # XML Parsing
 lxml>=4.9.0

@@ -29,7 +29,11 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.0.0",
+    # Upper bound is load-bearing: mcp 2.0.0 (2026-07-28) removed the low-level
+    # Server decorator API (list_tools/call_tool/list_resources/read_resource/
+    # list_prompts/get_prompt) that server.py is built on, replaced by
+    # add_request_handler. Lift this only alongside the 2.x migration.
+    "mcp>=1.0.0,<2.0.0",
     "defusedxml>=0.7.1",
 ]
 

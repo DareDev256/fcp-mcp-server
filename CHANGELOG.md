@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Fixed
+
+**Pinned `mcp<2.0.0` — CI and every fresh install were broken by the SDK's 2.0
+release.** `mcp` 2.0.0 landed on PyPI 2026-07-28 and removed the low-level
+`Server` decorator API that `server.py` is built on: `list_tools`, `call_tool`,
+`list_resources`, `read_resource`, `list_prompts`, and `get_prompt` are all gone,
+replaced by `add_request_handler`. Because the dependency was declared as an
+open-ended `mcp>=1.0.0`, every install after that date resolved to 2.0.0 and
+`server.py` failed at import with `AttributeError: 'Server' object has no
+attribute 'list_resources'`, taking six test modules down at collection time.
+
+Main's last CI run was 2026-07-27, one day before the release, so the breakage
+first surfaced on an unrelated contributor PR and looked like the PR's fault. It
+was not. The bound resolves to `mcp` 1.29.0; full suite green.
+
+Migrating to the 2.x handler API is tracked separately — the pin is the stopgap,
+not the answer.
+
 **Repo renamed `fcpxml-mcp-server` → `fcp-mcp-server`** to match the PyPI
 distribution name. The GitHub *About* link had been pointing at
 `pypi.org/project/fcpxml-mcp-server/` — a slug that never existed on PyPI — so
