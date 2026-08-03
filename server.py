@@ -1662,7 +1662,7 @@ def _legacy_tool_list() -> list[Tool]:
 def _legacy_tools_enabled() -> bool:
     """Advertise the original 62 flat tools alongside the groups.
 
-    Off by default so new users pay the small schema cost. Existing configs
+    Off by default so new users pay only the small schema cost. Existing configs
     that call flat tool names keep working either way, because call_tool
     dispatches from TOOL_HANDLERS and never consults this list.
     """

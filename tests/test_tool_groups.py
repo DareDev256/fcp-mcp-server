@@ -145,10 +145,40 @@ class TestLegacyGating:
         assert len(names) >= 62 + len(server.TOOL_GROUPS)
 
     def test_hidden_tools_still_dispatch(self, monkeypatch):
-        """The whole compat story. Hidden from list_tools, still callable."""
+        """The whole compat story: every one of the 62 flat tools that
+        list_tools() no longer advertises must still reach its OWN handler
+        through call_tool(). A version of call_tool that rejected every
+        flat name would still pass a check that only inspects TOOL_HANDLERS
+        membership — so this drives call_tool() itself, for every name.
+        """
         monkeypatch.delenv("FCP_MCP_LEGACY_TOOLS", raising=False)
         tools = asyncio.run(server.list_tools())
-        assert "list_projects" not in {t.name for t in tools}
+        advertised = {t.name for t in tools}
+        assert not (set(server.TOOL_HANDLERS) & advertised), (
+            "a flat tool is still advertised — nothing to prove hidden"
+        )
+
+        original_handlers = dict(server.TOOL_HANDLERS)
+        reached: dict[str, str] = {}
+        try:
+            for tool_name in original_handlers:
+                async def sentinel(arguments, _name=tool_name):
+                    reached[_name] = _name
+                    return server._text_result(f"__sentinel__:{_name}")
+
+                server.TOOL_HANDLERS[tool_name] = sentinel
+
+            for tool_name in original_handlers:
+                result = asyncio.run(server.call_tool(tool_name, {}))
+                assert result[0].text == f"__sentinel__:{tool_name}", (
+                    f"{tool_name} did not reach its own handler: {result[0].text!r}"
+                )
+        finally:
+            server.TOOL_HANDLERS.clear()
+            server.TOOL_HANDLERS.update(original_handlers)
+
+        assert reached.keys() == original_handlers.keys()
+        assert "list_projects" not in advertised
         assert "list_projects" in server.TOOL_HANDLERS
 
     def test_schema_payload_is_substantially_smaller(self, monkeypatch):
@@ -165,6 +195,15 @@ class TestLegacyGating:
         assert size(grouped) < size(legacy) * 0.35, (
             f"grouped={size(grouped)} legacy={size(legacy)}"
         )
+
+    def test_group_names_never_collide_with_a_flat_tool_name(self):
+        """call_tool() checks TOOL_GROUPS before TOOL_HANDLERS. If a future
+        flat tool were ever named 'edit', 'inspect', 'mark', 'generate',
+        'diagnose', 'transcript', or 'deliver', the group branch would win
+        and silently shadow it — the exact compatibility break this task
+        exists to prevent, forever uncallable and with no error raised.
+        """
+        assert not (set(server.TOOL_GROUPS) & set(server.TOOL_HANDLERS))
 
 
 class TestCallToolGroupDispatch:
