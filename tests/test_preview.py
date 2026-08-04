@@ -441,3 +441,37 @@ class TestPreviewOnMusicVideoFixture:
 
     def test_header_reports_the_sequence_frame_rate(self):
         assert "23.976" in self._html() or "23.98" in self._html()
+
+
+class TestMetaLineOnConnectedClipTimelines:
+    """Timeline.total_clips counts the spine only, so the meta line read
+    "0 clips" on a music video with 129 of them. And an empty spine rendered
+    as a grey box eating a third of the frame.
+    """
+
+    FIXTURE = Path(__file__).parent.parent / "examples" / "music-video.fcpxml"
+
+    def _html(self):
+        from fcpxml.parser import FCPXMLParser
+
+        tl = FCPXMLParser().parse_file(str(self.FIXTURE)).primary_timeline
+        return render_timeline_html(tl)
+
+    def test_clip_count_includes_connected_clips(self):
+        html = self._html()
+        assert "0 clips" not in html
+        assert "8 clips" in html
+
+    def test_lane_count_is_reported(self):
+        assert "across 3 lanes" in self._html()
+
+    def test_frame_rate_is_not_a_raw_float(self):
+        html = self._html()
+        assert "23.98fps" in html
+        assert "23.976023976" not in html
+
+    def test_empty_spine_track_is_omitted(self):
+        """Nothing on the spine means no spine row at all."""
+        html = self._html()
+        assert '<div class="track"></div>' not in html
+        assert "lane-track" in html, "lane rows must still render"

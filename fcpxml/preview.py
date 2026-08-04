@@ -66,6 +66,21 @@ def _render_clip_block(name: str, left: float, width: float, color: str, seconds
     )
 
 
+def _clip_summary(spine_count: int, connected_count: int, lane_count: int) -> str:
+    """Describe what is on the timeline.
+
+    ``Timeline.total_clips`` counts spine clips only, so it reads "0 clips" on
+    a music video where every element hangs off a gap as a connected clip.
+    """
+    total = spine_count + connected_count
+    parts = [f"{total} clip{'' if total == 1 else 's'}"]
+    if connected_count and lane_count:
+        parts.append(f"{connected_count} connected across {lane_count} lanes")
+    elif spine_count:
+        parts.append("primary storyline")
+    return " &#183; ".join(parts)
+
+
 def _timeline_origin(timeline, connected) -> float:
     """The timeline's zero point in absolute seconds.
 
@@ -125,6 +140,11 @@ def render_timeline_html(timeline) -> str:
     above_html = "".join(_lane_row_html(lane) for lane in positive_lanes)
     below_html = "".join(_lane_row_html(lane) for lane in negative_lanes + zero_lanes)
 
+    spine_html = (
+        f'<div class="track">{"".join(spine_rows)}</div>'
+        if spine_rows else ""
+    )
+
     marks = []
     for marker in getattr(timeline, "markers", []):
         at = float(marker.start.seconds or 0)
@@ -160,11 +180,11 @@ def render_timeline_html(timeline) -> str:
 <body>
 <h1>{escape(str(timeline.name))}</h1>
 <div class="meta">
-  {timeline.total_clips} clips &#183; {len(connected)} connected &#183; {total:.2f}s &#183;
-  {timeline.width}&#215;{timeline.height} @ {timeline.frame_rate}fps
+  {_clip_summary(len(timeline.clips), len(connected), len(lanes))} &#183;
+  {total:.2f}s &#183; {timeline.width}&#215;{timeline.height} @ {timeline.frame_rate:.2f}fps
 </div>
 {above_html}
-<div class="track">{"".join(spine_rows)}</div>
+{spine_html}
 {below_html}
 <div class="markers">{"".join(marks)}</div>
 </body>

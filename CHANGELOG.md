@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-08-04
+
+### Fixed
+
+**The preview header read "0 clips" on a timeline holding 129 of them.**
+`Timeline.total_clips` counts spine clips only, so every connected-clip project
+reported zero. It now reports the real total plus how many lanes they span.
+
+**An empty spine rendered as a grey box** taking a third of the frame on any
+music video, where nothing sits on the spine by design. The row is now omitted
+when there is nothing to draw.
+
+**Frame rate printed as `23.976023976023978fps`.** Rounded to two places.
+
+All three showed on every connected-clip project and were invisible against
+`examples/sample.fcpxml`. Found while rendering the README screenshot.
+
 ## [0.14.4] - 2026-08-04
 
 ### Added
