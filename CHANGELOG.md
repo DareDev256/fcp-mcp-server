@@ -2,69 +2,8 @@
 
 ## [Unreleased]
 
-## [0.16.0] - 2026-08-04
-
-### Added
-
-**Opt-in sandbox roots that confine reads — via a new variable, not the one you
-already set.** (issue #10) `_validate_filepath` enforced an extension
-whitelist, a null-byte check, a 100 MB size cap and `Path.resolve()`, but
-confined the resolved path to nothing: any `.fcpxml` or `.fcpxmld` anywhere on
-disk was readable.
-
-- **`FCP_PROJECTS_DIRS`** accepts several roots separated like `PATH`
-  (`~/Movies:/Volumes/Scratch/Projects`) and is the **only** thing that turns
-  read confinement on. Video work does not live on one volume, and a
-  single-root sandbox that breaks external drives is a sandbox nobody enables.
-- **`FCP_PROJECTS_DIR` is unchanged from 0.15.0.** It confines *listing* only
-  and does not restrict which files can be opened. The README has always told
-  users to run `claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies`, so
-  promoting it to a read sandbox would have broken every installation that
-  followed the docs — no Desktop, no Downloads, no external drive, no client
-  handoff folder. **Upgrading changes nothing for anyone who only sets it.**
-- **Symlinked library media works.** Final Cut imports media "leave files in
-  place" by default, so `~/Movies/X.fcpbundle/.../Original Media/` is full of
-  symlinks pointing at footage on another volume. A path is allowed if it is
-  inside a root *as given* **or** resolves into one, so the file Final Cut
-  itself put in the library opens. Judging only the resolved target rejects the
-  normal case for every real library, not an edge case.
-- **Traversal protection is intact.** `..` collapses lexically before the
-  containment check, so `root/../etc/passwd` is judged as `/etc/passwd`. The
-  extension whitelist still runs on the *resolved* suffix, so a symlink named
-  `innocent.fcpxml` pointing at `/etc/passwd` is rejected on its target either
-  way. A symlink pointing *into* a root from outside is allowed, judged on
-  where it lands.
-- **Case-insensitive filesystems are handled.** macOS is case-insensitive but
-  `Path.resolve()` does not normalise case, so a root written
-  `/users/me/Movies` never string-matches a file resolved as
-  `/Users/me/Movies`. Root matching falls back to `os.stat` identity, which
-  answers "same directory?" correctly there without weakening a case-sensitive
-  filesystem, where two differently-cased directories genuinely are different.
-
-**Three resource caps the README security matrix used to claim but never had.**
-(issue #11) The v0.15.0 audit found five matrix rows describing protections
-that existed at no commit; four were removed as false claims. Three are now
-real, configurable, and tested:
-
-- **`FCP_MAX_DISCOVERY_FILES`** (default 10,000) — `find_fcpxml_files` was two
-  unbounded `rglob` calls driven by a caller-supplied directory, so
-  `list_projects` on `/` walked the entire filesystem. The walk now *stops* at
-  the cap rather than collecting everything and slicing, which is the
-  difference between a bound and a cosmetic one.
-- **`FCP_MAX_BATCH_MARKERS`** (default 10,000) — `batch_add_markers` and the
-  beat/SRT/transcript importers took arbitrarily long lists.
-- **`FCP_MAX_TRANSCRIPT_CHARS`** (default 1 MB) — inline transcript text was
-  unbounded. The cut lands on a line boundary so a timestamp line is never
-  split in half and reinterpreted.
-
-Every cap returns an explicit `⚠️ TRUNCATED` notice naming what was dropped.
-Silent truncation reads as "I covered everything" when it did not, which is the
-failure the issue is actually about.
-
-48 new tests in `test_security.py` (182 total, 1199 across the suite). Each was
-verified by sabotaging the behaviour it guards and confirming it fails.
-
 ## [0.15.0] - 2026-08-04
+
 
 ### Fixed
 
@@ -152,6 +91,67 @@ the spine and do nothing on a connected timeline. Scope is documented in
 issue #16; they are unchanged here because a wrong write on someone's edit is
 expensive and each needs its own decision about what the operation even means
 on a lane.
+
+
+### Added
+
+**Opt-in sandbox roots that confine reads — via a new variable, not the one you
+already set.** (issue #10) `_validate_filepath` enforced an extension
+whitelist, a null-byte check, a 100 MB size cap and `Path.resolve()`, but
+confined the resolved path to nothing: any `.fcpxml` or `.fcpxmld` anywhere on
+disk was readable.
+
+- **`FCP_PROJECTS_DIRS`** accepts several roots separated like `PATH`
+  (`~/Movies:/Volumes/Scratch/Projects`) and is the **only** thing that turns
+  read confinement on. Video work does not live on one volume, and a
+  single-root sandbox that breaks external drives is a sandbox nobody enables.
+- **`FCP_PROJECTS_DIR` is unchanged from 0.15.0.** It confines *listing* only
+  and does not restrict which files can be opened. The README has always told
+  users to run `claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies`, so
+  promoting it to a read sandbox would have broken every installation that
+  followed the docs — no Desktop, no Downloads, no external drive, no client
+  handoff folder. **Upgrading changes nothing for anyone who only sets it.**
+- **Symlinked library media works.** Final Cut imports media "leave files in
+  place" by default, so `~/Movies/X.fcpbundle/.../Original Media/` is full of
+  symlinks pointing at footage on another volume. A path is allowed if it is
+  inside a root *as given* **or** resolves into one, so the file Final Cut
+  itself put in the library opens. Judging only the resolved target rejects the
+  normal case for every real library, not an edge case.
+- **Traversal protection is intact.** `..` collapses lexically before the
+  containment check, so `root/../etc/passwd` is judged as `/etc/passwd`. The
+  extension whitelist still runs on the *resolved* suffix, so a symlink named
+  `innocent.fcpxml` pointing at `/etc/passwd` is rejected on its target either
+  way. A symlink pointing *into* a root from outside is allowed, judged on
+  where it lands.
+- **Case-insensitive filesystems are handled.** macOS is case-insensitive but
+  `Path.resolve()` does not normalise case, so a root written
+  `/users/me/Movies` never string-matches a file resolved as
+  `/Users/me/Movies`. Root matching falls back to `os.stat` identity, which
+  answers "same directory?" correctly there without weakening a case-sensitive
+  filesystem, where two differently-cased directories genuinely are different.
+
+**Three resource caps the README security matrix used to claim but never had.**
+(issue #11) The v0.15.0 audit found five matrix rows describing protections
+that existed at no commit; four were removed as false claims. Three are now
+real, configurable, and tested:
+
+- **`FCP_MAX_DISCOVERY_FILES`** (default 10,000) — `find_fcpxml_files` was two
+  unbounded `rglob` calls driven by a caller-supplied directory, so
+  `list_projects` on `/` walked the entire filesystem. The walk now *stops* at
+  the cap rather than collecting everything and slicing, which is the
+  difference between a bound and a cosmetic one.
+- **`FCP_MAX_BATCH_MARKERS`** (default 10,000) — `batch_add_markers` and the
+  beat/SRT/transcript importers took arbitrarily long lists.
+- **`FCP_MAX_TRANSCRIPT_CHARS`** (default 1 MB) — inline transcript text was
+  unbounded. The cut lands on a line boundary so a timestamp line is never
+  split in half and reinterpreted.
+
+Every cap returns an explicit `⚠️ TRUNCATED` notice naming what was dropped.
+Silent truncation reads as "I covered everything" when it did not, which is the
+failure the issue is actually about.
+
+48 new tests in `test_security.py` (182 total, 1199 across the suite). Each was
+verified by sabotaging the behaviour it guards and confirming it fails.
 
 ## [0.14.5] - 2026-08-04
 
