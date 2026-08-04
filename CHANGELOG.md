@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-04
+
+### Fixed
+
+**A missing or misnamed argument now says which one, instead of `Error: KeyError`.**
+Grouped calls nest parameters under `args`, so an action's required fields are
+no longer visible in the advertised schema and the caller has to guess them.
+Most handlers take `filepath`, but a few do not — the beat tools take
+`media_path` — and guessing wrong returned a bare `Error: KeyError` with no key
+name and nothing to correct. That dead end did not exist with the flat schema,
+so it was a regression introduced by the grouping in 0.14.0.
+
+`call_tool` now catches `KeyError` and answers with the missing parameter plus
+the action's full accepted-parameter list, pulled from its original tool schema:
+
+```
+Missing required argument: media_path
+
+'detect_beats' accepts:
+  media_path (required): Path to audio/video file (.wav, .mp3, .m4a, ...)
+```
+
+Applies to flat calls as well as grouped ones.
+
 ## [0.14.0] - 2026-08-04
 
 ### Added

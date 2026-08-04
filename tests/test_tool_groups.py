@@ -273,3 +273,45 @@ class TestPromptsUseGroupedToolNames:
                     f"prompt '{prompt_name}' names flat tool '{name}' outside "
                     f"the grouped form — the model cannot see that tool"
                 )
+
+
+class TestMissingArgumentIsRecoverable:
+    """A grouped call hides each action's required params, so the caller guesses.
+
+    Most handlers take `filepath`; a few take something else (`media_path` on
+    the beat tools). A bare `Error: KeyError` gives the caller nothing to
+    correct, which is a dead end the flat schema never had.
+    """
+
+    def test_missing_arg_names_the_key_and_the_accepted_params(self):
+        result = asyncio.run(
+            server.call_tool("diagnose", {"action": "detect_beats", "args": {}})
+        )
+        text = result[0].text
+        assert "KeyError" not in text, "the raw exception name is not actionable"
+        assert "media_path" in text, "must name the parameter the action wants"
+        assert "required" in text
+
+    def test_wrong_arg_name_is_corrected(self):
+        """Guessing `filepath` for a tool that wants `media_path` must teach."""
+        result = asyncio.run(
+            server.call_tool(
+                "diagnose", {"action": "detect_beats", "args": {"filepath": "/x.wav"}}
+            )
+        )
+        text = result[0].text
+        assert "media_path" in text
+        assert "KeyError" not in text
+
+    def test_flat_call_gets_the_same_help(self):
+        result = asyncio.run(server.call_tool("detect_beats", {}))
+        assert "media_path" in result[0].text
+
+    def test_help_marks_optional_params_as_optional(self):
+        help_text = server._action_param_help("detect_silence_candidates")
+        assert "filepath (required)" in help_text
+        assert "(optional)" in help_text
+
+    def test_unknown_action_yields_no_help_rather_than_raising(self):
+        assert server._action_param_help("no_such_action") == ""
+        assert server._action_param_help(None) == ""

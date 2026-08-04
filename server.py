@@ -63,7 +63,7 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 PROJECTS_DIR = os.environ.get("FCP_PROJECTS_DIR", os.path.expanduser("~/Movies"))
@@ -4027,6 +4027,41 @@ def _group_tool(name: str) -> Tool:
     )
 
 
+_ACTION_SCHEMAS: dict[str, dict] | None = None
+
+
+def _action_param_help(action: str | None) -> str:
+    """Describe one action's accepted parameters, from its original tool schema.
+
+    Grouped calls nest arguments under `args`, so the per-action required
+    fields are no longer visible in the advertised schema — the caller is
+    guessing parameter names. Most handlers take `filepath`, but a few take
+    something else (`media_path` on the beat tools, for one), and a bare
+    `KeyError` gives the caller nothing to correct. This turns that dead end
+    into a recoverable one.
+    """
+    global _ACTION_SCHEMAS
+    if not action:
+        return ""
+    if _ACTION_SCHEMAS is None:
+        _ACTION_SCHEMAS = {t.name: (t.inputSchema or {}) for t in _legacy_tool_list()}
+    schema = _ACTION_SCHEMAS.get(action)
+    if schema is None:
+        return ""
+
+    props = schema.get("properties") or {}
+    if not props:
+        return f"'{action}' takes no arguments."
+
+    required = set(schema.get("required") or [])
+    lines = []
+    for key, spec in props.items():
+        flag = "required" if key in required else "optional"
+        desc = (spec or {}).get("description", "")
+        lines.append(f"  {key} ({flag})" + (f": {desc}" if desc else ""))
+    return f"'{action}' accepts:\n" + "\n".join(lines)
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     handler = TOOL_HANDLERS.get(name)
@@ -4042,6 +4077,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
         return _text_result(f"File not found: {e}")
     except ValueError as e:
         return _text_result(f"Validation error: {e}")
+    except KeyError as e:
+        action = arguments.get("action") if name in TOOL_GROUPS else name
+        missing = str(e).strip("'\"")
+        help_text = _action_param_help(action)
+        msg = f"Missing required argument: {missing}"
+        return _text_result(f"{msg}\n\n{help_text}" if help_text else msg)
     except Exception as e:
         return _text_result(f"Error: {type(e).__name__}")
 
