@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-04
+
+### Added
+
+**Multi-root sandbox confinement, and it now covers reads.** (issue #10)
+`_validate_filepath` enforced an extension whitelist, a null-byte check, a
+100 MB size cap and `Path.resolve()` — but confined the resolved path to
+nothing. Any `.fcpxml` or `.fcpxmld` anywhere on disk was readable, and
+`FCP_PROJECTS_DIR` gated *listing* only.
+
+- **`FCP_PROJECTS_DIRS`** accepts several roots separated like `PATH`
+  (`~/Movies:/Volumes/Scratch/Projects`). Video work does not live on one
+  volume, and a single-root sandbox that breaks external drives is a sandbox
+  nobody turns on.
+- **`FCP_PROJECTS_DIR` still works** and is treated as one more root, so an
+  existing configuration needs no change.
+- **The root check moved into `_validate_filepath`**, so it applies to every
+  read — `file://`, `preview://`, and every handler — not just discovery. It
+  runs on the *resolved* path, so a symlink sitting inside a root that points
+  outside it is rejected, as is `..` traversal and a sibling directory that
+  merely shares a name prefix (`/lib-evil` is not inside `/lib`).
+- **Still opt-in and off by default.** With neither variable set, behaviour is
+  identical to 0.15.0. Defaulting to `~/Movies` would break everyone with a
+  library on an external drive, which is most people doing serious work.
+
+**Behaviour change for existing `FCP_PROJECTS_DIR` users:** reads are now
+confined too, not just listing. If you import SRTs or beat JSON from outside
+that root, add those directories to `FCP_PROJECTS_DIRS`.
+
+**Three resource caps the README security matrix used to claim but never had.**
+(issue #11) The v0.15.0 audit found five matrix rows describing protections
+that existed at no commit; four were removed as false claims. Three are now
+real, configurable, and tested:
+
+- **`FCP_MAX_DISCOVERY_FILES`** (default 10,000) — `find_fcpxml_files` was two
+  unbounded `rglob` calls driven by a caller-supplied directory, so
+  `list_projects` on `/` walked the entire filesystem. The walk now *stops* at
+  the cap rather than collecting everything and slicing, which is the
+  difference between a bound and a cosmetic one.
+- **`FCP_MAX_BATCH_MARKERS`** (default 10,000) — `batch_add_markers` and the
+  beat/SRT/transcript importers took arbitrarily long lists.
+- **`FCP_MAX_TRANSCRIPT_CHARS`** (default 1 MB) — inline transcript text was
+  unbounded. The cut lands on a line boundary so a timestamp line is never
+  split in half and reinterpreted.
+
+Every cap returns an explicit `⚠️ TRUNCATED` notice naming what was dropped.
+Silent truncation reads as "I covered everything" when it did not, which is the
+failure the issue is actually about.
+
+33 new tests in `test_security.py` (167 total, 1184 across the suite). Each was
+verified by sabotaging the behaviour it guards and confirming it fails.
+
 ## [0.15.0] - 2026-08-04
 
 ### Fixed

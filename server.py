@@ -14,7 +14,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from urllib.parse import quote, unquote
 
 from mcp.server import Server
@@ -63,15 +63,81 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 server = Server("fcp-mcp-server", version=__version__)
-PROJECTS_DIR = os.environ.get("FCP_PROJECTS_DIR", os.path.expanduser("~/Movies"))
-# When set explicitly via env var, enforce sandbox boundaries on list_projects.
-_SANDBOX_ENABLED = "FCP_PROJECTS_DIR" in os.environ
+
+
+def _parse_allowed_roots(env: Mapping[str, str]) -> list[str]:
+    """Build the sandbox root allowlist from the environment.
+
+    ``FCP_PROJECTS_DIRS`` accepts several roots separated by ``os.pathsep``
+    (``:`` on macOS/Linux, ``;`` on Windows), like ``PATH``.  The original
+    single-root ``FCP_PROJECTS_DIR`` keeps working and is treated as one more
+    root, so an existing configuration behaves exactly as it did.
+
+    An empty list means *no confinement* — the historical default.  Roots that
+    do not resolve (typo, unmounted drive) are dropped rather than raising, so
+    a stale entry cannot take the whole server down at import time.
+    """
+    raw_parts: list[str] = []
+    multi = env.get("FCP_PROJECTS_DIRS", "")
+    raw_parts.extend(multi.split(os.pathsep))
+    single = env.get("FCP_PROJECTS_DIR")
+    if single is not None:
+        raw_parts.append(single)
+
+    roots: list[str] = []
+    for part in raw_parts:
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            resolved = str(Path(os.path.expanduser(part)).resolve())
+        except (OSError, ValueError):
+            continue
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+# Sandbox roots.  Empty = opt-out (default): the caller may name any path.
+ALLOWED_ROOTS = _parse_allowed_roots(os.environ)
+
+PROJECTS_DIR = os.environ.get(
+    "FCP_PROJECTS_DIR",
+    ALLOWED_ROOTS[0] if ALLOWED_ROOTS else os.path.expanduser("~/Movies"),
+)
+# When roots are configured explicitly, enforce sandbox boundaries.
+_SANDBOX_ENABLED = bool(ALLOWED_ROOTS)
 
 # Maximum file size for parsing (100 MB).
 MAX_FILE_SIZE = 100 * 1024 * 1024
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a positive integer cap from the environment, falling back cleanly."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except (ValueError, AttributeError):
+        return default
+    return value if value > 0 else default
+
+
+# Maximum number of files a single directory walk may collect.  An unbounded
+# rglob driven by a caller-supplied directory (``list_projects`` on ``/``) walks
+# the entire filesystem; this stops the walk, and callers report the truncation
+# instead of presenting a partial list as if it were complete.
+MAX_DISCOVERY_FILES = _env_int("FCP_MAX_DISCOVERY_FILES", 10000)
+
+# Maximum markers written by one batch/import operation.
+MAX_BATCH_MARKERS = _env_int("FCP_MAX_BATCH_MARKERS", 10000)
+
+# Maximum length of inline transcript text accepted by import_transcript_markers.
+MAX_INLINE_TRANSCRIPT_CHARS = _env_int("FCP_MAX_TRANSCRIPT_CHARS", 1024 * 1024)
 
 
 # ============================================================================
@@ -103,20 +169,53 @@ def _check_json_depth(obj: object, _depth: int = 0) -> None:
             _check_json_depth(item, _depth + 1)
 
 
+def _is_within_roots(resolved: Path, roots: Sequence[str]) -> bool:
+    """True when *resolved* is a descendant of (or equal to) any allowed root."""
+    for root in roots:
+        try:
+            resolved.relative_to(Path(root).resolve())
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _enforce_allowed_roots(resolved: Path, what: str) -> None:
+    """Confine an already-resolved path to ``ALLOWED_ROOTS`` when configured.
+
+    With no roots configured this is a no-op — the historical, opt-out default.
+    The check runs on the *resolved* path, so a symlink pointing outside the
+    allowlist cannot smuggle its target back in.
+    """
+    roots = ALLOWED_ROOTS
+    if not roots:
+        return
+    if _is_within_roots(resolved, roots):
+        return
+    raise ValueError(
+        f"{what} escapes the allowed roots: {resolved} is not under any of "
+        f"{os.pathsep.join(roots)}. Set FCP_PROJECTS_DIRS to include it."
+    )
+
+
 def _validate_filepath(filepath: str, allowed_extensions: tuple[str, ...] | None = None) -> str:
     """Validate a user-provided file path against traversal and size attacks.
 
-    Resolves symlinks, blocks null bytes, enforces extension whitelist, and
+    Resolves symlinks, blocks null bytes, confines the resolved path to
+    ``ALLOWED_ROOTS`` (when configured), enforces the extension whitelist, and
     checks file size before any parsing takes place.
 
     Raises:
-        ValueError: For invalid paths (null bytes, bad extensions, oversized).
+        ValueError: For invalid paths (null bytes, bad extensions, oversized,
+            outside the configured sandbox roots).
         FileNotFoundError: When the resolved path does not exist.
     """
     if '\x00' in filepath:
         raise ValueError("Invalid file path: null byte detected")
 
     resolved = Path(filepath).resolve()
+
+    _enforce_allowed_roots(resolved, "File path")
 
     if not resolved.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
@@ -187,13 +286,18 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
     return str(resolved)
 
 
-def _validate_directory(directory: str, *, allowed_root: str | None = None) -> str:
+def _validate_directory(
+    directory: str,
+    *,
+    allowed_root: str | None = None,
+    allowed_roots: Sequence[str] | None = None,
+) -> str:
     """Validate a user-provided directory path against traversal and injection.
 
     Resolves symlinks, blocks null bytes, and verifies the path is a real
-    directory. When *allowed_root* is given, the resolved path must be a
-    descendant of (or equal to) that root — preventing filesystem enumeration
-    beyond the project workspace.
+    directory. When *allowed_root* (single) or *allowed_roots* (several) is
+    given, the resolved path must be a descendant of (or equal to) one of them
+    — preventing filesystem enumeration beyond the project workspace.
 
     Raises:
         ValueError: For invalid paths (null bytes, not a directory, sandbox escape).
@@ -206,15 +310,17 @@ def _validate_directory(directory: str, *, allowed_root: str | None = None) -> s
     if not resolved.is_dir():
         raise ValueError(f"Not a valid directory: {directory}")
 
+    roots: list[str] = []
     if allowed_root is not None:
-        root = Path(allowed_root).resolve()
-        try:
-            resolved.relative_to(root)
-        except ValueError:
-            raise ValueError(
-                f"Directory escapes allowed root: "
-                f"{resolved} is not under {root}"
-            )
+        roots.append(allowed_root)
+    if allowed_roots:
+        roots.extend(allowed_roots)
+
+    if roots and not _is_within_roots(resolved, roots):
+        raise ValueError(
+            f"Directory escapes allowed root: "
+            f"{resolved} is not under {os.pathsep.join(str(Path(r).resolve()) for r in roots)}"
+        )
 
     return str(resolved)
 
@@ -223,12 +329,40 @@ def _validate_directory(directory: str, *, allowed_root: str | None = None) -> s
 # UTILITIES
 # ============================================================================
 
-def find_fcpxml_files(directory: str) -> list[str]:
-    """Find all FCPXML files in a directory."""
+def find_fcpxml_files_capped(
+    directory: str, cap: int | None = None
+) -> tuple[list[str], bool]:
+    """Find FCPXML files under *directory*, stopping the walk at *cap* files.
+
+    ``rglob`` is a generator, so the cap is enforced by breaking out of the
+    iteration — the walk itself stops rather than collecting everything and
+    slicing afterwards.  That is the difference between bounded work and
+    walking the whole filesystem when a caller names ``/``.
+
+    Returns:
+        ``(sorted_files, truncated)``.  *truncated* is True when the cap cut
+        the walk short, so callers can say so instead of presenting a partial
+        list as complete.
+    """
+    limit = MAX_DISCOVERY_FILES if cap is None else cap
     path = Path(directory)
-    files = list(str(f) for f in path.rglob("*.fcpxml"))
-    files.extend(str(f) for f in path.rglob("*.fcpxmld"))
-    return sorted(files)
+    files: list[str] = []
+    truncated = False
+    for pattern in ("*.fcpxml", "*.fcpxmld"):
+        for f in path.rglob(pattern):
+            if len(files) >= limit:
+                truncated = True
+                break
+            files.append(str(f))
+        if truncated:
+            break
+    return sorted(files), truncated
+
+
+def find_fcpxml_files(directory: str, cap: int | None = None) -> list[str]:
+    """Find FCPXML files in a directory (capped — see find_fcpxml_files_capped)."""
+    files, _ = find_fcpxml_files_capped(directory, cap)
+    return files
 
 
 def format_timecode(tc) -> str:
@@ -457,6 +591,55 @@ def _parse_timestamp_parts(
         frames = int(parts[3])
         return base + (frames / frame_rate) if frame_rate > 0 else base
     return None
+
+
+def _cap_markers(markers: list) -> tuple[list, int]:
+    """Trim a marker batch to ``MAX_BATCH_MARKERS``.
+
+    Returns ``(kept, dropped)``.  Callers must surface *dropped* in their
+    result text — a partial write reported as a complete one is the failure
+    mode this cap exists to prevent.
+    """
+    if len(markers) <= MAX_BATCH_MARKERS:
+        return markers, 0
+    return markers[:MAX_BATCH_MARKERS], len(markers) - MAX_BATCH_MARKERS
+
+
+def _cap_transcript_text(text: str) -> tuple[str, int]:
+    """Trim transcript text to ``MAX_INLINE_TRANSCRIPT_CHARS``.
+
+    Cuts on the last newline inside the cap so a timestamp line is never split
+    in half and silently reinterpreted.  Returns ``(kept, chars_dropped)``.
+    """
+    if len(text) <= MAX_INLINE_TRANSCRIPT_CHARS:
+        return text, 0
+    head = text[:MAX_INLINE_TRANSCRIPT_CHARS]
+    boundary = head.rfind("\n")
+    if boundary > 0:
+        head = head[:boundary]
+    return head, len(text) - len(head)
+
+
+def _transcript_cap_notice(dropped: int) -> str:
+    """Loud, single-line notice for transcript text dropped by the length cap."""
+    if not dropped:
+        return ""
+    return (
+        f"\n\n⚠️ TRUNCATED: {dropped} character(s) of transcript text were NOT "
+        f"read — input exceeded the {MAX_INLINE_TRANSCRIPT_CHARS}-character cap. "
+        f"Raise FCP_MAX_TRANSCRIPT_CHARS or split the transcript."
+    )
+
+
+def _marker_cap_notice(dropped: int) -> str:
+    """Loud, single-line notice for markers dropped by the batch cap."""
+    if not dropped:
+        return ""
+    return (
+        f"\n\n⚠️ TRUNCATED: {dropped} marker(s) were NOT written — the batch hit "
+        f"the {MAX_BATCH_MARKERS}-marker cap. Raise FCP_MAX_BATCH_MARKERS or "
+        f"split the import."
+    )
 
 
 def _raw_markers_to_batch(
@@ -1880,12 +2063,21 @@ def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source") -> list:
 async def handle_list_projects(arguments: dict) -> Sequence[TextContent]:
     directory = arguments.get("directory", PROJECTS_DIR)
     resolved_dir = _validate_directory(
-        directory, allowed_root=PROJECTS_DIR if _SANDBOX_ENABLED else None
+        directory, allowed_roots=ALLOWED_ROOTS if _SANDBOX_ENABLED else None
     )
-    files = find_fcpxml_files(resolved_dir)
+    files, truncated = find_fcpxml_files_capped(resolved_dir)
     if not files:
         return _text_result(f"No FCPXML files found in {directory}")
-    return _text_result(f"Found {len(files)} FCPXML file(s):\n" + "\n".join(f"  - {f}" for f in files))
+    notice = (
+        f"\n\n⚠️ TRUNCATED: the walk stopped at the {MAX_DISCOVERY_FILES}-file cap. "
+        f"This list is incomplete — narrow the directory or raise "
+        f"FCP_MAX_DISCOVERY_FILES." if truncated else ""
+    )
+    return _text_result(
+        f"Found {len(files)} FCPXML file(s):\n"
+        + "\n".join(f"  - {f}" for f in files)
+        + notice
+    )
 
 
 async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
@@ -2196,13 +2388,17 @@ async def handle_add_marker(arguments: dict) -> Sequence[TextContent]:
 
 async def handle_batch_add_markers(arguments: dict) -> Sequence[TextContent]:
     filepath, output_path, modifier = _setup_modifier(arguments)
+    markers, dropped = _cap_markers(arguments.get("markers", []) or [])
     markers_added = modifier.batch_add_markers(
-        markers=arguments.get("markers", []),
+        markers=markers,
         auto_at_cuts=arguments.get("auto_at_cuts", False),
         auto_at_intervals=arguments.get("auto_at_intervals"),
     )
     modifier.save(output_path)
-    return _text_result(f"Added {len(markers_added)} markers\n\nSaved to: {output_path}")
+    return _text_result(
+        f"Added {len(markers_added)} markers\n\nSaved to: {output_path}"
+        + _marker_cap_notice(dropped)
+    )
 
 
 async def handle_trim_clip(arguments: dict) -> Sequence[TextContent]:
@@ -2599,6 +2795,7 @@ async def handle_import_beat_markers(arguments: dict) -> Sequence[TextContent]:
     timeline_end = modifier._timeline_duration().to_seconds()
     in_range = [m for m in markers if float(m['timecode'].rstrip('s')) < timeline_end]
     skipped_count = len(markers) - len(in_range)
+    in_range, dropped = _cap_markers(in_range)
 
     added = modifier.batch_add_markers(markers=in_range)
     modifier.save(output_path)
@@ -2619,7 +2816,7 @@ async def handle_import_beat_markers(arguments: dict) -> Sequence[TextContent]:
 Saved to: `{output_path}`
 
 *Use `snap_to_beats` to align your cuts to these markers.*
-""")
+""" + _marker_cap_notice(dropped))
 
 
 async def handle_snap_to_beats(arguments: dict) -> Sequence[TextContent]:
@@ -2872,6 +3069,7 @@ async def handle_import_srt_markers(arguments: dict) -> Sequence[TextContent]:
                 filtered.append(m)
 
     markers = _raw_markers_to_batch(filtered, marker_type, max_label=max_label)
+    markers, dropped = _cap_markers(markers)
 
     modifier = FCPXMLModifier(filepath)
     added = modifier.batch_add_markers(markers=markers)
@@ -2888,7 +3086,7 @@ async def handle_import_srt_markers(arguments: dict) -> Sequence[TextContent]:
 
 ## Output
 Saved to: `{output_path}`
-""")
+""" + _marker_cap_notice(dropped))
 
 
 async def handle_import_transcript_markers(arguments: dict) -> Sequence[TextContent]:
@@ -2906,12 +3104,15 @@ async def handle_import_transcript_markers(arguments: dict) -> Sequence[TextCont
         transcript_path = _validate_filepath(transcript_path, ('.txt', '.srt', '.vtt'))
         transcript = Path(transcript_path).read_text(encoding='utf-8')
 
-    raw_markers = parse_transcript_timestamps(transcript or "")
+    transcript, transcript_dropped = _cap_transcript_text(transcript or "")
+
+    raw_markers = parse_transcript_timestamps(transcript)
 
     if not raw_markers:
         return _text_result("No timestamps found. Expected format: '0:00 Title' or 'HH:MM:SS Title', one per line.")
 
     markers = _raw_markers_to_batch(raw_markers, marker_type)
+    markers, dropped = _cap_markers(markers)
 
     modifier = FCPXMLModifier(filepath)
     added = modifier.batch_add_markers(markers=markers)
@@ -2929,7 +3130,7 @@ async def handle_import_transcript_markers(arguments: dict) -> Sequence[TextCont
 
 ## Output
 Saved to: `{output_path}`
-""")
+""" + _transcript_cap_notice(transcript_dropped) + _marker_cap_notice(dropped))
 
 
 # ----- CONNECTED CLIPS & COMPOUND CLIPS HANDLERS (v0.5.0) -----

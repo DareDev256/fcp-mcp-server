@@ -14,9 +14,11 @@ Covers:
 """
 
 import asyncio
+import os
 import sys
 import types
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -1285,3 +1287,328 @@ class TestPreviewResourceSecurity:
             result = self._read(uri)
             assert isinstance(result, str)
             assert "FCPXML Project" not in result, f"{uri} was served"
+
+
+# ============================================================================
+# SANDBOX ROOT ALLOWLIST (issue #10) — FCP_PROJECTS_DIRS multi-root confinement
+# ============================================================================
+
+class TestParseAllowedRoots:
+    """FCP_PROJECTS_DIRS parses like PATH; FCP_PROJECTS_DIR still works."""
+
+    def test_unset_means_no_confinement(self):
+        assert server_module._parse_allowed_roots({}) == []
+
+    def test_empty_string_means_no_confinement(self):
+        assert server_module._parse_allowed_roots(
+            {"FCP_PROJECTS_DIRS": "", "FCP_PROJECTS_DIR": "  "}
+        ) == []
+
+    def test_single_legacy_var_still_works(self, tmp_path):
+        roots = server_module._parse_allowed_roots({"FCP_PROJECTS_DIR": str(tmp_path)})
+        assert roots == [str(tmp_path.resolve())]
+
+    def test_multi_root_split_on_pathsep(self, tmp_path):
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        roots = server_module._parse_allowed_roots(
+            {"FCP_PROJECTS_DIRS": f"{a}{os.pathsep}{b}"}
+        )
+        assert roots == [str(a.resolve()), str(b.resolve())]
+
+    def test_both_vars_union_and_dedupe(self, tmp_path):
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        roots = server_module._parse_allowed_roots(
+            {"FCP_PROJECTS_DIRS": f"{a}{os.pathsep}{b}", "FCP_PROJECTS_DIR": str(a)}
+        )
+        assert roots == [str(a.resolve()), str(b.resolve())]
+
+    def test_blank_segments_skipped(self, tmp_path):
+        roots = server_module._parse_allowed_roots(
+            {"FCP_PROJECTS_DIRS": f"{os.pathsep}{tmp_path}{os.pathsep}{os.pathsep}"}
+        )
+        assert roots == [str(tmp_path.resolve())]
+
+    def test_tilde_expanded(self):
+        roots = server_module._parse_allowed_roots({"FCP_PROJECTS_DIR": "~"})
+        assert roots == [str(Path(os.path.expanduser("~")).resolve())]
+
+
+class TestValidateFilepathRootConfinement:
+    """_validate_filepath confines READS, not just listing — when roots are set."""
+
+    @staticmethod
+    def _make(tmp_path, name="proj.fcpxml"):
+        f = tmp_path / name
+        f.write_text("<fcpxml/>")
+        return f
+
+    def test_unset_roots_leave_behaviour_unchanged(self, tmp_path, monkeypatch):
+        """Opt-in: with no roots configured, any .fcpxml on disk still reads."""
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        f = self._make(tmp_path)
+        assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
+
+    def test_inside_root_allowed(self, tmp_path, monkeypatch):
+        root = tmp_path / "lib"
+        root.mkdir()
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        f = self._make(root)
+        assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
+
+    def test_outside_root_rejected(self, tmp_path, monkeypatch):
+        root = tmp_path / "lib"
+        root.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        f = self._make(outside)
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(f), ('.fcpxml',))
+
+    def test_second_root_allowed(self, tmp_path, monkeypatch):
+        """The whole point of the multi-root list: an external drive still works."""
+        a = tmp_path / "internal"
+        b = tmp_path / "external"
+        a.mkdir()
+        b.mkdir()
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(a), str(b)])
+        f = self._make(b)
+        assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
+
+    def test_symlink_inside_root_pointing_outside_rejected(self, tmp_path, monkeypatch):
+        """The check runs on the RESOLVED path, so a symlink cannot smuggle."""
+        root = tmp_path / "lib"
+        root.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        target = self._make(outside, "secret.fcpxml")
+        link = root / "innocent.fcpxml"
+        link.symlink_to(target)
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(link), ('.fcpxml',))
+
+    def test_traversal_out_of_root_rejected(self, tmp_path, monkeypatch):
+        root = tmp_path / "lib"
+        root.mkdir()
+        outside = self._make(tmp_path, "outside.fcpxml")
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(root / ".." / outside.name), ('.fcpxml',))
+
+    def test_sibling_prefix_is_not_inside_root(self, tmp_path, monkeypatch):
+        """`/libs-evil` must not count as inside `/lib` — prefix != ancestor."""
+        root = tmp_path / "lib"
+        root.mkdir()
+        sneaky = tmp_path / "lib-evil"
+        sneaky.mkdir()
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        f = self._make(sneaky)
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(f), ('.fcpxml',))
+
+
+class TestListProjectsMultiRoot:
+    """handle_list_projects honours every configured root, and only those."""
+
+    def _run(self, directory):
+        return asyncio.run(
+            server_module.handle_list_projects({"directory": directory})
+        )[0].text
+
+    def test_directory_in_second_root_listed(self, tmp_path, monkeypatch):
+        a = tmp_path / "internal"
+        b = tmp_path / "external"
+        a.mkdir()
+        b.mkdir()
+        (b / "p.fcpxml").write_text("<fcpxml/>")
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(a), str(b)])
+        monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", True)
+        assert "p.fcpxml" in self._run(str(b))
+
+    def test_directory_outside_all_roots_rejected(self, tmp_path, monkeypatch):
+        a = tmp_path / "internal"
+        a.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(a)])
+        monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", True)
+        with pytest.raises(ValueError, match="escapes allowed root"):
+            self._run(str(outside))
+
+    def test_unset_roots_leave_listing_unconfined(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", False)
+        (tmp_path / "p.fcpxml").write_text("<fcpxml/>")
+        assert "p.fcpxml" in self._run(str(tmp_path))
+
+
+# ============================================================================
+# RESOURCE CAPS (issue #11) — discovery walk, marker batch, inline transcript
+# ============================================================================
+
+class TestDiscoveryFileCap:
+    """find_fcpxml_files stops the WALK at the cap and reports truncation."""
+
+    @staticmethod
+    def _tree(tmp_path, count):
+        for i in range(count):
+            d = tmp_path / f"d{i}"
+            d.mkdir()
+            (d / f"p{i}.fcpxml").write_text("<fcpxml/>")
+        return tmp_path
+
+    def test_under_cap_not_truncated(self, tmp_path):
+        self._tree(tmp_path, 3)
+        files, truncated = server_module.find_fcpxml_files_capped(str(tmp_path), cap=10)
+        assert len(files) == 3
+        assert truncated is False
+
+    def test_over_cap_truncates_and_reports(self, tmp_path):
+        self._tree(tmp_path, 12)
+        files, truncated = server_module.find_fcpxml_files_capped(str(tmp_path), cap=5)
+        assert len(files) == 5
+        assert truncated is True
+
+    def test_walk_stops_it_does_not_collect_then_slice(self, tmp_path, monkeypatch):
+        """The whole point: a cap that slices afterwards still walks all of `/`.
+
+        Counts what rglob actually yields — a collect-then-slice implementation
+        would consume every entry.
+        """
+        self._tree(tmp_path, 50)
+        real_rglob = Path.rglob
+        yielded = []
+
+        def counting_rglob(self, pattern, *a, **kw):
+            for item in real_rglob(self, pattern, *a, **kw):
+                yielded.append(item)
+                yield item
+
+        monkeypatch.setattr(Path, "rglob", counting_rglob)
+        files, truncated = server_module.find_fcpxml_files_capped(str(tmp_path), cap=5)
+        assert truncated is True
+        assert len(files) == 5
+        assert len(yielded) <= 6, f"walk consumed {len(yielded)} entries for a cap of 5"
+
+    def test_default_cap_comes_from_module_constant(self, tmp_path, monkeypatch):
+        self._tree(tmp_path, 8)
+        monkeypatch.setattr(server_module, "MAX_DISCOVERY_FILES", 4)
+        files, truncated = server_module.find_fcpxml_files_capped(str(tmp_path))
+        assert len(files) == 4
+        assert truncated is True
+
+    def test_list_projects_says_the_list_is_incomplete(self, tmp_path, monkeypatch):
+        """A partial list presented as complete is the failure mode."""
+        self._tree(tmp_path, 8)
+        monkeypatch.setattr(server_module, "MAX_DISCOVERY_FILES", 4)
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", False)
+        text = asyncio.run(
+            server_module.handle_list_projects({"directory": str(tmp_path)})
+        )[0].text
+        assert "TRUNCATED" in text
+        assert "incomplete" in text
+
+    def test_list_projects_silent_when_under_cap(self, tmp_path, monkeypatch):
+        self._tree(tmp_path, 2)
+        monkeypatch.setattr(server_module, "MAX_DISCOVERY_FILES", 100)
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", False)
+        text = asyncio.run(
+            server_module.handle_list_projects({"directory": str(tmp_path)})
+        )[0].text
+        assert "TRUNCATED" not in text
+
+
+class TestMarkerBatchCap:
+    """Marker batches are bounded, and the drop is reported, never silent."""
+
+    def test_under_cap_untouched(self, monkeypatch):
+        monkeypatch.setattr(server_module, "MAX_BATCH_MARKERS", 10)
+        kept, dropped = server_module._cap_markers([{"n": i} for i in range(4)])
+        assert len(kept) == 4
+        assert dropped == 0
+
+    def test_over_cap_trims_and_counts(self, monkeypatch):
+        monkeypatch.setattr(server_module, "MAX_BATCH_MARKERS", 10)
+        kept, dropped = server_module._cap_markers([{"n": i} for i in range(25)])
+        assert len(kept) == 10
+        assert dropped == 15
+
+    def test_notice_is_empty_when_nothing_dropped(self):
+        assert server_module._marker_cap_notice(0) == ""
+
+    def test_notice_names_the_dropped_count(self, monkeypatch):
+        monkeypatch.setattr(server_module, "MAX_BATCH_MARKERS", 10)
+        notice = server_module._marker_cap_notice(15)
+        assert "TRUNCATED" in notice
+        assert "15" in notice
+
+    def test_batch_handler_writes_only_the_cap_and_says_so(self, tmp_path, monkeypatch):
+        import shutil
+        src = Path(__file__).parent.parent / "examples" / "sample.fcpxml"
+        target = tmp_path / "sample.fcpxml"
+        shutil.copy(src, target)
+        monkeypatch.setattr(server_module, "MAX_BATCH_MARKERS", 3)
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        markers = [
+            {"timecode": f"{i * 0.5}s", "name": f"M{i}", "marker_type": "standard"}
+            for i in range(9)
+        ]
+        text = asyncio.run(server_module.handle_batch_add_markers({
+            "filepath": str(target),
+            "markers": markers,
+        }))[0].text
+        assert "Added 3 markers" in text
+        assert "TRUNCATED" in text
+        assert "6 marker(s) were NOT written" in text
+
+
+class TestInlineTranscriptCap:
+    """Inline transcript text is length-bounded, cut on a line boundary."""
+
+    def test_under_cap_untouched(self, monkeypatch):
+        monkeypatch.setattr(server_module, "MAX_INLINE_TRANSCRIPT_CHARS", 100)
+        kept, dropped = server_module._cap_transcript_text("0:00 Intro\n")
+        assert kept == "0:00 Intro\n"
+        assert dropped == 0
+
+    def test_over_cap_trims_and_counts(self, monkeypatch):
+        monkeypatch.setattr(server_module, "MAX_INLINE_TRANSCRIPT_CHARS", 20)
+        text = "\n".join(f"{i}:00 Line {i}" for i in range(20))
+        kept, dropped = server_module._cap_transcript_text(text)
+        assert len(kept) <= 20
+        assert dropped == len(text) - len(kept)
+        assert dropped > 0
+
+    def test_cut_lands_on_a_line_boundary(self, monkeypatch):
+        """A timestamp line must never be split in half and reinterpreted."""
+        monkeypatch.setattr(server_module, "MAX_INLINE_TRANSCRIPT_CHARS", 15)
+        kept, _ = server_module._cap_transcript_text("0:00 Alpha\n0:30 Bravo\n1:00 Chuck")
+        assert kept == "0:00 Alpha"
+
+    def test_notice_empty_when_nothing_dropped(self):
+        assert server_module._transcript_cap_notice(0) == ""
+
+    def test_transcript_handler_reports_truncation(self, tmp_path, monkeypatch):
+        import shutil
+        src = Path(__file__).parent.parent / "examples" / "sample.fcpxml"
+        target = tmp_path / "sample.fcpxml"
+        shutil.copy(src, target)
+        monkeypatch.setattr(server_module, "MAX_INLINE_TRANSCRIPT_CHARS", 24)
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        transcript = "0:00 Alpha\n0:01 Bravo\n0:02 Chuck\n0:03 Delta\n"
+        text = asyncio.run(server_module.handle_import_transcript_markers({
+            "filepath": str(target),
+            "transcript": transcript,
+        }))[0].text
+        assert "TRUNCATED" in text
+        assert "character(s) of transcript text were NOT read" in text
+        assert "Delta" not in text
