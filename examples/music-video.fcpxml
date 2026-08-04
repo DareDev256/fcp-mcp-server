@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A timeline shaped like a real music video, as a regression fixture.
+
+  examples/sample.fcpxml is spine-based, starts at 0s, and has no connected
+  clips. On 2026-08-04 that shape hid three separate bugs in a single
+  afternoon, all found only by pointing the tool at a real project:
+
+    1. The preview assumed a timeline origin of 0. Final Cut Pro starts
+       sequences at 01:00:00:00, so every block computed left:2195% and
+       clamped to the right edge. (v0.14.2)
+    2. Frame rate was taken from whichever <format> came last in resources
+       rather than the one the sequence names, so a 23.98 timeline holding
+       one 50p asset reported 50.0 fps and every seconds-to-frames
+       conversion was wrong by that factor. (v0.14.3)
+    3. Edit handlers walk the spine to find cut points. Here the spine holds
+       one gap and every clip hangs off it, so they silently move nothing.
+       (issue #16, open)
+
+  This fixture reproduces all three conditions deliberately:
+
+    - tcStart is 0s but every element offset begins at 3600s. Both are true
+      of real exports; trusting tcStart reproduces bug 1.
+    - r1 (the sequence format) is 23.98. r2 is a 50p source format declared
+      AFTER it, which is the ordering that made last-wins pick wrong.
+    - The spine holds exactly one <gap>. All 8 clips are connected, across
+      lanes -1, 1 and 2.
+
+  Cut points, in timeline seconds (subtract 3600 from the offsets). The
+  parser quantises to 23.98 frame boundaries, so these land within half a
+  frame of the stated values rather than exactly on them:
+    lane 1: 0.0, 4.0, 8.0, 12.0
+    lane 2: 2.0, 6.5, 10.0
+  At 120 BPM (a beat every 0.5s) lane 1 falls on the grid and lane 2's 6.5s
+  cut does not, which gives snapping something real to move.
+-->
+<fcpxml version="1.10">
+  <resources>
+    <!-- The sequence format. Declared first, as Final Cut writes it. -->
+    <format id="r1" name="FFVideoFormat3840x2160p2398"
+            frameDuration="1001/24000s" width="3840" height="2160"
+            colorSpace="1-1-1 (Rec. 709)"/>
+    <!-- A source format that does NOT match the sequence. Declared after it
+         on purpose: this ordering is what made last-format-wins select 50p. -->
+    <format id="r2" name="FFVideoFormat1080p50"
+            frameDuration="1/50s" width="1920" height="1080"/>
+
+    <asset id="a0" name="TRACK" start="0s" duration="164s"
+           hasVideo="0" hasAudio="1" audioSources="1" audioChannels="2">
+      <media-rep kind="original-media" src="file:///Music/TRACK.mp3"/>
+    </asset>
+    <asset id="a1" name="SHOT A" format="r1" start="0s" duration="60s"
+           hasVideo="1" hasAudio="0">
+      <media-rep kind="original-media" src="file:///Footage/A.mov"/>
+    </asset>
+    <asset id="a2" name="SHOT B" format="r1" start="0s" duration="60s"
+           hasVideo="1" hasAudio="0">
+      <media-rep kind="original-media" src="file:///Footage/B.mov"/>
+    </asset>
+    <!-- Drone plate at 50p, the asset whose format used to win. -->
+    <asset id="a3" name="DRONE" format="r2" start="0s" duration="30s"
+           hasVideo="1" hasAudio="0">
+      <media-rep kind="original-media" src="file:///Footage/DRONE.mov"/>
+    </asset>
+  </resources>
+
+  <library>
+    <event name="Music Video">
+      <project name="Music Video Cut">
+        <!-- tcStart reads 0s while every element below starts at 3600s.
+             This disagreement is why the origin must be derived from the
+             elements rather than read off this attribute. -->
+        <sequence format="r1" duration="164s" tcStart="0s" tcFormat="NDF"
+                  audioLayout="stereo" audioRate="48k">
+          <spine>
+            <gap name="Gap" offset="3600s" start="3600s" duration="164s">
+
+              <!-- Audio bed. Negative lane = below the spine. -->
+              <asset-clip ref="a0" lane="-1" name="TRACK"
+                          offset="3600s" start="0s" duration="164s"
+                          audioRole="music"/>
+
+              <!-- Lane 1: cuts land on the 120 BPM grid. -->
+              <asset-clip ref="a1" lane="1" name="SHOT A 1"
+                          offset="3600s" start="0s" duration="4s"/>
+              <asset-clip ref="a2" lane="1" name="SHOT B 1"
+                          offset="3604s" start="0s" duration="4s"/>
+              <asset-clip ref="a1" lane="1" name="SHOT A 2"
+                          offset="3608s" start="8s" duration="4s"/>
+              <asset-clip ref="a3" lane="1" name="DRONE 1"
+                          offset="3612s" start="0s" duration="4s"/>
+
+              <!-- Lane 2: overlays. The 6.5s cut is deliberately off-grid. -->
+              <asset-clip ref="a2" lane="2" name="OVERLAY 1"
+                          offset="3602s" start="20s" duration="2s"/>
+              <asset-clip ref="a3" lane="2" name="OVERLAY 2"
+                          offset="3606500/1000s" start="4s" duration="2s"/>
+              <asset-clip ref="a1" lane="2" name="OVERLAY 3"
+                          offset="3610s" start="30s" duration="2s"/>
+
+            </gap>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>

@@ -435,3 +435,46 @@ class TestSequenceFrameRateWins:
         tl = self._timeline(tmp_path)
         # 164s at 23.976 is ~3932 frames; at the wrong 50.0 it would be 8200.
         assert 3900 < tl.duration.total_frames < 3960
+
+
+class TestMusicVideoFixture:
+    """examples/music-video.fcpxml must keep reproducing the three conditions
+    it exists to guard. If any assertion here starts failing, the fixture has
+    drifted back toward the spine-based shape that hid these bugs.
+    """
+
+    FIXTURE = Path(__file__).parent.parent / "examples" / "music-video.fcpxml"
+
+    def _timeline(self):
+        return FCPXMLParser().parse_file(str(self.FIXTURE)).primary_timeline
+
+    def test_the_edit_lives_on_connected_clips_not_the_spine(self):
+        """Condition for issue #16: spine handlers find nothing to do."""
+        tl = self._timeline()
+        assert len(tl.clips) == 0, "spine must stay empty"
+        assert len(tl.connected_clips) == 8
+
+    def test_the_timeline_origin_is_an_hour_in(self):
+        """Condition for the v0.14.2 origin bug."""
+        tl = self._timeline()
+        earliest = min(c.offset.seconds for c in tl.connected_clips)
+        assert 3599 < earliest < 3601, (
+            f"earliest element at {earliest}s; fixture must start ~3600s"
+        )
+
+    def test_the_sequence_format_disagrees_with_a_source_asset(self):
+        """Condition for the v0.14.3 frame rate bug."""
+        tl = self._timeline()
+        assert abs(tl.frame_rate - 24000 / 1001) < 0.001, (
+            f"got {tl.frame_rate}; the 50p asset format must not win"
+        )
+        parser = FCPXMLParser()
+        parser.parse_file(str(self.FIXTURE))
+        rates = {f["frameRate"] for f in parser.formats.values()}
+        assert 50.0 in rates, "fixture must still contain a mismatched format"
+
+    def test_lanes_span_audio_below_and_video_above(self):
+        tl = self._timeline()
+        lanes = {c.lane for c in tl.connected_clips}
+        assert -1 in lanes, "audio bed below the spine"
+        assert 1 in lanes and 2 in lanes, "video overlays above it"

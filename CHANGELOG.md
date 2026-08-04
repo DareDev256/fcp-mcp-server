@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-08-04
+
+### Added
+
+**`examples/music-video.fcpxml` — a fixture shaped like real work.**
+
+`examples/sample.fcpxml` is spine-based, starts at 0s, and has no connected
+clips. That shape hid three separate bugs in a single afternoon, every one of
+them found only by pointing the tool at an actual project rather than at the
+test suite.
+
+The new fixture reproduces all three conditions on purpose: a `tcStart` of `0s`
+disagreeing with element offsets that begin at 3600s, a 23.98 sequence format
+followed in the file by a 50p source format, and a spine holding one `<gap>`
+with all eight clips connected across lanes -1, 1 and 2.
+
+Verified by reintroducing both fixed bugs against it: forcing the origin to 0
+pins every clip to `left:100%`, and restoring last-format-wins reports 50.0 fps.
+Neither is detectable with `sample.fcpxml`.
+
+Guard tests assert the fixture keeps those properties, so it cannot quietly
+drift back toward the shape that hid the bugs. Issue #16 — edit handlers
+no-opping on connected-clip timelines — now has something to be fixed against.
+
 ## [0.14.3] - 2026-08-04
 
 ### Fixed

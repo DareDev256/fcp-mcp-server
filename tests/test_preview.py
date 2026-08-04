@@ -407,3 +407,37 @@ class TestHourOffsetTimeline:
         html = render_timeline_html(tl)
         lefts = [float(x) for x in re.findall(r"left:([\d.]+)%", html)]
         assert min(lefts) == 0.0
+
+
+class TestPreviewOnMusicVideoFixture:
+    """The preview must be correct on a music-video-shaped project, not only
+    on the spine-based sample. Both bugs it guards shipped because the only
+    fixture in the suite was the wrong shape.
+    """
+
+    FIXTURE = Path(__file__).parent.parent / "examples" / "music-video.fcpxml"
+
+    def _html(self):
+        from fcpxml.parser import FCPXMLParser
+
+        tl = FCPXMLParser().parse_file(str(self.FIXTURE)).primary_timeline
+        return render_timeline_html(tl)
+
+    def test_clips_spread_across_the_ruler_despite_the_hour_offset(self):
+        lefts = [
+            float(x)
+            for x in re.findall(r'class="lane-clip" style="left:([\d.]+)%', self._html())
+        ]
+        assert lefts, "expected connected-clip blocks"
+        assert not all(left >= 99.99 for left in lefts), (
+            "every clip pinned right — the 3600s origin was not normalised"
+        )
+        assert min(lefts) == 0.0
+
+    def test_every_connected_clip_is_drawn(self):
+        html = self._html()
+        for name in ("TRACK", "SHOT A 1", "SHOT B 1", "DRONE 1", "OVERLAY 2"):
+            assert name in html, f"{name} missing from the render"
+
+    def test_header_reports_the_sequence_frame_rate(self):
+        assert "23.976" in self._html() or "23.98" in self._html()
