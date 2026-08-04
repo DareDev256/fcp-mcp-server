@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-04
+
+### Fixed
+
+**The timeline preview rendered every real Final Cut Pro project as a single
+stripe.** Final Cut starts sequences at 01:00:00:00 by broadcast convention, so
+element offsets in an exported project routinely begin at 3600s — a 164-second
+timeline whose clips sit between 3600s and 3743s. The renderer assumed an origin
+of 0, computed `left: 2195%` for the first block, and clamped all of them to the
+right edge.
+
+`examples/sample.fcpxml` starts at 0, which is the only reason the whole 0.14.0
+test suite passed. It surfaced on the first real project: 129 connected clips,
+all pinned to 100%.
+
+The origin is now derived from the earliest element rather than assumed, which
+handles a 0-based sequence, an hour-offset one, and anything else. It does not
+read `tcStart` — that attribute reads `0s` on real projects whose clips
+nonetheless start at 3600s.
+
 ## [0.14.1] - 2026-08-04
 
 ### Fixed

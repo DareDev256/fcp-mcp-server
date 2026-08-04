@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.DareDev256/fcpxml-mcp-server",
   "description": "Final Cut Pro automation: 7 grouped tools (62 underlying operations) for FCPXML editing, QC, live push-to-FCP, and media analysis.",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "fcp-mcp-server",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

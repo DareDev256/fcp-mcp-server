@@ -337,3 +337,73 @@ class TestResourceUriWithSpacesInFilename:
         assert contents[0].mimeType == "text/html"
         assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
         assert "File not found" not in contents[0].text
+
+
+class TestHourOffsetTimeline:
+    """Final Cut Pro starts sequences at 01:00:00:00 by broadcast convention.
+
+    Real projects therefore carry element offsets beginning at 3600s. Assuming
+    an origin of 0 puts every block at left:2195%, which clamps to the right
+    edge and renders the whole timeline as one stripe. examples/sample.fcpxml
+    starts at 0, so nothing in the suite caught this until a real project did.
+    """
+
+    def _hour_offset_timeline(self):
+        from fcpxml.models import ConnectedClip, Timecode
+
+        tl = _timeline()
+        tl.clips = []
+        tl.connected_clips = [
+            ConnectedClip(
+                name="AUDIO BED",
+                start=Timecode.from_rational("0s", 23.98),
+                offset=Timecode.from_rational("3600s", 23.98),
+                duration=Timecode.from_rational("164s", 23.98),
+                lane=-1,
+            ),
+            ConnectedClip(
+                name="MID CLIP",
+                start=Timecode.from_rational("0s", 23.98),
+                offset=Timecode.from_rational("3682s", 23.98),
+                duration=Timecode.from_rational("4s", 23.98),
+                lane=1,
+            ),
+            ConnectedClip(
+                name="LATE CLIP",
+                start=Timecode.from_rational("0s", 23.98),
+                offset=Timecode.from_rational("374298/100s", 23.98),
+                duration=Timecode.from_rational("1s", 23.98),
+                lane=2,
+            ),
+        ]
+        tl.duration = Timecode.from_rational("164s", 23.98)
+        return tl
+
+    def test_hour_offset_does_not_pin_everything_to_the_right_edge(self):
+        html = render_timeline_html(self._hour_offset_timeline())
+        # Clip blocks only — markers also emit `left:`, and with a broken
+        # origin their small values mask every clip being pinned right.
+        lefts = [
+            float(x)
+            for x in re.findall(r'class="lane-clip" style="left:([\d.]+)%', html)
+        ]
+        assert lefts, "expected rendered clip blocks"
+        assert not all(left >= 99.99 for left in lefts), (
+            "every block clamped to the right edge — origin was not normalised"
+        )
+
+    def test_positions_are_relative_to_the_earliest_element(self):
+        html = render_timeline_html(self._hour_offset_timeline())
+        lefts = sorted(float(x) for x in re.findall(r"left:([\d.]+)%", html))
+        assert lefts[0] == 0.0, "earliest element must sit at the left edge"
+        # 3682 - 3600 = 82s into a 164s timeline = 50%
+        assert any(abs(left - 50.0) < 0.1 for left in lefts)
+        # 3742.98 - 3600 = 142.98s = 87.18%
+        assert any(abs(left - 87.18) < 0.1 for left in lefts)
+
+    def test_zero_based_timeline_is_unaffected(self):
+        """The fix must not shift a sequence that already starts at 0."""
+        tl = _timeline()
+        html = render_timeline_html(tl)
+        lefts = [float(x) for x in re.findall(r"left:([\d.]+)%", html)]
+        assert min(lefts) == 0.0

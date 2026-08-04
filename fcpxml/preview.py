@@ -66,14 +66,34 @@ def _render_clip_block(name: str, left: float, width: float, color: str, seconds
     )
 
 
+def _timeline_origin(timeline, connected) -> float:
+    """The timeline's zero point in absolute seconds.
+
+    Final Cut Pro starts sequences at 01:00:00:00 by broadcast convention, so
+    element offsets routinely begin at 3600s rather than 0 — a 164-second
+    timeline whose clips sit at 3600-3743s. Treating 0 as the origin puts
+    every block at left:2195%, which clamps to the right edge and renders the
+    whole timeline as a single stripe.
+
+    Deriving the origin from the earliest element handles a 0-based sequence,
+    an hour-offset one, and anything else, without trusting `tcStart` — which
+    reads 0s on real projects whose clips nonetheless start at 3600s.
+    """
+    starts = [float(c.start.seconds or 0) for c in timeline.clips if c.start]
+    starts += [float(c.offset.seconds or 0) for c in connected if c.offset]
+    return min(starts) if starts else 0.0
+
+
 def render_timeline_html(timeline) -> str:
     """Return a standalone HTML document visualising one timeline."""
     total = max(float(timeline.duration.seconds or 0), 0.001)
+    connected = list(getattr(timeline, "connected_clips", []) or [])
+    origin = _timeline_origin(timeline, connected)
 
     spine_rows = []
     for i, clip in enumerate(timeline.clips):
         seconds = float(clip.duration.seconds or 0)
-        offset = float(clip.start.seconds or 0)
+        offset = float(clip.start.seconds or 0) - origin
         left, width = _left_width(offset, seconds, total)
         spine_rows.append(_render_clip_block(clip.name, left, width, _clip_color(i), seconds, "clip"))
 
@@ -82,7 +102,6 @@ def render_timeline_html(timeline) -> str:
     # FCPXML's magnetic-timeline semantics (positive = video overlay,
     # negative = audio). Highest positive lane sits topmost; most negative
     # lane sits bottommost.
-    connected = list(getattr(timeline, "connected_clips", []) or [])
     lanes: dict[int, list] = {}
     for cc in connected:
         lanes.setdefault(int(cc.lane or 0), []).append(cc)
@@ -91,8 +110,8 @@ def render_timeline_html(timeline) -> str:
         blocks = []
         for cc in lanes[lane]:
             seconds = float(cc.duration.seconds or 0)
-            cc_offset = cc.offset.seconds if cc.offset else 0.0
-            left, width = _left_width(float(cc_offset or 0), seconds, total)
+            cc_offset = float(cc.offset.seconds or 0) if cc.offset else 0.0
+            left, width = _left_width(cc_offset - origin, seconds, total)
             blocks.append(_render_clip_block(cc.name, left, width, _lane_color(lane), seconds, "lane-clip"))
         return (
             f'<div class="lane-label">Lane {lane}</div>'
