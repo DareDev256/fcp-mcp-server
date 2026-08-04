@@ -1350,14 +1350,14 @@ class TestValidateFilepathRootConfinement:
 
     def test_unset_roots_leave_behaviour_unchanged(self, tmp_path, monkeypatch):
         """Opt-in: with no roots configured, any .fcpxml on disk still reads."""
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [])
         f = self._make(tmp_path)
         assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
 
     def test_inside_root_allowed(self, tmp_path, monkeypatch):
         root = tmp_path / "lib"
         root.mkdir()
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
         f = self._make(root)
         assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
 
@@ -1366,7 +1366,7 @@ class TestValidateFilepathRootConfinement:
         root.mkdir()
         outside = tmp_path / "elsewhere"
         outside.mkdir()
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
         f = self._make(outside)
         with pytest.raises(ValueError, match="escapes the allowed roots"):
             _validate_filepath(str(f), ('.fcpxml',))
@@ -1377,28 +1377,62 @@ class TestValidateFilepathRootConfinement:
         b = tmp_path / "external"
         a.mkdir()
         b.mkdir()
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(a), str(b)])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(a), str(b)])
         f = self._make(b)
         assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
 
-    def test_symlink_inside_root_pointing_outside_rejected(self, tmp_path, monkeypatch):
-        """The check runs on the RESOLVED path, so a symlink cannot smuggle."""
+    def test_symlink_inside_root_pointing_outside_is_allowed(self, tmp_path, monkeypatch):
+        """A Final Cut library IS this case, not an attack.
+
+        FCP imports media "leave files in place" by default, so
+        `X.fcpbundle/.../Original Media/` is full of symlinks to footage on
+        another volume. Judging only the resolved target rejects the file
+        Final Cut itself put inside the root.
+        """
         root = tmp_path / "lib"
         root.mkdir()
         outside = tmp_path / "elsewhere"
         outside.mkdir()
-        target = self._make(outside, "secret.fcpxml")
-        link = root / "innocent.fcpxml"
+        target = self._make(outside, "footage.fcpxml")
+        link = root / "linked.fcpxml"
         link.symlink_to(target)
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
-        with pytest.raises(ValueError, match="escapes the allowed roots"):
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
+        assert _validate_filepath(str(link), ('.fcpxml',)) == str(target.resolve())
+
+    def test_symlink_extension_whitelist_still_applies_to_the_target(
+        self, tmp_path, monkeypatch
+    ):
+        """Allowing the symlink through the root check does not weaken the
+        extension gate — that still runs on the RESOLVED suffix."""
+        root = tmp_path / "lib"
+        root.mkdir()
+        secret = tmp_path / "secret.txt"
+        secret.write_text("SECRET")
+        link = root / "innocent.fcpxml"
+        link.symlink_to(secret)
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
+        with pytest.raises(ValueError, match="Invalid file type"):
             _validate_filepath(str(link), ('.fcpxml',))
+
+    def test_symlink_from_outside_pointing_into_root_is_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Judged on where it lands, which is inside the root."""
+        root = tmp_path / "lib"
+        root.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        target = self._make(root, "real.fcpxml")
+        link = outside / "shortcut.fcpxml"
+        link.symlink_to(target)
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
+        assert _validate_filepath(str(link), ('.fcpxml',)) == str(target.resolve())
 
     def test_traversal_out_of_root_rejected(self, tmp_path, monkeypatch):
         root = tmp_path / "lib"
         root.mkdir()
         outside = self._make(tmp_path, "outside.fcpxml")
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
         with pytest.raises(ValueError, match="escapes the allowed roots"):
             _validate_filepath(str(root / ".." / outside.name), ('.fcpxml',))
 
@@ -1408,7 +1442,7 @@ class TestValidateFilepathRootConfinement:
         root.mkdir()
         sneaky = tmp_path / "lib-evil"
         sneaky.mkdir()
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(root)])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(root)])
         f = self._make(sneaky)
         with pytest.raises(ValueError, match="escapes the allowed roots"):
             _validate_filepath(str(f), ('.fcpxml',))
@@ -1428,7 +1462,7 @@ class TestListProjectsMultiRoot:
         a.mkdir()
         b.mkdir()
         (b / "p.fcpxml").write_text("<fcpxml/>")
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(a), str(b)])
+        monkeypatch.setattr(server_module, "LIST_ROOTS", [str(a), str(b)])
         monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", True)
         assert "p.fcpxml" in self._run(str(b))
 
@@ -1437,13 +1471,14 @@ class TestListProjectsMultiRoot:
         a.mkdir()
         outside = tmp_path / "outside"
         outside.mkdir()
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(a)])
+        monkeypatch.setattr(server_module, "LIST_ROOTS", [str(a)])
         monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", True)
         with pytest.raises(ValueError, match="escapes allowed root"):
             self._run(str(outside))
 
     def test_unset_roots_leave_listing_unconfined(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "LIST_ROOTS", [])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [])
         monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", False)
         (tmp_path / "p.fcpxml").write_text("<fcpxml/>")
         assert "p.fcpxml" in self._run(str(tmp_path))
@@ -1508,7 +1543,8 @@ class TestDiscoveryFileCap:
         """A partial list presented as complete is the failure mode."""
         self._tree(tmp_path, 8)
         monkeypatch.setattr(server_module, "MAX_DISCOVERY_FILES", 4)
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "LIST_ROOTS", [])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [])
         monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", False)
         text = asyncio.run(
             server_module.handle_list_projects({"directory": str(tmp_path)})
@@ -1519,7 +1555,8 @@ class TestDiscoveryFileCap:
     def test_list_projects_silent_when_under_cap(self, tmp_path, monkeypatch):
         self._tree(tmp_path, 2)
         monkeypatch.setattr(server_module, "MAX_DISCOVERY_FILES", 100)
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "LIST_ROOTS", [])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [])
         monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", False)
         text = asyncio.run(
             server_module.handle_list_projects({"directory": str(tmp_path)})
@@ -1557,7 +1594,7 @@ class TestMarkerBatchCap:
         target = tmp_path / "sample.fcpxml"
         shutil.copy(src, target)
         monkeypatch.setattr(server_module, "MAX_BATCH_MARKERS", 3)
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [])
         markers = [
             {"timecode": f"{i * 0.5}s", "name": f"M{i}", "marker_type": "standard"}
             for i in range(9)
@@ -1603,7 +1640,7 @@ class TestInlineTranscriptCap:
         target = tmp_path / "sample.fcpxml"
         shutil.copy(src, target)
         monkeypatch.setattr(server_module, "MAX_INLINE_TRANSCRIPT_CHARS", 24)
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [])
         transcript = "0:00 Alpha\n0:01 Bravo\n0:02 Chuck\n0:03 Delta\n"
         text = asyncio.run(server_module.handle_import_transcript_markers({
             "filepath": str(target),
@@ -1636,7 +1673,7 @@ class TestRootConfinementCaseInsensitiveFilesystem:
         root.mkdir()
         f = root / "p.fcpxml"
         f.write_text("<fcpxml/>")
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(tmp_path / "movies")])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(tmp_path / "movies")])
         assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
 
     def test_genuinely_outside_still_rejected_via_the_fallback(self, tmp_path, monkeypatch):
@@ -1647,6 +1684,160 @@ class TestRootConfinementCaseInsensitiveFilesystem:
         outside.mkdir()
         f = outside / "p.fcpxml"
         f.write_text("<fcpxml/>")
-        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(tmp_path / "movies")])
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(tmp_path / "movies")])
         with pytest.raises(ValueError, match="escapes the allowed roots"):
             _validate_filepath(str(f), ('.fcpxml',))
+
+
+class TestLegacyVarDoesNotConfineReads:
+    """FCP_PROJECTS_DIR must behave exactly as it did in 0.15.0.
+
+    The README has always told users to run
+    `claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies`, and it has always
+    meant "where to look for projects". Promoting it to "the only place you
+    may open a file from" breaks every installation that followed the docs —
+    Desktop, Downloads, an external drive, a client handoff folder.
+    """
+
+    def test_read_roots_ignore_the_legacy_var(self, tmp_path):
+        assert server_module._read_roots_from_env(
+            {"FCP_PROJECTS_DIR": str(tmp_path)}
+        ) == []
+
+    def test_list_roots_still_honour_the_legacy_var(self, tmp_path):
+        assert server_module._list_roots_from_env(
+            {"FCP_PROJECTS_DIR": str(tmp_path)}
+        ) == [str(tmp_path.resolve())]
+
+    def test_module_wiring_binds_read_roots_to_the_new_var_only(self, tmp_path, monkeypatch):
+        """Binds the module-level constants, not just the helpers.
+
+        Re-imports server.py with FCP_PROJECTS_DIR set and nothing else, which
+        is what every installation that followed the README has. READ_ROOTS
+        must come back empty: reads stay unconfined.
+        """
+        import importlib
+        monkeypatch.setenv("FCP_PROJECTS_DIR", str(tmp_path))
+        monkeypatch.delenv("FCP_PROJECTS_DIRS", raising=False)
+        try:
+            importlib.reload(server_module)
+            assert server_module.READ_ROOTS == []
+            assert server_module.LIST_ROOTS == [str(tmp_path.resolve())]
+            assert server_module._SANDBOX_ENABLED is True
+        finally:
+            monkeypatch.undo()
+            importlib.reload(server_module)
+
+    def test_module_wiring_binds_read_roots_when_the_new_var_is_set(
+        self, tmp_path, monkeypatch
+    ):
+        import importlib
+        monkeypatch.setenv("FCP_PROJECTS_DIRS", str(tmp_path))
+        monkeypatch.delenv("FCP_PROJECTS_DIR", raising=False)
+        try:
+            importlib.reload(server_module)
+            assert server_module.READ_ROOTS == [str(tmp_path.resolve())]
+        finally:
+            monkeypatch.undo()
+            importlib.reload(server_module)
+
+    def test_read_roots_come_only_from_the_new_var(self, tmp_path):
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        roots = server_module._read_roots_from_env(
+            {"FCP_PROJECTS_DIRS": str(a), "FCP_PROJECTS_DIR": str(b)}
+        )
+        assert roots == [str(a.resolve())]
+
+    def test_file_outside_the_legacy_root_still_reads(self, tmp_path, monkeypatch):
+        """The upgrade-safety test: legacy var set, file elsewhere, still opens."""
+        movies = tmp_path / "Movies"
+        movies.mkdir()
+        desktop = tmp_path / "Desktop"
+        desktop.mkdir()
+        f = desktop / "Yadd.fcpxml"
+        f.write_text("<fcpxml/>")
+        env = {"FCP_PROJECTS_DIR": str(movies)}
+        monkeypatch.setattr(
+            server_module, "READ_ROOTS",
+            server_module._read_roots_from_env(env),
+        )
+        assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
+
+    def test_new_var_is_what_turns_read_confinement_on(self, tmp_path, monkeypatch):
+        movies = tmp_path / "Movies"
+        movies.mkdir()
+        desktop = tmp_path / "Desktop"
+        desktop.mkdir()
+        f = desktop / "Yadd.fcpxml"
+        f.write_text("<fcpxml/>")
+        env = {"FCP_PROJECTS_DIRS": str(movies)}
+        monkeypatch.setattr(
+            server_module, "READ_ROOTS",
+            server_module._read_roots_from_env(env),
+        )
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(f), ('.fcpxml',))
+
+    def test_legacy_var_still_confines_listing(self, tmp_path, monkeypatch):
+        """The one thing FCP_PROJECTS_DIR always did, unchanged."""
+        movies = tmp_path / "Movies"
+        movies.mkdir()
+        outside = tmp_path / "Desktop"
+        outside.mkdir()
+        env = {"FCP_PROJECTS_DIR": str(movies)}
+        monkeypatch.setattr(
+            server_module, "LIST_ROOTS",
+            server_module._list_roots_from_env(env),
+        )
+        monkeypatch.setattr(server_module, "_SANDBOX_ENABLED", True)
+        with pytest.raises(ValueError, match="escapes allowed root"):
+            asyncio.run(server_module.handle_list_projects({"directory": str(outside)}))
+
+
+class TestSymlinkedLibraryMedia:
+    """The measured failure: a file Final Cut put inside ~/Movies, rejected."""
+
+    def test_original_media_symlink_inside_the_library_is_readable(
+        self, tmp_path, monkeypatch
+    ):
+        """Reproduces `~/Movies/2026.fcpbundle/.../Original Media/TRACK` — a
+        symlink FCP created, pointing at footage on another volume."""
+        movies = tmp_path / "Movies"
+        original = movies / "2026.fcpbundle" / "Event" / "Original Media"
+        original.mkdir(parents=True)
+        volume = tmp_path / "Volumes" / "Scratch"
+        volume.mkdir(parents=True)
+        real = volume / "TRACK.fcpxml"
+        real.write_text("<fcpxml/>")
+        link = original / "TRACK.fcpxml"
+        link.symlink_to(real)
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(movies)])
+        assert _validate_filepath(str(link), ('.fcpxml',)) == str(real.resolve())
+
+    def test_a_file_outside_every_root_is_still_rejected(self, tmp_path, monkeypatch):
+        """The relaxation must not become 'allow everything'."""
+        movies = tmp_path / "Movies"
+        movies.mkdir()
+        elsewhere = tmp_path / "Elsewhere"
+        elsewhere.mkdir()
+        f = elsewhere / "other.fcpxml"
+        f.write_text("<fcpxml/>")
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(movies)])
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(f), ('.fcpxml',))
+
+    def test_traversal_out_of_a_root_still_normalises_and_is_rejected(
+        self, tmp_path, monkeypatch
+    ):
+        """`..` collapses lexically BEFORE the check, so the given-path branch
+        cannot be used to walk out of the root."""
+        movies = tmp_path / "Movies"
+        movies.mkdir()
+        outside = tmp_path / "escape.fcpxml"
+        outside.write_text("<fcpxml/>")
+        monkeypatch.setattr(server_module, "READ_ROOTS", [str(movies)])
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(movies / ".." / "escape.fcpxml"), ('.fcpxml',))

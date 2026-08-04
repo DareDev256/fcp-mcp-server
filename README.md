@@ -8,10 +8,10 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP-1.3.0-green.svg)](https://modelcontextprotocol.io/)
 [![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![Tests](https://img.shields.io/badge/tests-1182_passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1195_passing-brightgreen.svg)](#testing)
 [![Suites](https://img.shields.io/badge/suites-27-blue.svg)](#testing)
 
-**Hardened for real libraries:** 169 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
+**Hardened for real libraries:** 182 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
 
 ![FCPXML MCP demo — transcript-based editing](docs/assets/demo.gif)
 
@@ -477,8 +477,8 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `FCP_PROJECTS_DIR` | No | `~/Movies` | Single sandbox root. Setting it turns confinement **on** for both discovery and reads |
-| `FCP_PROJECTS_DIRS` | No | unset | Several sandbox roots, separated like `PATH` (`:` on macOS/Linux). Use this when your libraries live on more than one volume — e.g. `~/Movies:/Volumes/Scratch/Projects`. Combines with `FCP_PROJECTS_DIR` |
+| `FCP_PROJECTS_DIR` | No | `~/Movies` | Root directory for FCPXML discovery via `list_projects`. Confines **listing only** — it does not restrict which files you can open |
+| `FCP_PROJECTS_DIRS` | No | unset | Sandbox roots, separated like `PATH` (`:` on macOS/Linux) — e.g. `~/Movies:/Volumes/Scratch/Projects`. This is the **only** variable that confines reads, and it is fully opt-in. Symlinked library media (Final Cut's default "leave files in place" import) stays readable |
 | `FCP_MAX_DISCOVERY_FILES` | No | `10000` | Cap on files collected by one `list_projects` directory walk. The walk stops at the cap and the result says it is incomplete |
 | `FCP_MAX_BATCH_MARKERS` | No | `10000` | Cap on markers written by one batch or import operation. Excess markers are reported as dropped, never silently skipped |
 | `FCP_MAX_TRANSCRIPT_CHARS` | No | `1048576` | Cap on inline transcript text passed to `import_transcript_markers` |
@@ -530,7 +530,7 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1186 tests across 27 suites (1182 pass, 4 skip without ffmpeg/FCP)
+├── tests/                 1199 tests across 27 suites (1195 pass, 4 skip without ffmpeg/FCP)
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -579,8 +579,8 @@ Found a vulnerability? Report it privately via the repo's **Security → Report 
 | **Output sandbox** | All generation, write, export, beat sync, subtitle, and reformat handlers enforce `_validate_output_path(anchor_dir=...)` — restricts writes to descendants of the source file's directory, blocking LLM-generated path escapes |
 | **Subprocess bounds** | `_ensure_video_asset()` bounds-checks duration (0 < d ≤ 3600s), fps (1–240), width/height (even, ≤ 7680×4320) before `subprocess.run()` — blocks `inf`/`NaN`, negative values, odd dimensions, string injection, and oversized resolutions that could hang or exhaust ffmpeg |
 | **Speed validation** | `handle_change_speed` validates speed is positive and ≤100 before any math — prevents ZeroDivisionError crash and nonsensical results |
-| **Sandbox roots** | Opt-in and **off by default** — an editor's projects live wherever the user keeps them. Set `FCP_PROJECTS_DIR` (one root) and/or `FCP_PROJECTS_DIRS` (several, `PATH`-separated) and `_validate_filepath` confines **reads as well as listing**: any path resolving outside every configured root is rejected, including `..` traversal, a symlink inside a root pointing out of it, and a sibling directory that merely shares a name prefix. Root matching falls back to `os.stat` identity so a differently-cased root still matches on a case-insensitive filesystem (macOS `resolve()` does not normalise case), without loosening a case-sensitive one. With neither variable set, behaviour is unchanged — the caller may name any path |
-| **Directory listing** | Confined to the configured roots when set — `find_fcpxml_files` globs `*.fcpxml` / `*.fcpxmld` under the requested directory and every path that is subsequently opened goes back through `_validate_filepath`; when no root is configured, the caller may name any directory to list |
+| **Sandbox roots** | Opt-in and **off by default** — an editor's projects live wherever the user keeps them. `FCP_PROJECTS_DIRS` (several roots, `PATH`-separated) turns on **read** confinement: `_validate_filepath` rejects any path that is neither inside a root as given nor resolves into one. `FCP_PROJECTS_DIR` is unchanged from 0.15.0 — it confines **listing only** and never restricts reads, so an existing install is unaffected by upgrading. Traversal still normalises before the check (`root/../etc` is judged as `/etc`), and the extension whitelist still runs on the *resolved* suffix, so `innocent.fcpxml → /etc/passwd` is rejected either way |
+| **Directory listing** | Confined to `FCP_PROJECTS_DIR` when set, plus any `FCP_PROJECTS_DIRS` roots — unchanged behaviour. `find_fcpxml_files` globs `*.fcpxml` / `*.fcpxmld` under the requested directory and every path that is subsequently opened goes back through `_validate_filepath`; with neither variable set, the caller may name any directory to list |
 | **Resource caps** | The `list_projects` walk **stops** at `FCP_MAX_DISCOVERY_FILES` (10,000) rather than collecting and slicing, so pointing it at `/` cannot walk the filesystem; marker batches and imports stop at `FCP_MAX_BATCH_MARKERS` (10,000); inline transcript text stops at `FCP_MAX_TRANSCRIPT_CHARS` (1 MB), cut on a line boundary so a timestamp is never split. Every cap returns an explicit `⚠️ TRUNCATED` notice naming what was dropped — a partial result is never presented as a complete one |
 | **XML parsing** | `defusedxml` with explicit `forbid_entities/external=True` blocks XXE, billion laughs, entity expansion, remote DTD attacks at all 4 entry points (parser, writer, exporter, rough cut) — minidom pretty-print path also hardened via `defusedxml.minidom`. Ruff `S314`/`S320` rules enforce safe parsing in CI |
 | **JSON depth limit** | Iterative BFS depth checker rejects payloads nested beyond 50 levels — immune to RecursionError even at ~1000 nesting |
@@ -591,7 +591,7 @@ Found a vulnerability? Report it privately via the repo's **Security → Report 
 | **Output suffixes** | Path separators and special characters stripped — no traversal via suffix injection |
 | **Marker types** | `completed` attribute strict-matched (`'0'`/`'1'` only) — rejects `"true"`, `"1 OR 1=1"`, whitespace-padded values |
 
-169 security-specific tests across `test_security.py` covering XXE, path traversal, sandbox root confinement (single and multi-root), resource caps (discovery walk, marker batch, inline transcript), output path anchoring, output path anchoring, input validation, subprocess bounds, minidom hardening, JSON depth limits, role sanitization, ffmpeg parameter bounds, symlink resolution, resource-URI decoding, `preview://` rejection paths, and write-handler sandbox enforcement. Ruff `S` (bandit) rules enforced in CI — `S314`/`S320` block unsafe XML parsing, `S105` catches hardcoded passwords, `S108` flags insecure temp paths. Security events (null bytes, sandbox escapes, unhandled exceptions) are logged via Python `logging` for audit trails.
+182 security-specific tests across `test_security.py` covering XXE, path traversal, sandbox root confinement (single and multi-root), resource caps (discovery walk, marker batch, inline transcript), output path anchoring, output path anchoring, input validation, subprocess bounds, minidom hardening, JSON depth limits, role sanitization, ffmpeg parameter bounds, symlink resolution, resource-URI decoding, `preview://` rejection paths, symlinked Final Cut library media, and write-handler sandbox enforcement. Ruff `S` (bandit) rules enforced in CI — `S314`/`S320` block unsafe XML parsing, `S105` catches hardcoded passwords, `S108` flags insecure temp paths. Security events (null bytes, sandbox escapes, unhandled exceptions) are logged via Python `logging` for audit trails.
 
 ---
 
@@ -674,7 +674,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1186 tests across 27 suites (1182 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
+1199 tests across 27 suites (1195 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
 
 ---
 

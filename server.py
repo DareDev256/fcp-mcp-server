@@ -68,24 +68,31 @@ __version__ = "0.16.0"
 server = Server("fcp-mcp-server", version=__version__)
 
 
-def _parse_allowed_roots(env: Mapping[str, str]) -> list[str]:
-    """Build the sandbox root allowlist from the environment.
+def _parse_allowed_roots(
+    env: Mapping[str, str], *, include_legacy: bool = True
+) -> list[str]:
+    """Build a sandbox root allowlist from the environment.
 
     ``FCP_PROJECTS_DIRS`` accepts several roots separated by ``os.pathsep``
-    (``:`` on macOS/Linux, ``;`` on Windows), like ``PATH``.  The original
-    single-root ``FCP_PROJECTS_DIR`` keeps working and is treated as one more
-    root, so an existing configuration behaves exactly as it did.
+    (``:`` on macOS/Linux, ``;`` on Windows), like ``PATH``.
 
-    An empty list means *no confinement* — the historical default.  Roots that
-    do not resolve (typo, unmounted drive) are dropped rather than raising, so
-    a stale entry cannot take the whole server down at import time.
+    *include_legacy* controls whether the original single-root
+    ``FCP_PROJECTS_DIR`` is folded in.  It is True for the **listing**
+    allowlist — that is exactly what the variable has always done — and False
+    for the **read** allowlist, because confining reads is new behaviour and
+    must not be switched on under someone by a variable they already set.
+
+    An empty list means *no confinement*.  Roots that do not resolve (typo,
+    unmounted drive) are dropped rather than raising, so a stale entry cannot
+    take the whole server down at import time.
     """
     raw_parts: list[str] = []
     multi = env.get("FCP_PROJECTS_DIRS", "")
     raw_parts.extend(multi.split(os.pathsep))
-    single = env.get("FCP_PROJECTS_DIR")
-    if single is not None:
-        raw_parts.append(single)
+    if include_legacy:
+        single = env.get("FCP_PROJECTS_DIR")
+        if single is not None:
+            raw_parts.append(single)
 
     roots: list[str] = []
     for part in raw_parts:
@@ -101,15 +108,37 @@ def _parse_allowed_roots(env: Mapping[str, str]) -> list[str]:
     return roots
 
 
-# Sandbox roots.  Empty = opt-out (default): the caller may name any path.
-ALLOWED_ROOTS = _parse_allowed_roots(os.environ)
+def _read_roots_from_env(env: Mapping[str, str]) -> list[str]:
+    """Roots that confine READS — ``FCP_PROJECTS_DIRS`` only.
+
+    The legacy ``FCP_PROJECTS_DIR`` deliberately does NOT feed this list. The
+    README has always told users to run
+    ``claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies``, and it has always
+    meant "where to look for projects". Quietly promoting it to "the only place
+    you may open a file from" breaks every installation that followed the docs
+    the moment they upgrade.
+    """
+    return _parse_allowed_roots(env, include_legacy=False)
+
+
+def _list_roots_from_env(env: Mapping[str, str]) -> list[str]:
+    """Roots that confine LISTING — unchanged from 0.15.0.
+
+    ``FCP_PROJECTS_DIR`` confines ``list_projects`` exactly as it always has;
+    ``FCP_PROJECTS_DIRS`` adds more roots to that same allowlist.
+    """
+    return _parse_allowed_roots(env, include_legacy=True)
+
+
+READ_ROOTS = _read_roots_from_env(os.environ)
+LIST_ROOTS = _list_roots_from_env(os.environ)
 
 PROJECTS_DIR = os.environ.get(
     "FCP_PROJECTS_DIR",
-    ALLOWED_ROOTS[0] if ALLOWED_ROOTS else os.path.expanduser("~/Movies"),
+    LIST_ROOTS[0] if LIST_ROOTS else os.path.expanduser("~/Movies"),
 )
-# When roots are configured explicitly, enforce sandbox boundaries.
-_SANDBOX_ENABLED = bool(ALLOWED_ROOTS)
+# When roots are configured explicitly, confine discovery.
+_SANDBOX_ENABLED = bool(LIST_ROOTS)
 
 # Maximum file size for parsing (100 MB).
 MAX_FILE_SIZE = 100 * 1024 * 1024
@@ -208,30 +237,67 @@ def _is_within_roots(resolved: Path, roots: Sequence[str]) -> bool:
     return False
 
 
-def _enforce_allowed_roots(resolved: Path, what: str) -> None:
-    """Confine an already-resolved path to ``ALLOWED_ROOTS`` when configured.
+def _lexical_path(filepath: str) -> Path:
+    """Absolute path with ``..`` collapsed but symlinks NOT followed.
 
-    With no roots configured this is a no-op — the historical, opt-out default.
-    The check runs on the *resolved* path, so a symlink pointing outside the
-    allowlist cannot smuggle its target back in.
+    ``os.path.abspath`` applies ``normpath``, so traversal still normalises
+    away before any containment check — ``root/../../etc`` becomes ``/etc``
+    and is judged on where it actually points.
     """
-    roots = ALLOWED_ROOTS
+    return Path(os.path.abspath(filepath))
+
+
+def _within_any_root(filepath: str, roots: Sequence[str]) -> bool:
+    """True when the path *as given* or its symlink target is inside a root.
+
+    Checking the given path first is what makes a Final Cut library usable.
+    FCP imports media "leave files in place" by default, so
+    ``~/Movies/X.fcpbundle/.../Original Media/`` is full of symlinks pointing
+    at wherever the footage actually lives — an external drive, a NAS, a
+    scratch volume.  Judging only the resolved target rejects the file Final
+    Cut itself put inside the root, which is the normal case for every real
+    library, not an edge case.
+
+    Traversal protection survives: ``..`` collapses lexically before the check,
+    and a symlink that points *into* a root from outside still passes on its
+    target, judged on where it lands.
+    """
+    if _is_within_roots(_lexical_path(filepath), roots):
+        return True
+    try:
+        return _is_within_roots(Path(filepath).resolve(), roots)
+    except (OSError, ValueError):
+        return False
+
+
+def _enforce_read_roots(filepath: str, what: str) -> None:
+    """Confine a path to ``READ_ROOTS`` when the operator opted in.
+
+    With no roots configured this is a no-op — the default, and what every
+    installation that only sets the legacy ``FCP_PROJECTS_DIR`` gets.
+    """
+    roots = READ_ROOTS
     if not roots:
         return
-    if _is_within_roots(resolved, roots):
+    if _within_any_root(filepath, roots):
         return
     raise ValueError(
-        f"{what} escapes the allowed roots: {resolved} is not under any of "
-        f"{os.pathsep.join(roots)}. Set FCP_PROJECTS_DIRS to include it."
+        f"{what} escapes the allowed roots: {_lexical_path(filepath)} is not "
+        f"under any of {os.pathsep.join(roots)}. "
+        f"Add its directory to FCP_PROJECTS_DIRS to allow it."
     )
 
 
 def _validate_filepath(filepath: str, allowed_extensions: tuple[str, ...] | None = None) -> str:
     """Validate a user-provided file path against traversal and size attacks.
 
-    Resolves symlinks, blocks null bytes, confines the resolved path to
-    ``ALLOWED_ROOTS`` (when configured), enforces the extension whitelist, and
-    checks file size before any parsing takes place.
+    Resolves symlinks, blocks null bytes, confines the path to ``READ_ROOTS``
+    (only when ``FCP_PROJECTS_DIRS`` is set), enforces the extension whitelist,
+    and checks file size before any parsing takes place.
+
+    The extension whitelist is still applied to the *resolved* suffix, so a
+    symlink named ``innocent.fcpxml`` pointing at ``/etc/passwd`` is rejected
+    on its target's suffix regardless of any sandbox setting.
 
     Raises:
         ValueError: For invalid paths (null bytes, bad extensions, oversized,
@@ -241,9 +307,9 @@ def _validate_filepath(filepath: str, allowed_extensions: tuple[str, ...] | None
     if '\x00' in filepath:
         raise ValueError("Invalid file path: null byte detected")
 
-    resolved = Path(filepath).resolve()
+    _enforce_read_roots(filepath, "File path")
 
-    _enforce_allowed_roots(resolved, "File path")
+    resolved = Path(filepath).resolve()
 
     if not resolved.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
@@ -344,7 +410,7 @@ def _validate_directory(
     if allowed_roots:
         roots.extend(allowed_roots)
 
-    if roots and not _is_within_roots(resolved, roots):
+    if roots and not _within_any_root(directory, roots):
         raise ValueError(
             f"Directory escapes allowed root: "
             f"{resolved} is not under {os.pathsep.join(str(Path(r).resolve()) for r in roots)}"
@@ -2091,7 +2157,7 @@ def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source") -> list:
 async def handle_list_projects(arguments: dict) -> Sequence[TextContent]:
     directory = arguments.get("directory", PROJECTS_DIR)
     resolved_dir = _validate_directory(
-        directory, allowed_roots=ALLOWED_ROOTS if _SANDBOX_ENABLED else None
+        directory, allowed_roots=LIST_ROOTS if _SANDBOX_ENABLED else None
     )
     files, truncated = find_fcpxml_files_capped(resolved_dir)
     if not files:
