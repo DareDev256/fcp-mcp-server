@@ -64,8 +64,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,intelligence]"
 
+      # Derived from pyproject.toml, never hardcoded. A floor pinned in a
+      # third place fails spuriously the moment the real floor moves, and a
+      # check that cries wolf is a check somebody deletes.
       - name: Downgrade mcp to the declared minimum
-        run: pip install "mcp==1.3.0"
+        run: |
+          FLOOR=$(python -c "
+          import re, pathlib
+          spec = re.search(r'\"mcp>=([0-9.]+)', pathlib.Path('pyproject.toml').read_text())
+          assert spec, 'no mcp floor found in pyproject.toml'
+          print(spec.group(1))
+          ")
+          echo "Declared floor: mcp==$FLOOR"
+          pip install "mcp==$FLOOR"
 
       - name: Show resolved mcp version
         run: pip show mcp | head -2

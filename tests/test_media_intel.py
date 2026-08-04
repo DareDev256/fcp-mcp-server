@@ -547,3 +547,94 @@ class TestDetectSilenceIntegration:
             assert end == pytest.approx(3.0, abs=0.1)
         finally:
             Path(wav_path).unlink(missing_ok=True)
+
+
+class TestBeatGridRefit:
+    """detect_beats used to return only the beats librosa HEARD.
+
+    On a programmed track that under-reports badly: an intro with no percussion
+    and a drum-out before the outro both come back empty, which are exactly the
+    sections an editor is eyeballing. Measured on a real 164s music video, the
+    onset-only path returned 286 beats spanning 16.0s to 158.6s. The grid refit
+    returns 329 spanning the whole file, at 119.996 BPM against a hand-written
+    reference tracker's 120.005.
+    """
+
+    @staticmethod
+    def _clicks(period, duration, jitter=0.0, drop_from=None, drop_to=None):
+        """Observed beats on a fixed grid, optionally jittered and gapped."""
+        import random
+        rng = random.Random(7)
+        out, t = [], 0.5
+        while t < duration:
+            if not (drop_from is not None and drop_from <= t <= drop_to):
+                out.append(t + (rng.uniform(-jitter, jitter) if jitter else 0.0))
+            t += period
+        return out
+
+    def test_fixed_tempo_extrapolates_across_the_whole_file(self):
+        from fcpxml.media_intel import _grid_or_observed
+        observed = self._clicks(0.5, 100.0, drop_from=0, drop_to=20)
+        assert observed[0] > 20, "fixture must start after the gap"
+        r = _grid_or_observed(120.0, observed, duration=100.0)
+        assert r["source"] == "grid"
+        assert r["beats"][0] < 1.0, "grid must reach back over the silent intro"
+        assert r["beats"][-1] > 99.0, "grid must reach the end of the file"
+        assert len(r["beats"]) > len(observed)
+
+    def test_recovers_the_true_period_not_the_median_interval(self):
+        """The median inter-onset interval is NOT the period.
+
+        librosa quantises beats to its analysis frames, ~11.6ms at 44.1kHz. A
+        true 0.5s grid lands on 43 frames (0.49926s) more often than 44
+        (0.51068s), so the MEDIAN interval is biased low. Measured on the real
+        track: median 0.4992s against a true 0.5000s, and that 0.8ms error
+        compounds to 0.23s of drift across 286 beats — enough that a grid built
+        on it disagrees with most of its own beats by the end of the song.
+
+        Symmetric random jitter does not reproduce this; the median survives it.
+        Only quantisation does, so the fixture quantises.
+        """
+        from fcpxml.media_intel import _grid_or_observed
+
+        frame = 512 / 44100.0                     # librosa's default hop
+        ideal = [0.5 * i for i in range(1, 300)]  # a true 120.000 BPM grid
+        observed = [round(t / frame) * frame for t in ideal]
+
+        intervals = sorted(b - a for a, b in zip(observed, observed[1:]))
+        median = intervals[len(intervals) // 2]
+        assert abs(median - 0.5) > 0.0005, (
+            f"fixture must reproduce the biased median, got {median}"
+        )
+
+        r = _grid_or_observed(119.0, observed, duration=150.0)
+        assert r["source"] == "grid"
+        assert abs(r["period"] - 0.5) < 0.0002, (
+            f"period {r['period']} — the median {median} was used instead of a refit"
+        )
+        assert abs(r["bpm"] - 120.0) < 0.05, r["bpm"]
+
+    def test_variable_tempo_returns_observed_and_invents_nothing(self):
+        """Rubato must NOT get a grid. Inventing beats there is worse than none."""
+        from fcpxml.media_intel import _grid_or_observed
+        observed, t, period = [], 0.5, 0.5
+        while t < 60.0:
+            observed.append(t)
+            period *= 1.01          # accelerating, genuinely not a fixed grid
+            t += period
+        r = _grid_or_observed(120.0, observed, duration=60.0)
+        assert r["source"] == "observed"
+        assert r["grid"] is False
+        assert r["beats"] == observed, "observed beats must pass through untouched"
+
+    def test_reports_which_path_it_took(self):
+        from fcpxml.media_intel import _grid_or_observed
+        r = _grid_or_observed(120.0, self._clicks(0.5, 60.0), duration=60.0)
+        assert r["source"] in ("grid", "observed")
+        assert r["confidence"] is not None
+        assert r["observed_count"] == len(self._clicks(0.5, 60.0))
+
+    def test_too_few_beats_falls_back(self):
+        from fcpxml.media_intel import _grid_or_observed
+        r = _grid_or_observed(120.0, [1.0, 1.5, 2.0], duration=10.0)
+        assert r["source"] == "observed"

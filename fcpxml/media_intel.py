@@ -109,7 +109,110 @@ def detect_beats(
         logger.warning("librosa beat analysis failed for %s", file_path)
         return None
     bpm = float(tempo[0] if hasattr(tempo, "__len__") else tempo)
-    return {"bpm": bpm, "beats": [float(b) for b in beats]}
+    observed = [float(b) for b in beats]
+    duration = float(len(y) / sr) if sr else 0.0
+    return _grid_or_observed(bpm, observed, duration)
+
+
+# librosa quantises beats to its analysis frames (~11.6ms at 44.1kHz), so even a
+# perfectly programmed click comes back jittery, and on a syncopated track it
+# locks onto off-beats in places. The test is therefore not "is every beat on
+# the grid" but "do most of them agree on one grid".
+# Tolerance is a share of the period, not a fixed number of seconds: the jitter
+# scales with the beat. 8% of a 0.5s period is 40ms, which comfortably covers
+# librosa's frame quantisation while still excluding a beat sitting on the
+# off-beat (50% out) or a triplet subdivision (33%).
+_GRID_TOLERANCE_FRACTION = 0.08
+_GRID_INLIER_FRACTION = 0.60   # share that must agree before extrapolating
+
+
+def _refit_period(observed: list, period: float) -> tuple:
+    """Least-squares fit of (origin, period) to the observed beats.
+
+    The median inter-onset interval is NOT the period. On a real 120.000 BPM
+    track librosa's median came back 0.4992s, and that 0.8ms error compounds
+    to 0.23s of drift across 286 beats — enough that a grid anchored on it
+    disagrees with most of its own beats by the end of the song.
+
+    Indexing each beat to its nearest grid slot and regressing seconds against
+    slot number recovers the true period. One refinement pass is enough; the
+    indices stop moving after the first correction.
+    """
+    origin = observed[0]
+    for _ in range(2):
+        ks = [round((b - origin) / period) for b in observed]
+        n = len(ks)
+        sk, sb = sum(ks), sum(observed)
+        skk = sum(k * k for k in ks)
+        skb = sum(k * b for k, b in zip(ks, observed))
+        denom = n * skk - sk * sk
+        if denom == 0:
+            break
+        period = (n * skb - sk * sb) / denom
+        origin = (sb - period * sk) / n
+        if period <= 0:
+            return observed[0], 0.0
+    return origin, period
+
+
+def _inliers(observed: list, origin: float, period: float) -> int:
+    tolerance = period * _GRID_TOLERANCE_FRACTION
+    hits = 0
+    for b in observed:
+        residual = (b - origin) % period
+        if min(residual, period - residual) <= tolerance:
+            hits += 1
+    return hits
+
+
+def _grid_or_observed(bpm: float, observed: list, duration: float) -> dict:
+    """Extrapolate a rigid beat grid when the tempo is fixed, else return onsets.
+
+    librosa reports beats where it *hears* an onset. On a programmed track that
+    under-reports badly: an intro with no percussion, or a drum-out before the
+    outro, comes back empty. Those are exactly the sections an editor is
+    eyeballing, and `snap_to_beats` cannot move a cut to a beat that was never
+    reported.
+
+    When enough observed beats agree on one fixed grid, the period and phase are
+    solved from them and the grid is extended across the whole file. When they
+    do not, the tempo is genuinely variable and the observed beats are returned
+    unchanged — inventing beats on a rubato track is worse than reporting none.
+
+    `source` says which happened, so a caller can weight a beat that was heard
+    over one that was inferred.
+    """
+    fallback = {"bpm": bpm, "beats": observed, "source": "observed",
+                "grid": False, "confidence": None}
+    if len(observed) < 8 or duration <= 0:
+        return fallback
+
+    intervals = sorted(b - a for a, b in zip(observed, observed[1:]))
+    seed = intervals[len(intervals) // 2]
+    if seed <= 0:
+        return fallback
+
+    origin, period = _refit_period(observed, seed)
+    if period <= 0:
+        return fallback
+
+    confidence = _inliers(observed, origin, period) / len(observed)
+    if confidence < _GRID_INLIER_FRACTION:
+        return {**fallback, "confidence": round(confidence, 3)}
+
+    # Walk the grid back to the head of the file and forward to the end, so the
+    # intro and any drum-out are covered.
+    start = origin
+    while start - period >= 0:
+        start -= period
+    grid, t = [], start
+    while t <= duration + 1e-9:
+        grid.append(round(t, 6))
+        t += period
+
+    return {"bpm": round(60.0 / period, 3), "beats": grid, "source": "grid",
+            "grid": True, "confidence": round(confidence, 3),
+            "observed_count": len(observed), "period": round(period, 6)}
 
 
 def media_src_to_path(src: str) -> str:
