@@ -23,6 +23,12 @@ nothing. Any `.fcpxml` or `.fcpxmld` anywhere on disk was readable, and
   runs on the *resolved* path, so a symlink sitting inside a root that points
   outside it is rejected, as is `..` traversal and a sibling directory that
   merely shares a name prefix (`/lib-evil` is not inside `/lib`).
+- **Case-insensitive filesystems are handled.** macOS is case-insensitive but
+  `Path.resolve()` does not normalise case, so a root written `/users/me/Movies`
+  never string-matches a file resolved as `/Users/me/Movies`. Root matching
+  falls back to `os.stat` identity, which answers "same directory?" correctly
+  there without weakening a case-sensitive filesystem, where two
+  differently-cased directories genuinely are different.
 - **Still opt-in and off by default.** With neither variable set, behaviour is
   identical to 0.15.0. Defaulting to `~/Movies` would break everyone with a
   library on an external drive, which is most people doing serious work.
@@ -51,7 +57,7 @@ Every cap returns an explicit `⚠️ TRUNCATED` notice naming what was dropped.
 Silent truncation reads as "I covered everything" when it did not, which is the
 failure the issue is actually about.
 
-33 new tests in `test_security.py` (167 total, 1184 across the suite). Each was
+35 new tests in `test_security.py` (169 total, 1186 across the suite). Each was
 verified by sabotaging the behaviour it guards and confirming it fails.
 
 ## [0.15.0] - 2026-08-04

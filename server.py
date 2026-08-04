@@ -170,13 +170,41 @@ def _check_json_depth(obj: object, _depth: int = 0) -> None:
 
 
 def _is_within_roots(resolved: Path, roots: Sequence[str]) -> bool:
-    """True when *resolved* is a descendant of (or equal to) any allowed root."""
+    """True when *resolved* is a descendant of (or equal to) any allowed root.
+
+    String comparison first, then an inode-identity fallback.  The fallback is
+    not belt-and-braces: macOS filesystems are case-insensitive but
+    ``Path.resolve()`` does *not* normalise case, so a root written
+    ``/users/me/Movies`` never string-matches a file resolved as
+    ``/Users/me/Movies`` and the user is locked out of their own library.
+    Comparing ``os.stat`` results answers "same directory?" correctly on a
+    case-insensitive filesystem without weakening a case-sensitive one, where
+    two differently-cased directories genuinely have different inodes.
+    """
     for root in roots:
         try:
             resolved.relative_to(Path(root).resolve())
         except ValueError:
             continue
         return True
+
+    root_stats = []
+    for root in roots:
+        try:
+            root_stats.append(os.stat(root))
+        except OSError:
+            continue
+    if not root_stats:
+        return False
+
+    # The path itself may not exist yet (output paths); its parents will.
+    for candidate in (resolved, *resolved.parents):
+        try:
+            st = os.stat(candidate)
+        except OSError:
+            continue
+        if any(os.path.samestat(st, rs) for rs in root_stats):
+            return True
     return False
 
 

@@ -1612,3 +1612,41 @@ class TestInlineTranscriptCap:
         assert "TRUNCATED" in text
         assert "character(s) of transcript text were NOT read" in text
         assert "Delta" not in text
+
+
+class TestRootConfinementCaseInsensitiveFilesystem:
+    """macOS is case-insensitive but Path.resolve() does not normalise case.
+
+    A root written `/users/me/Movies` must still match a file resolved as
+    `/Users/me/Movies` — otherwise turning the sandbox on locks the user out
+    of their own library. Skipped where the filesystem is case-sensitive, in
+    which case the two directories really are different and must NOT match.
+    """
+
+    @staticmethod
+    def _case_insensitive(tmp_path):
+        probe = tmp_path / "CaseProbe"
+        probe.mkdir()
+        return (tmp_path / "caseprobe").exists()
+
+    def test_differently_cased_root_still_matches(self, tmp_path, monkeypatch):
+        if not self._case_insensitive(tmp_path):
+            pytest.skip("filesystem is case-sensitive")
+        root = tmp_path / "Movies"
+        root.mkdir()
+        f = root / "p.fcpxml"
+        f.write_text("<fcpxml/>")
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(tmp_path / "movies")])
+        assert _validate_filepath(str(f), ('.fcpxml',)) == str(f.resolve())
+
+    def test_genuinely_outside_still_rejected_via_the_fallback(self, tmp_path, monkeypatch):
+        """The stat fallback must not turn into 'allow everything'."""
+        root = tmp_path / "Movies"
+        root.mkdir()
+        outside = tmp_path / "Elsewhere"
+        outside.mkdir()
+        f = outside / "p.fcpxml"
+        f.write_text("<fcpxml/>")
+        monkeypatch.setattr(server_module, "ALLOWED_ROOTS", [str(tmp_path / "movies")])
+        with pytest.raises(ValueError, match="escapes the allowed roots"):
+            _validate_filepath(str(f), ('.fcpxml',))
