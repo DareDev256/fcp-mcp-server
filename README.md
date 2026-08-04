@@ -353,6 +353,11 @@ rows above/below the primary storyline, and marker ticks — all values
 HTML-escaped, served as `text/html`. Point your MCP client's resource viewer
 at it, or fetch it directly, to see a cut without opening Final Cut Pro.
 
+![Timeline preview: 129 clips across 15 lanes rendered as coloured blocks, with the music bed on lane -1 and colour-grade layers on lanes 9 to 14](docs/assets/timeline-preview.png)
+
+*A real 164-second music video: 129 connected clips across 15 lanes, rendered
+from its FCPXML alone. Clip names on reference layers have been relabelled.*
+
 ### Claude Code skill
 
 A `final-cut-pro` skill ships in `skill/`, wrapping this server with the
