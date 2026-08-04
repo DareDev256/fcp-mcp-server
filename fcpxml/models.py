@@ -212,6 +212,11 @@ class ValidationIssueType(Enum):
 _FCPXML_STANDARD_TIMEBASES = frozenset({
     1, 24, 25, 30, 48, 50, 60, 90, 96, 100, 120,
     240, 600, 2400, 4800, 9600, 48000,
+    # The NTSC-fractional family. Final Cut writes frameDuration="1001/24000s"
+    # for a 23.98 sequence, so 24000 is not merely accepted — it is what FCP
+    # itself emits. Their absence had the validator warning "Non-standard
+    # timebase denominator 24000" about Apple's own output.
+    24000, 30000, 60000, 120000,
 })
 
 
@@ -706,6 +711,23 @@ class Timeline:
     def get_clips_by_keyword(self, keyword: str) -> List[Clip]:
         """Find all clips with a specific keyword."""
         return [c for c in self.clips if keyword in c.keyword_values]
+
+    @property
+    def origin_seconds(self) -> float:
+        """The timeline's zero point in absolute seconds.
+
+        Final Cut starts sequences at 01:00:00:00 by broadcast convention, so
+        a real export's element offsets begin at 3600s while ``tcStart`` still
+        reads ``0s``. Derived from the earliest element rather than trusted
+        from that attribute — anything reporting a position to a human has to
+        subtract this or the first frame of the edit reads as one hour in.
+        """
+        starts = [float(c.start.seconds or 0) for c in self.clips if c.start]
+        starts += [
+            float(c.offset.seconds or 0)
+            for c in self.connected_clips if c.offset
+        ]
+        return min(starts) if starts else 0.0
 
 
 @dataclass

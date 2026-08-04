@@ -286,6 +286,21 @@ validate_timeline  →  structural health score (0-100)
 
 Each tool returns structured text that Claude synthesizes into the summary you see. No magic — just batch XML queries that would take 20 minutes by hand.
 
+### Music videos and connected clips
+
+A music video is usually built by laying an audio bed and hanging every visual
+off it as a connected clip, so the spine holds one `<gap>` and the entire edit
+lives on lanes. `snap_to_beats` and `detect_flash_frames` work on that shape:
+snapping runs lane by lane, does not ripple the clips after the one it moves,
+skips (and names) any move that would collide with a neighbour in the same
+lane, and leaves the audio bed alone unless you pass `include_audio_lanes`.
+It reports cuts considered, moved, already on a beat, out of reach, and
+skipped — so "nothing moved" is something you are told rather than something
+you discover in Final Cut.
+
+`reorder_clips`, `rapid_trim`, `fix_flash_frames` and `fill_gaps` are still
+primary-storyline only.
+
 ---
 
 ## Pre-Built Prompts

@@ -878,10 +878,18 @@ def test_add_marker_at_timeline_position(temp_fcpxml):
 
 
 def test_add_marker_at_timeline_invalid_position(temp_fcpxml):
-    """Adding a marker past the timeline end raises ValueError."""
+    """Adding a marker past the timeline end still raises ValueError.
+
+    ``add_marker_at_timeline`` now falls back to a connected-clip-aware
+    lookup (a music video's spine holds one ``<gap>`` and no clip at all),
+    so the failure message comes from that second pass. The contract that
+    matters — an out-of-range position raises rather than silently landing
+    somewhere — is unchanged, and the message now names the timeline origin
+    it resolved against.
+    """
     modifier = FCPXMLModifier(temp_fcpxml)
 
-    with pytest.raises(ValueError, match="No spine clip at position"):
+    with pytest.raises(ValueError, match="No spine element at position"):
         modifier.add_marker_at_timeline(timecode='99:00:00:00', name='Way past end')
 
 

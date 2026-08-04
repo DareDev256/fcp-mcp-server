@@ -33,11 +33,13 @@ import subprocess
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import (
     _FCPXML_STANDARD_TIMEBASES,
+    MARKER_XML_TAGS,
     Marker,
     MarkerColor,
     MarkerType,
@@ -46,6 +48,12 @@ from .models import (
     TimeValue,
     ValidationIssue,
     ValidationIssueType,
+)
+from .rational import (
+    format_seconds,
+    frame_duration_from_attr,
+    parse_seconds,
+    to_frames,
 )
 
 # Maximum lengths for XML attribute values to prevent memory abuse
@@ -103,6 +111,43 @@ def list_effects() -> List[Dict[str, str]]:
 CLIP_TAGS = ('clip', 'asset-clip', 'video', 'ref-clip')
 CLIP_AND_AUDIO_TAGS = ('clip', 'asset-clip', 'video', 'audio', 'ref-clip')
 SPINE_ELEMENT_TAGS = ('clip', 'asset-clip', 'video', 'audio', 'gap', 'transition', 'ref-clip')
+# Tags that can hang off a spine element as a connected clip. Wider than
+# CLIP_TAGS because titles and connected audio are lane-bearing too, and
+# matches ``parser._CONNECTED_CLIP_TAGS``.
+CONNECTED_CLIP_TAGS = ('asset-clip', 'clip', 'video', 'audio', 'title', 'ref-clip')
+
+
+def _exact(seconds: Fraction) -> TimeValue:
+    """Wrap exact seconds in a TimeValue without quantising to a frame rate."""
+    return TimeValue(seconds.numerator, seconds.denominator)
+
+
+def _nearest_marker(
+    markers: List[Fraction],
+    cut: Fraction,
+    tolerance: Fraction,
+    prefer: str = "nearest",
+) -> Optional[Fraction]:
+    """The marker *cut* should snap to, or ``None`` if none is close enough.
+
+    *tolerance* is the maximum distance in seconds.  ``prefer="earlier"``
+    considers only markers at or before the cut (pull the cut back onto the
+    beat that has already played), ``"later"`` only those at or after it.
+    """
+    best: Optional[Fraction] = None
+    best_distance: Optional[Fraction] = None
+    for marker in markers:
+        if prefer == "earlier" and marker > cut:
+            continue
+        if prefer == "later" and marker < cut:
+            continue
+        distance = abs(marker - cut)
+        if distance > tolerance:
+            continue
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best = marker
+    return best
 
 
 def _sanitize_xml_value(value: str, max_length: int = _MAX_MARKER_NAME_LENGTH) -> str:
@@ -823,6 +868,325 @@ class FCPXMLModifier:
                 return child, target_seconds - offset
         raise ValueError(f"No spine clip at position {target_seconds:.3f}s")
 
+    # ------------------------------------------------------------------
+    # Connected-clip geometry
+    #
+    # A music video cut in Final Cut has nothing on the spine: one <gap>
+    # holds the whole timeline and every visual hangs off it as a connected
+    # clip on a lane.  Everything above this point walks spine children and
+    # therefore sees an empty edit on that shape (issue #16).  The helpers
+    # below work in exact Fractions on the raw attributes — see
+    # ``fcpxml/rational.py`` for why ``_parse_time`` cannot be used here.
+    # ------------------------------------------------------------------
+
+    def _sequence_frame_duration(self) -> Fraction:
+        """Exact seconds-per-frame, taken from the format the sequence names.
+
+        Not from ``self.fps``, which is a float derived from whichever
+        ``<format>`` appears first in resources.  A 23.98 sequence in a
+        project holding one 50p drone plate is the shape that made
+        last-format-wins pick the wrong rate in the parser (v0.14.3); the
+        same footgun exists here, and a float rate cannot represent
+        1001/24000 exactly in the first place.
+        """
+        sequence = self.root.find('.//sequence')
+        fmt_id = sequence.get('format', '') if sequence is not None else ''
+        fmt = self.formats.get(fmt_id)
+        if fmt is None:
+            first = self.root.find('.//format')
+            if first is None:
+                return Fraction(1, 30)
+            return frame_duration_from_attr(first.get('frameDuration'))
+        return frame_duration_from_attr(fmt['element'].get('frameDuration'))
+
+    def iter_connected_clips(self) -> list[tuple[int, ET.Element, ET.Element]]:
+        """Every lane-bearing clip under the spine as ``(lane, element, host)``.
+
+        Covers both attachment forms: a ``lane`` attribute on a direct child
+        of a spine element (including a ``<gap>``), and a ``<storyline
+        lane="n">`` wrapper holding several clips.  Mirrors
+        ``FCPXMLParser._iter_connected_elements`` so read and write agree on
+        what counts as connected.
+
+        *host* is the spine element the clip hangs off, and it is not
+        optional bookkeeping — a connected clip's ``offset`` is expressed in
+        its host's time frame, so the host is required to place it on the
+        timeline at all.  See :meth:`connected_timeline_offset`.
+        """
+        found: list[tuple[int, ET.Element, ET.Element]] = []
+        for parent in self._get_spine().findall('*'):
+            if parent.tag not in SPINE_ELEMENT_TAGS:
+                continue
+            for child in parent:
+                lane_attr = child.get('lane')
+                if lane_attr is not None and child.tag in CONNECTED_CLIP_TAGS:
+                    found.append((int(lane_attr), child, parent))
+                elif child.tag == 'storyline':
+                    lane = int(child.get('lane', '1'))
+                    for sub in child:
+                        if sub.tag in CONNECTED_CLIP_TAGS:
+                            found.append((lane, sub, parent))
+        return found
+
+    @staticmethod
+    def connected_timeline_offset(element: ET.Element, host: ET.Element) -> Fraction:
+        """Where a connected clip actually sits on the timeline, in seconds.
+
+        A connected clip's ``offset`` is measured in its host element's
+        *source* time frame, not the timeline's, so the position is
+        ``host.offset + (element.offset - host.start)``.  Reading the
+        attribute directly is right only when the host's ``offset`` and
+        ``start`` happen to be equal.
+
+        Both shapes occur in the wild and they disagree by an hour:
+
+        * ``examples/music-video.fcpxml`` — ``<gap offset="3600s"
+          start="3600s">``, so a clip at ``offset="3604s"`` is at 4s.
+        * A real Final Cut export — ``<gap offset="0s"
+          start="86400314/24000s">``, so a clip at ``offset="86400314/24000s"``
+          is at 0s, not at 3600s.
+
+        Taking the raw attribute would have put every clip in the second
+        project one hour past the end of its own timeline.
+        """
+        return (
+            parse_seconds(host.get('offset', '0s'))
+            + parse_seconds(element.get('offset', '0s'))
+            - parse_seconds(host.get('start', '0s'))
+        )
+
+    @staticmethod
+    def connected_offset_attribute(timeline_seconds: Fraction, host: ET.Element) -> Fraction:
+        """Inverse of :meth:`connected_timeline_offset` — what to write back."""
+        return (
+            parse_seconds(host.get('start', '0s'))
+            + timeline_seconds
+            - parse_seconds(host.get('offset', '0s'))
+        )
+
+    def timeline_origin(self) -> Fraction:
+        """The timeline's zero point in absolute seconds.
+
+        Final Cut starts sequences at 01:00:00:00 by broadcast convention, so
+        real exports put the first element at 3600s while ``tcStart`` still
+        reads ``0s``.  Derived from the earliest element rather than read off
+        ``tcStart`` for exactly that reason — the same call
+        ``preview._timeline_origin`` makes.
+        """
+        starts: list[Fraction] = []
+        for child in self._get_spine().findall('*'):
+            if child.tag in SPINE_ELEMENT_TAGS:
+                starts.append(parse_seconds(child.get('offset', '0s')))
+        starts.extend(
+            self.connected_timeline_offset(element, host)
+            for _, element, host in self.iter_connected_clips()
+        )
+        return min(starts) if starts else Fraction(0)
+
+    def timeline_marker_seconds(self) -> list[Fraction]:
+        """Every marker position in timeline-relative seconds, sorted.
+
+        A marker's ``start`` is in its host element's source-time frame, so
+        its timeline position is ``host.offset + (marker.start - host.start)``,
+        minus the timeline origin.  Markers written directly on the
+        ``<sequence>`` (which ``examples/sample.fcpxml`` does, and Apple's DTD
+        does not actually allow) are already timeline-absolute and only need
+        the origin removed.
+        """
+        origin = self.timeline_origin()
+        positions: list[Fraction] = []
+
+        def collect(host: ET.Element, host_offset: Fraction, host_start: Fraction) -> None:
+            for child in host:
+                if child.tag in MARKER_XML_TAGS:
+                    at = parse_seconds(child.get('start', '0s'))
+                    positions.append(host_offset + (at - host_start) - origin)
+
+        sequence = self.root.find('.//sequence')
+        if sequence is not None:
+            for child in sequence:
+                if child.tag in MARKER_XML_TAGS:
+                    positions.append(parse_seconds(child.get('start', '0s')) - origin)
+
+        for element in self._get_spine().findall('*'):
+            if element.tag not in SPINE_ELEMENT_TAGS:
+                continue
+            collect(
+                element,
+                parse_seconds(element.get('offset', '0s')),
+                parse_seconds(element.get('start', '0s')),
+            )
+        for _, element, host in self.iter_connected_clips():
+            collect(
+                element,
+                self.connected_timeline_offset(element, host),
+                parse_seconds(element.get('start', '0s')),
+            )
+
+        return sorted(set(positions))
+
+    def snap_connected_clips(
+        self,
+        marker_seconds: list,
+        max_shift_frames: int = 6,
+        prefer: str = "nearest",
+        include_audio_lanes: bool = False,
+    ) -> Dict[str, Any]:
+        """Slide connected clips onto the nearest marker, lane by lane.
+
+        Each connected clip's ``offset`` is a cut point — the frame its lane
+        changes.  Snapping moves that offset and nothing else, so the clip
+        keeps its length and its source in-point and simply lands on the
+        beat.
+
+        Three rules, decided rather than assumed:
+
+        **Non-rippling.** Moving one clip never shifts the clips after it in
+        its lane.  Connected clips are not magnetic to each other, and
+        rippling would rearrange an edit the user already made.
+
+        **Lanes are independent.** Lane 2 snapping while lane 1 does not is
+        correct; they are separate visual layers.
+
+        **Overlap is skipped, never forced.** A move that would push a clip
+        into its neighbour in the same lane is reported as skipped and the
+        clip is left where it is.  The neighbour on the left is compared at
+        its post-move position (it was processed first), the one on the
+        right at its original position, since it will not move on this clip's
+        account.
+
+        Negative lanes hold connected audio.  On a music video that is the
+        track the beat grid was derived FROM, and sliding it would desync the
+        entire edit against the thing it is being synced to, so they are left
+        alone unless *include_audio_lanes* is set.
+
+        Args:
+            marker_seconds: Marker positions in timeline-relative seconds.
+            max_shift_frames: A cut further than this from every marker is
+                left alone.
+            prefer: ``nearest``, ``earlier`` (only markers at or before the
+                cut), or ``later``.
+            include_audio_lanes: Also snap clips on negative lanes.
+
+        Returns:
+            A report dict with ``considered``, ``moved``, ``already_aligned``,
+            ``out_of_range``, ``skipped``, ``audio_lane_clips`` and ``lanes``.
+            Every clip in ``considered`` appears in exactly one bucket.
+        """
+        frame_duration = self._sequence_frame_duration()
+        origin = self.timeline_origin()
+        markers = sorted(Fraction(str(m)) if not isinstance(m, Fraction) else m
+                         for m in marker_seconds)
+        tolerance = max_shift_frames * frame_duration
+
+        report: Dict[str, Any] = {
+            'considered': 0,
+            'moved': [],
+            'already_aligned': [],
+            'out_of_range': [],
+            'skipped': [],
+            'audio_lane_clips': 0,
+            'lanes': [],
+        }
+        if not markers:
+            return report
+
+        lanes: Dict[int, list] = {}
+        for lane, element, host in self.iter_connected_clips():
+            lanes.setdefault(lane, []).append((element, host))
+
+        for lane in sorted(lanes):
+            if lane < 0 and not include_audio_lanes:
+                report['audio_lane_clips'] += len(lanes[lane])
+                continue
+            report['lanes'].append(lane)
+
+            # 'offset' here is the clip's TIMELINE position, not its raw
+            # attribute — the two differ by the host's start on a real
+            # export. Everything below reasons in timeline seconds and
+            # converts back only at the moment of writing.
+            entries = sorted(
+                (
+                    {
+                        'element': element,
+                        'host': host,
+                        'offset': self.connected_timeline_offset(element, host),
+                        'duration': parse_seconds(element.get('duration', '0s')),
+                    }
+                    for element, host in lanes[lane]
+                ),
+                key=lambda e: e['offset'],
+            )
+
+            for index, entry in enumerate(entries):
+                report['considered'] += 1
+                element = entry['element']
+                name = element.get('name', element.tag)
+                cut = entry['offset'] - origin
+                where = {'name': name, 'lane': lane, 'at_seconds': float(cut)}
+
+                best = _nearest_marker(markers, cut, tolerance, prefer)
+                if best is None:
+                    nearest = min((abs(m - cut) for m in markers), default=None)
+                    report['out_of_range'].append({
+                        **where,
+                        'nearest_marker_frames': (
+                            None if nearest is None
+                            else float(nearest / frame_duration)
+                        ),
+                    })
+                    continue
+
+                new_offset = origin + best
+                shift_frames = to_frames(new_offset - entry['offset'], frame_duration)
+                if shift_frames == 0:
+                    report['already_aligned'].append(where)
+                    continue
+
+                # Re-derive from the frame count so the written offset and the
+                # reported shift cannot disagree.
+                new_offset = entry['offset'] + shift_frames * frame_duration
+                new_end = new_offset + entry['duration']
+
+                if new_offset < 0:
+                    report['skipped'].append({
+                        **where, 'reason': 'would start before the timeline',
+                    })
+                    continue
+                if index > 0:
+                    previous = entries[index - 1]
+                    if new_offset < previous['offset'] + previous['duration']:
+                        report['skipped'].append({
+                            **where,
+                            'reason': (
+                                f"would overlap {previous['element'].get('name', 'the previous clip')}"
+                            ),
+                        })
+                        continue
+                if index + 1 < len(entries):
+                    following = entries[index + 1]
+                    if new_end > following['offset']:
+                        report['skipped'].append({
+                            **where,
+                            'reason': (
+                                f"would overlap {following['element'].get('name', 'the next clip')}"
+                            ),
+                        })
+                        continue
+
+                element.set('offset', format_seconds(
+                    self.connected_offset_attribute(new_offset, entry['host']),
+                    frame_duration,
+                ))
+                entry['offset'] = new_offset
+                report['moved'].append({
+                    **where,
+                    'to_seconds': float(new_offset - origin),
+                    'shift_frames': shift_frames,
+                })
+
+        return report
+
     def _parse_time(self, tc: str) -> TimeValue:
         """Parse a timecode string to TimeValue."""
         return TimeValue.from_timecode(tc, self.fps)
@@ -1348,7 +1712,12 @@ class FCPXMLModifier:
         time_value = self._parse_time(timecode)
         target_seconds = time_value.to_seconds()
 
-        clip, relative_seconds = self._find_spine_clip_at_seconds(target_seconds)
+        try:
+            clip, relative_seconds = self._find_spine_clip_at_seconds(target_seconds)
+        except ValueError:
+            return self._add_marker_on_spine_element(
+                timecode, name, marker_type, note,
+            )
         relative_tc = TimeValue.from_seconds(relative_seconds, self.fps)
 
         return build_marker_element(
@@ -1358,6 +1727,59 @@ class FCPXMLModifier:
             duration=f"1/{int(self.fps)}s",
             name=name,
             note=note,
+        )
+
+    def _add_marker_on_spine_element(
+        self,
+        timecode: str,
+        name: str,
+        marker_type: MarkerType,
+        note: Optional[str] = None,
+    ) -> ET.Element:
+        """Place a marker when no spine *clip* spans the requested position.
+
+        Two real shapes land here, and on both the spine-clip lookup above
+        raises rather than returning something wrong:
+
+        * A music video, where the spine holds one ``<gap>`` and every visual
+          is a connected clip.  There is no spine clip to host the marker, but
+          the gap spans the whole timeline and legally carries markers.
+        * Any sequence starting at 01:00:00:00 — element offsets begin at
+          3600s while the caller passes a timeline-relative time, so nothing
+          appears to span second 0.
+
+        Both are handled by resolving the request against the timeline origin
+        and hosting the marker on whichever spine element covers it.  This
+        path only runs where the previous code raised, so no working project
+        changes behaviour.
+        """
+        frame_duration = self._sequence_frame_duration()
+        origin = self.timeline_origin()
+        requested = parse_seconds(timecode) if str(timecode).rstrip().endswith('s') \
+            else Fraction(str(self._parse_time(timecode).to_seconds()))
+        absolute = origin + requested
+
+        for element in self._get_spine().findall('*'):
+            if element.tag not in SPINE_ELEMENT_TAGS:
+                continue
+            offset = parse_seconds(element.get('offset', '0s'))
+            duration = parse_seconds(element.get('duration', '0s'))
+            if not (offset <= absolute < offset + duration):
+                continue
+            host_start = parse_seconds(element.get('start', '0s'))
+            marker_start = host_start + (absolute - offset)
+            return build_marker_element(
+                parent=element,
+                marker_type=marker_type,
+                start=format_seconds(marker_start, frame_duration),
+                duration=format_seconds(frame_duration, frame_duration),
+                name=name,
+                note=note,
+            )
+
+        raise ValueError(
+            f"No spine element at position {float(requested):.3f}s "
+            f"(timeline origin {float(origin):.3f}s)"
         )
 
     def batch_add_markers(
@@ -1616,18 +2038,24 @@ class FCPXMLModifier:
         to summing all spine element durations.  Extracted from
         ``add_music_bed`` and ``batch_add_markers`` which both computed
         this independently.
+
+        Parsed exactly rather than through ``_parse_time``, which quantises
+        through ``int(fps)``.  A real 23.98 project carrying
+        ``<sequence duration="164s">`` came back as 170.96s — 7 seconds of
+        timeline that does not exist — so ``import_beat_markers`` let beats
+        past the end through and then failed to place them.
         """
         sequence = self.root.find('.//sequence')
         if sequence is not None:
             dur_str = sequence.get('duration')
             if dur_str:
-                return self._parse_time(dur_str)
+                return _exact(parse_seconds(dur_str))
         spine = self._get_spine()
-        total = TimeValue.zero()
+        total = Fraction(0)
         for child in spine:
             if child.tag in SPINE_ELEMENT_TAGS:
-                total = total + self._parse_time(child.get('duration', '0s'))
-        return total
+                total += parse_seconds(child.get('duration', '0s'))
+        return _exact(total)
 
     # ========================================================================
     # TRANSITION OPERATIONS

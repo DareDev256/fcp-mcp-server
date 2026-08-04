@@ -63,7 +63,7 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.14.5"
+__version__ = "0.15.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 PROJECTS_DIR = os.environ.get("FCP_PROJECTS_DIR", os.path.expanduser("~/Movies"))
@@ -1268,13 +1268,14 @@ def _legacy_tool_list() -> list[Tool]:
         ),
         Tool(
             name="snap_to_beats",
-            description="Align cuts to nearest beat markers for music-synced edits",
+            description="Align cuts to nearest beat markers for music-synced edits. Works on spine cuts and on connected clips lane by lane (a music video keeps its whole edit on lanes). Moving a connected clip does not ripple the clips after it; a move that would collide with a neighbour in the same lane is skipped and reported.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "filepath": {"type": "string", "description": "Path to FCPXML file with beat markers"},
                     "max_shift_frames": {"type": "integer", "default": 6, "description": "Maximum frames to shift a cut"},
                     "prefer": {"type": "string", "enum": ["earlier", "later", "nearest"], "default": "nearest", "description": "Which beat to prefer when equidistant"},
+                    "include_audio_lanes": {"type": "boolean", "default": False, "description": "Also snap clips on negative (audio) lanes. Off by default: on a music video that is the track the beats came from, and moving it desyncs the whole edit."},
                     "output_path": {"type": "string", "description": "Output path (default: adds _synced suffix)"}
                 },
                 "required": ["filepath"]
@@ -1747,22 +1748,54 @@ def _detect_flash_frames(
     Returns a list of ``FlashFrame`` objects sorted by severity.  Shared by
     ``handle_detect_flash_frames`` and ``handle_validate_timeline`` so the
     detection logic lives in exactly one place.
+
+    Connected clips are scanned alongside spine clips.  A two-frame B-roll
+    shot is a flash frame whether it sits on the primary storyline or on
+    lane 4, and on a music video every clip is on a lane — spine-only
+    detection returned a clean bill of health for a timeline holding 129 of
+    them (issue #16).  Their reported position is measured from the timeline
+    origin, so a sequence starting at 01:00:00:00 does not report every cut
+    an hour late.
     """
     fps = tl.frame_rate
+    origin = tl.origin_seconds
     flash_frames: list[FlashFrame] = []
+
+    def consider(name: str, duration_seconds: float, start: Timecode) -> None:
+        duration_frames = int(duration_seconds * fps)
+        if duration_frames >= warning_threshold:
+            return
+        severity = (
+            FlashFrameSeverity.CRITICAL
+            if duration_frames < critical_threshold
+            else FlashFrameSeverity.WARNING
+        )
+        flash_frames.append(FlashFrame(
+            clip_name=name, clip_id=name, start=start,
+            duration_frames=duration_frames,
+            duration_seconds=duration_seconds, severity=severity,
+        ))
+
+    def relative(position: Timecode) -> Timecode:
+        """Re-base a position onto the timeline origin, exactly when needed.
+
+        A 0-origin timeline (every existing fixture) hands back the same
+        Timecode object rather than round-tripping it through seconds, so
+        the reported frame numbers cannot drift by float error.
+        """
+        if not origin:
+            return position
+        return Timecode(
+            frames=position.frames - int(round(origin * fps)),
+            frame_rate=fps,
+        )
+
     for clip in tl.clips:
-        duration_frames = int(clip.duration_seconds * fps)
-        if duration_frames < warning_threshold:
-            severity = (
-                FlashFrameSeverity.CRITICAL
-                if duration_frames < critical_threshold
-                else FlashFrameSeverity.WARNING
-            )
-            flash_frames.append(FlashFrame(
-                clip_name=clip.name, clip_id=clip.name,
-                start=clip.start, duration_frames=duration_frames,
-                duration_seconds=clip.duration_seconds, severity=severity,
-            ))
+        consider(clip.name, clip.duration_seconds, relative(clip.start))
+    for connected in getattr(tl, 'connected_clips', []) or []:
+        position = connected.offset or Timecode(frames=0, frame_rate=fps)
+        consider(connected.name, connected.duration_seconds, relative(position))
+
     return flash_frames
 
 
@@ -2106,8 +2139,27 @@ async def handle_detect_gaps(arguments: dict) -> Sequence[TextContent]:
 
     gaps = _detect_gaps(tl, min_gap_frames=min_gap_frames)
 
+    # Gap detection is a primary-storyline concept. Space between connected
+    # clips on a lane is not a gap — B-roll and titles are meant to be sparse,
+    # so flagging every hole in lane 3 would be noise. State the scope instead
+    # of implying the whole timeline was checked, because on a music video the
+    # spine is one <gap> and this check inspects nothing at all (issue #16).
+    connected_count = len(getattr(tl, 'connected_clips', []) or [])
+    scope_note = ""
+    if connected_count:
+        lanes = len({c.lane for c in tl.connected_clips})
+        scope_note = (
+            f"\n\n_Scope: the primary storyline only ({len(tl.clips)} spine "
+            f"clip(s)). {connected_count} connected clip(s) across {lanes} "
+            "lane(s) were not checked — space between connected clips is "
+            "normal, not a gap._"
+        )
+
     if not gaps:
-        return _text_result(f"No gaps detected (minimum: {min_gap_frames} frame(s))")
+        return _text_result(
+            f"No gaps detected on the primary storyline "
+            f"(minimum: {min_gap_frames} frame(s)){scope_note}"
+        )
 
     result = f"""# Gap Detection
 
@@ -2125,6 +2177,7 @@ async def handle_detect_gaps(arguments: dict) -> Sequence[TextContent]:
     ) + "\n"
 
     result += "\n*Use `fill_gaps` to automatically close these gaps.*"
+    result += scope_note
     return _text_result(result)
 
 
@@ -2586,12 +2639,19 @@ async def handle_snap_to_beats(arguments: dict) -> Sequence[TextContent]:
     for clip in tl.clips:
         markers.extend(clip.markers)
 
-    if not markers:
+    modifier = FCPXMLModifier(filepath)
+    # The connected path reads markers straight off the XML in exact
+    # rationals and normalises them to timeline-relative seconds, because a
+    # connected timeline's markers live on the gap or on the clips
+    # themselves and its offsets start at 3600s.  The spine path keeps the
+    # parser-derived list it has always used, unchanged.
+    connected_marker_times = modifier.timeline_marker_seconds()
+
+    if not markers and not connected_marker_times:
         return _text_result("No markers found. Use `import_beat_markers` first.")
 
     marker_times = sorted([m.start.seconds for m in markers])
 
-    modifier = FCPXMLModifier(filepath)
     spine = modifier._get_spine()
     adjusted_count = 0
     total_shift = 0
@@ -2638,22 +2698,132 @@ async def handle_snap_to_beats(arguments: dict) -> Sequence[TextContent]:
             adjusted_count += 1
             total_shift += abs(shift_frames)
 
+    # Connected clips (lanes) — the shape a music video actually has, where
+    # the spine loop above sees nothing at all.
+    connected = modifier.snap_connected_clips(
+        marker_seconds=connected_marker_times,
+        max_shift_frames=max_shift,
+        prefer=prefer,
+        include_audio_lanes=arguments.get("include_audio_lanes", False),
+    )
+
     modifier.save(output_path)
-    avg_shift = total_shift / adjusted_count if adjusted_count > 0 else 0
 
-    return _text_result(f"""# Cuts Snapped to Beats
+    spine_considered = max(0, len(clips_list) - 1)
+    considered = spine_considered + connected['considered']
+    moved = adjusted_count + len(connected['moved'])
+    total_shift += sum(abs(m['shift_frames']) for m in connected['moved'])
+    avg_shift = total_shift / moved if moved else 0
 
-## Summary
-- **Cuts Adjusted**: {adjusted_count}
-- **Max Shift Allowed**: {max_shift} frames
-- **Preference**: {prefer}
-- **Average Shift**: {avg_shift:.1f} frames
+    return _text_result(
+        _format_snap_report(
+            output_path=output_path,
+            max_shift=max_shift,
+            prefer=prefer,
+            considered=considered,
+            moved=moved,
+            avg_shift=avg_shift,
+            spine_considered=spine_considered,
+            spine_moved=adjusted_count,
+            connected=connected,
+            # The XML-derived list is the complete one; marker_times is the
+            # parser-derived list the spine path has always used and covers
+            # the same markers, so adding them would double-count.
+            marker_count=len(connected_marker_times) or len(marker_times),
+        )
+    )
 
-## Output
-Saved to: `{output_path}`
 
-Your edits are now synced to the beat!
-""")
+def _format_snap_report(
+    *, output_path: str, max_shift: int, prefer: str, considered: int,
+    moved: int, avg_shift: float, spine_considered: int, spine_moved: int,
+    connected: dict, marker_count: int,
+) -> str:
+    """Render the snap_to_beats result, including everything that did NOT move.
+
+    The bug this reports around (issue #16) was not that snapping was wrong,
+    it was that snapping did nothing and said "Your edits are now synced to
+    the beat!" while doing it.  A cut that could not move is as much of a
+    result as one that did, so every considered cut is accounted for in
+    exactly one bucket below and the headline states the count either way.
+    """
+    aligned = connected['already_aligned']
+    out_of_range = connected['out_of_range']
+    skipped = connected['skipped']
+
+    if considered == 0:
+        headline = (
+            "**No cut points found.** Nothing on this timeline's spine or "
+            "lanes could be moved."
+        )
+    elif moved == 0:
+        headline = f"**0 of {considered} cuts moved.** Nothing was changed."
+    else:
+        headline = f"**{moved} of {considered} cuts moved.**"
+
+    lines = [
+        "# Cuts Snapped to Beats",
+        "",
+        headline,
+        "",
+        "## Summary",
+        f"- **Cuts Considered**: {considered}"
+        + (f" ({spine_considered} on the spine, {connected['considered']} connected"
+           f" across lanes {', '.join(str(x) for x in connected['lanes'])})"
+           if connected['considered'] else ""),
+        f"- **Cuts Moved**: {moved}"
+        + (f" ({spine_moved} on the spine, {len(connected['moved'])} connected)"
+           if connected['considered'] else ""),
+        f"- **Already On A Beat**: {len(aligned)}",
+        f"- **No Marker Within {max_shift} Frames**: {len(out_of_range)}",
+        f"- **Skipped (would collide)**: {len(skipped)}",
+        f"- **Markers Available**: {marker_count}",
+        f"- **Preference**: {prefer}",
+        f"- **Average Shift**: {avg_shift:.1f} frames",
+    ]
+
+    if connected['audio_lane_clips']:
+        lines += [
+            "",
+            f"_{connected['audio_lane_clips']} clip(s) on negative (audio) lanes "
+            "were left alone — that is the track the beat grid came from. "
+            "Pass `include_audio_lanes` to snap them too._",
+        ]
+
+    if connected['moved']:
+        lines += ["", "## Moved", ""]
+        lines.append(_markdown_table(
+            ["Clip", "Lane", "From", "To", "Shift"],
+            [[m['name'], str(m['lane']), f"{m['at_seconds']:.3f}s",
+              f"{m['to_seconds']:.3f}s", f"{m['shift_frames']:+d}f"]
+             for m in connected['moved']],
+        ))
+
+    if skipped:
+        lines += ["", "## Skipped", ""]
+        lines.append(_markdown_table(
+            ["Clip", "Lane", "At", "Reason"],
+            [[s['name'], str(s['lane']), f"{s['at_seconds']:.3f}s", s['reason']]
+             for s in skipped],
+        ))
+
+    if out_of_range:
+        lines += ["", f"## No Marker Within {max_shift} Frames", ""]
+        lines.append(_markdown_table(
+            ["Clip", "Lane", "At", "Nearest Marker"],
+            [[o['name'], str(o['lane']), f"{o['at_seconds']:.3f}s",
+              "none" if o['nearest_marker_frames'] is None
+              else f"{o['nearest_marker_frames']:.1f}f away"]
+             for o in out_of_range],
+        ))
+        lines += [
+            "",
+            "_Raise `max_shift_frames` to reach these, or add markers where "
+            "the cuts already are._",
+        ]
+
+    lines += ["", "## Output", f"Saved to: `{output_path}`", ""]
+    return "\n".join(lines)
 
 
 # ----- SUBTITLE / TRANSCRIPT HANDLERS -----

@@ -2,6 +2,95 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-04
+
+### Fixed
+
+**`snap_to_beats` moved nothing on a music video and reported success.**
+(issue #16) It built its work list from spine children only. A music video is
+built by laying an audio bed and hanging every visual off it as a connected
+clip, so on the project that filed this the spine held one `<gap>`, the work
+list was empty, 0 of 129 clips were considered, and the tool answered "Your
+edits are now synced to the beat!"
+
+It now snaps connected clips lane by lane, and reports what it did *not* do as
+carefully as what it did — cuts considered, moved, already on a beat, out of
+reach of any marker, and skipped for a collision, each named. A timeline with
+nothing movable now says "0 of N cuts moved. Nothing was changed."
+
+Three rules, decided rather than assumed:
+
+- **Non-rippling.** Moving one connected clip does not shift the clips after
+  it in its lane. Connected clips are not magnetic to each other, and
+  rippling would rearrange an edit the user already made.
+- **Lanes are independent.** Lane 2 snapping while lane 1 does not is correct;
+  they are separate visual layers.
+- **Collisions are skipped, never forced,** and reported by name.
+
+Negative lanes are left alone by default: on a music video that is the track
+the beat grid was derived from, and sliding it desyncs the entire edit against
+the thing it is being synced to. `include_audio_lanes` opts in.
+
+Measured on the 129-clip project from the issue: 128 cuts considered across 14
+lanes, 71 moved, 22 already on a beat, 35 skipped as collisions.
+
+**`import_beat_markers` raised on every music video.** `add_marker_at_timeline`
+searched for a spine *clip* to host the marker; a gap-only spine has none, so
+the whole beat workflow was unreachable — there was nothing for `snap_to_beats`
+to snap to even once it could see the lanes. It now falls back to hosting the
+marker on the spine element that spans the position, resolved against the
+timeline origin. The fallback only runs where the previous code raised, so no
+working project changes behaviour.
+
+**A connected clip's `offset` is in its host's time frame, not the timeline's.**
+`examples/music-video.fcpxml` has `<gap offset="3600s" start="3600s">`, where
+the two coincide. A real Final Cut export has `<gap offset="0s"
+start="86400314/24000s">`, where reading the raw attribute puts every clip an
+hour past the end of its own 164-second timeline. Positions are now computed
+as `host.offset + (element.offset - host.start)` on read and inverted on write.
+
+**A 23.98 timeline reported its own length as 170.96s instead of 164s.**
+`TimeValue.from_timecode` quantises through `int(fps)`, which is 23 at 23.976,
+so `<sequence duration="164s">` came back as `3932/23s`. `_timeline_duration`
+now parses exactly. `import_beat_markers` was letting beats past the end
+through on the strength of that number and then failing to place them.
+
+**`detect_flash_frames` could not see a flash frame on a lane.** A two-frame
+B-roll shot is an error whether it sits on the primary storyline or on lane 4,
+and on a music video every clip is on a lane — the tool returned a clean bill
+of health for a timeline holding one. Connected clips are now scanned, with
+positions measured from the timeline origin rather than reported an hour late.
+
+**`detect_gaps` said "No gaps detected" about a timeline it never looked at.**
+Gap detection is a primary-storyline concept and stays that way — space
+between connected clips is intentional, not a gap — but it now states its
+scope and how many connected clips across how many lanes it skipped.
+
+**The validator flagged Final Cut's own timebase as non-standard.** FCP writes
+`frameDuration="1001/24000s"` for a 23.98 sequence; 24000 was missing from the
+accepted set, along with the rest of the NTSC-fractional family.
+
+### Added
+
+`fcpxml/rational.py` — exact `Fraction` arithmetic for FCPXML time attributes,
+with no frame rate involved until a value is written back and aligned to the
+frame grid. The connected-clip path is built on it because `TimeValue` cannot
+represent 23.976 fps: it reads `"3604s"` back as 3756.96, a two-and-a-half
+minute error on a single offset.
+
+`tests/test_connected_edits.py` — 30 tests covering the connected path,
+host-frame offsets, collision handling, honest reporting, and the spine path
+staying exactly as it was. Every one was verified to fail against a
+deliberately broken build before being committed.
+
+### Known
+
+`reorder_clips`, `rapid_trim`, `fix_flash_frames` and `fill_gaps` still walk
+the spine and do nothing on a connected timeline. Scope is documented in
+issue #16; they are unchanged here because a wrong write on someone's edit is
+expensive and each needs its own decision about what the operation even means
+on a lane.
+
 ## [0.14.5] - 2026-08-04
 
 ### Fixed
