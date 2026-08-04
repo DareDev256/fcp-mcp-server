@@ -5,7 +5,7 @@
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![MCP Compatible](https://img.shields.io/badge/MCP-1.0-green.svg)](https://modelcontextprotocol.io/)
+[![MCP Compatible](https://img.shields.io/badge/MCP-1.3.0-green.svg)](https://modelcontextprotocol.io/)
 [![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
 [![Tests](https://img.shields.io/badge/tests-1089_passing-brightgreen.svg)](#testing)
@@ -555,7 +555,7 @@ Found a vulnerability? Report it privately via the repo's **Security → Report 
 | **Output sandbox** | All generation, write, export, beat sync, subtitle, and reformat handlers enforce `_validate_output_path(anchor_dir=...)` — restricts writes to descendants of the source file's directory, blocking LLM-generated path escapes |
 | **Subprocess bounds** | `_ensure_video_asset()` bounds-checks duration (0 < d ≤ 3600s), fps (1–240), width/height (even, ≤ 7680×4320) before `subprocess.run()` — blocks `inf`/`NaN`, negative values, odd dimensions, string injection, and oversized resolutions that could hang or exhaust ffmpeg |
 | **Speed validation** | `handle_change_speed` validates speed is positive and ≤100 before any math — prevents ZeroDivisionError crash and nonsensical results |
-| **Directory listing** | `find_fcpxml_files` only ever globs `*.fcpxml` / `*.fcpxmld` under `PROJECTS_DIR` (`FCP_PROJECTS_DIR` when set, otherwise `~/Movies`), and every discovered path is re-validated through `_validate_filepath` before it is opened |
+| **Directory listing** | Confined to `FCP_PROJECTS_DIR` when set — `find_fcpxml_files` globs `*.fcpxml` / `*.fcpxmld` under that root and every discovered path is re-validated through `_validate_filepath` before it is opened; when `FCP_PROJECTS_DIR` is unset, the caller may name any directory to list |
 | **XML parsing** | `defusedxml` with explicit `forbid_entities/external=True` blocks XXE, billion laughs, entity expansion, remote DTD attacks at all 4 entry points (parser, writer, exporter, rough cut) — minidom pretty-print path also hardened via `defusedxml.minidom`. Ruff `S314`/`S320` rules enforce safe parsing in CI |
 | **JSON depth limit** | Iterative BFS depth checker rejects payloads nested beyond 50 levels — immune to RecursionError even at ~1000 nesting |
 | **Symlink resolution** | `_validate_filepath` calls `Path.resolve()` *before* the extension whitelist runs, so a symlink named `innocent.fcpxml` that points at `/etc/passwd` is rejected on its resolved suffix — a symlink cannot smuggle a disallowed target past the file gate |

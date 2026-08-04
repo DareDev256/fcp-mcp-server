@@ -15,7 +15,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
@@ -558,14 +558,15 @@ async def list_resources() -> list[Resource]:
     resources = []
     for f in files:
         p = Path(f)
+        encoded = quote(f)
         resources.append(Resource(
-            uri=f"file://{f}",
+            uri=f"file://{encoded}",
             name=p.stem,
             description=f"FCPXML project: {p.name} ({format_duration(0)})",
             mimeType="application/xml",
         ))
         resources.append(Resource(
-            uri=f"preview://{f}",
+            uri=f"preview://{encoded}",
             name=f"{p.stem} (visual preview)",
             description=f"HTML timeline preview: {p.name}",
             mimeType="text/html",

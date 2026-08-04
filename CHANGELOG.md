@@ -72,12 +72,12 @@ five prompts, the README prompts table, and `docs/WORKFLOWS.md` now use the
 grouped form. A test fails if any prompt names an action that is not
 reachable from the group it tells the model to use.
 
-**Two false and two aspirational rows in the README security matrix.** The
+**Three false and two aspirational rows in the README security matrix.** The
 "URI parsing" row claimed URIs were parsed via `urllib.parse.urlparse()` —
 there is no `urlparse` anywhere in `server.py`, and the percent-encoding bug
 above proves the encoding half was not handled either. Rewritten to describe
 what the code actually does, and backed by tests. Spot-checking the rest of
-the matrix found three more unbacked claims: "10K file cap on `rglob`" and
+the matrix found four more unbacked claims: "10K file cap on `rglob`" and
 "symlink files skipped during discovery" (neither exists in
 `find_fcpxml_files`), a 10,000-entry marker batch cap, and a ~1 MB inline
 transcript cap (neither implemented). The false claims are gone; the genuine

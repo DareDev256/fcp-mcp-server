@@ -312,3 +312,28 @@ class TestResourceUriWithSpacesInFilename:
         assert previews, "expected a preview:// resource for the spaced file"
         contents = _read_resource(str(previews[0].uri))
         assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
+
+    def test_list_resources_uri_with_literal_percent_round_trips_through_read(
+        self, tmp_path, monkeypatch
+    ):
+        """A filename containing a literal '%' must survive list_resources -> read_resource.
+
+        `list_resources` used to interpolate the raw filesystem path straight into
+        `file://{f}` / `preview://{f}` with no percent-encoding, while `read_resource`
+        unconditionally `unquote()`s whatever URI it is handed. A filename like
+        `pct%20lit.fcpxml` would then be emitted raw and decoded on read as if `%20`
+        were an encoded space, resolving to the wrong (nonexistent) path and failing
+        with "File not found" — safe, but the resource was unreachable. `quote()`
+        on the way out fixes the round trip.
+        """
+        src = Path("examples/sample.fcpxml").read_bytes()
+        target = tmp_path / "pct%20lit.fcpxml"
+        target.write_bytes(src)
+        monkeypatch.setattr(server_module, "PROJECTS_DIR", str(tmp_path))
+        resources = asyncio.run(server_module.list_resources())
+        previews = [r for r in resources if str(r.uri).startswith("preview://")]
+        assert previews, "expected a preview:// resource for the percent-named file"
+        contents = _read_resource(str(previews[0].uri))
+        assert contents[0].mimeType == "text/html"
+        assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
+        assert "File not found" not in contents[0].text
