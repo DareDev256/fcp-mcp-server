@@ -63,7 +63,7 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.14.2"
+__version__ = "0.14.3"
 
 server = Server("fcp-mcp-server", version=__version__)
 PROJECTS_DIR = os.environ.get("FCP_PROJECTS_DIR", os.path.expanduser("~/Movies"))

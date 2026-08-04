@@ -382,3 +382,56 @@ def test_zero_denominator_frame_duration_raises():
     xml = _fcpxml(CLIP_A, ASSET_R2, frame_dur="1/0s")
     with pytest.raises(ValueError, match="denominator"):
         FCPXMLParser().parse_string(xml)
+
+
+class TestSequenceFrameRateWins:
+    """The sequence's own format decides the frame rate, not a source asset's.
+
+    The parser used to overwrite the rate from every <format> in resources, so
+    the LAST one in the file won. A 23.98 timeline in a project holding a
+    single 25p drone clip reported 50.0 fps, and Timecode.total_frames /
+    to_smpte were then wrong by that factor everywhere — including anything
+    snapping a cut to a beat.
+    """
+
+    # r1 is the sequence (23.976). r9 is a source asset (50p) declared AFTER
+    # it, which is the ordering that made last-wins pick the wrong one.
+    XML = """<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.10">
+  <resources>
+    <format id="r1" name="FFVideoFormat3840x2160p2398" frameDuration="1001/24000s" width="3840" height="2160"/>
+    <format id="r9" name="FFVideoFormat1080p50" frameDuration="1/50s" width="1920" height="1080"/>
+    <asset id="a1" name="drone" start="0s" duration="10s" hasVideo="1" hasAudio="0"/>
+  </resources>
+  <library>
+    <event name="E">
+      <project name="P">
+        <sequence format="r1" duration="164s" tcStart="0s" tcFormat="NDF">
+          <spine/>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
+"""
+
+    def _timeline(self, tmp_path):
+        p = tmp_path / "rates.fcpxml"
+        p.write_text(self.XML)
+        return FCPXMLParser().parse_file(str(p)).primary_timeline
+
+    def test_frame_rate_comes_from_the_sequence_format(self, tmp_path):
+        tl = self._timeline(tmp_path)
+        assert abs(tl.frame_rate - 24000 / 1001) < 0.001, (
+            f"got {tl.frame_rate}; a later 50p asset format must not win"
+        )
+
+    def test_resolution_also_comes_from_the_sequence_format(self, tmp_path):
+        tl = self._timeline(tmp_path)
+        assert (tl.width, tl.height) == (3840, 2160)
+
+    def test_frame_counts_use_the_sequence_rate(self, tmp_path):
+        """The reason the rate matters: seconds-to-frames must be right."""
+        tl = self._timeline(tmp_path)
+        # 164s at 23.976 is ~3932 frames; at the wrong 50.0 it would be 8200.
+        assert 3900 < tl.duration.total_frames < 3960

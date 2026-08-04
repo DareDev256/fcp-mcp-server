@@ -101,25 +101,40 @@ class FCPXMLParser:
         project_name = timelines[0].name if timelines else "Untitled"
         return Project(name=project_name, timelines=timelines, fcpxml_version=version)
 
+    @staticmethod
+    def _rate_from_frame_duration(frame_dur: str) -> Optional[float]:
+        """Frames per second from an FCPXML ``frameDuration`` like ``1001/24000s``."""
+        if '/' not in frame_dur:
+            return None
+        parts = frame_dur.rstrip('s').split('/', 1)
+        num, denom = int(parts[0]), int(parts[1])
+        if num <= 0:
+            raise ValueError(f"Invalid frameDuration numerator: {frame_dur}")
+        if denom <= 0:
+            raise ValueError(f"Invalid frameDuration denominator: {frame_dur}")
+        return denom / num
+
     def _parse_resources(self, resources: ET.Element):
         """Parse the resources section."""
-        for fmt in resources.findall('format'):
+        for index, fmt in enumerate(resources.findall('format')):
             fmt_id = fmt.get('id', '')
+            frame_dur = fmt.get('frameDuration', '1/24s')
+            rate = self._rate_from_frame_duration(frame_dur)
             self.formats[fmt_id] = {
                 'id': fmt_id, 'name': fmt.get('name', ''),
                 'width': int(fmt.get('width', 1920)),
                 'height': int(fmt.get('height', 1080)),
-                'frameDuration': fmt.get('frameDuration', '1/24s')
+                'frameDuration': frame_dur,
+                'frameRate': rate,
             }
-            frame_dur = fmt.get('frameDuration', '1/24s')
-            if '/' in frame_dur:
-                parts = frame_dur.rstrip('s').split('/', 1)
-                num, denom = int(parts[0]), int(parts[1])
-                if num <= 0:
-                    raise ValueError(f"Invalid frameDuration numerator: {frame_dur}")
-                if denom <= 0:
-                    raise ValueError(f"Invalid frameDuration denominator: {frame_dur}")
-                self.frame_rate = denom / num
+            # Fallback only, for a sequence naming an unresolvable format. The
+            # sequence resolves its OWN format in _parse_project, which wins.
+            # Previously every format overwrote this, so the last resource in
+            # the file decided the rate — a 23.98 sequence in a project holding
+            # one 25p drone clip reported 50.0 fps, and every seconds-to-frames
+            # conversion downstream was wrong by that factor.
+            if index == 0 and rate is not None:
+                self.frame_rate = rate
 
         for asset in resources.findall('asset'):
             asset_id = asset.get('id', '')
@@ -141,6 +156,13 @@ class FCPXMLParser:
 
         format_ref = sequence.get('format', '')
         fmt = self.formats.get(format_ref, {})
+
+        # The sequence's own format decides the timeline's frame rate. This has
+        # to land BEFORE _tc() and _parse_spine(), both of which stamp
+        # self.frame_rate onto every Timecode they build.
+        seq_rate = fmt.get('frameRate')
+        if seq_rate is not None:
+            self.frame_rate = seq_rate
 
         timeline = Timeline(
             name=name,

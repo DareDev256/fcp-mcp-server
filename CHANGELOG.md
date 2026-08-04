@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-08-04
+
+### Fixed
+
+**Frame rate was read from whichever `<format>` came last in the file, not from
+the sequence.** A 3840x2160 timeline at 23.98 fps, in a project holding one 25p
+drone clip, parsed as 50.0 fps.
+
+The wrong header was the visible symptom. The real problem is that
+`Timecode.frame_rate` drives `total_frames` and `to_smpte()`, so every
+seconds-to-frames conversion was off by that factor: 164 seconds resolved to
+8200 frames instead of 3932. Anything placing a cut or a marker on a specific
+frame — snapping to a beat, importing beat markers, reporting a timecode — was
+computing against a rate the timeline never had.
+
+The sequence's `format` attribute is now resolved to its `<format>` element and
+that rate wins, applied before any `Timecode` is built. A format that cannot be
+resolved falls back to the first one declared, which is conventionally the
+sequence's own.
+
+Closes #15.
+
 ## [0.14.2] - 2026-08-04
 
 ### Fixed
