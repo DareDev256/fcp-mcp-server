@@ -1,5 +1,7 @@
 # FCPXML MCP
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2FDareDev256%2Ffcp-mcp-server.svg)](https://mcptoplist.com/server/glama%2FDareDev256%2Ffcp-mcp-server)
+
 **The bridge between Final Cut Pro and AI. 7 grouped tools (62 underlying operations) that turn timeline XML into structured data Claude can read, edit, and generate.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
