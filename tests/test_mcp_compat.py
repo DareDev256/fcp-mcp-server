@@ -51,13 +51,30 @@ class TestRegistration:
 
     def test_all_six_methods_are_registered(self):
         if is_legacy_api():
-            # 1.x keys `request_handlers` by request *type*; compare on the
-            # method literal each type declares so this assertion reads the
-            # same on both sides of the split.
-            registered = {
-                req.model_fields["method"].default
-                for req in server_module.server.request_handlers
+            # 1.x keys `request_handlers` by request *type*, so assert on the
+            # types. Reading the `method` literal off the model instead looks
+            # tidier and is not portable — at the declared floor (mcp 1.3.0)
+            # that field carries no default and the whole set collapses to
+            # {PydanticUndefined}. The floor job caught exactly that.
+            from mcp.types import (
+                CallToolRequest,
+                GetPromptRequest,
+                ListPromptsRequest,
+                ListResourcesRequest,
+                ListToolsRequest,
+                ReadResourceRequest,
+            )
+
+            registry = server_module.server.request_handlers
+            expected = {
+                "resources/list": ListResourcesRequest,
+                "resources/read": ReadResourceRequest,
+                "prompts/list": ListPromptsRequest,
+                "prompts/get": GetPromptRequest,
+                "tools/list": ListToolsRequest,
+                "tools/call": CallToolRequest,
             }
+            registered = {name for name, cls in expected.items() if cls in registry}
         else:
             registered = set(server_module.server._request_handlers)
         for method in METHODS:
