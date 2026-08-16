@@ -7,11 +7,23 @@ Supports:
 
 import copy
 import xml.etree.ElementTree as ET
+from fractions import Fraction
 from typing import Any, Dict, List
 
 from .parser import FCPXMLParser
+from .rational import is_ntsc_rate, nominal_fps, rational_fps
 from .safe_xml import serialize_xml
 from .writer import _sanitize_xml_value
+
+
+def _to_frames(seconds: float, frame_rate: float) -> int:
+    """Whole frames for *seconds* at the exact rate, rounded not truncated.
+
+    ``int(2.0 * 23.976023976)`` is 47, not 48 — truncation silently lost a
+    frame off the end of every clip exported at a broadcast rate.
+    """
+    exact = Fraction(seconds).limit_denominator(1000000) * rational_fps(frame_rate)
+    return round(exact.numerator / exact.denominator)
 
 
 class DaVinciExporter:
@@ -97,18 +109,25 @@ class DaVinciExporter:
         sequence = ET.SubElement(xmeml, 'sequence')
         ET.SubElement(sequence, 'name').text = _sanitize_xml_value(tl.name, 512)
 
-        total_frames = int(tl.duration.seconds * tl.frame_rate)
+        total_frames = _to_frames(tl.duration.seconds, tl.frame_rate)
         ET.SubElement(sequence, 'duration').text = str(total_frames)
 
+        # XMEML expresses a broadcast rate as the nominal integer timebase
+        # plus an <ntsc> flag — timebase 24 + ntsc TRUE *is* 23.98. Writing
+        # int(23.976) = 23 with ntsc FALSE described a rate that does not
+        # exist, and the exact-float membership test that set the flag never
+        # matched the 23.976023976... a real file parses to.
+        timebase = str(nominal_fps(tl.frame_rate))
+        is_ntsc = is_ntsc_rate(tl.frame_rate)
+
         rate = ET.SubElement(sequence, 'rate')
-        ET.SubElement(rate, 'timebase').text = str(int(tl.frame_rate))
-        is_ntsc = tl.frame_rate in (29.97, 23.976, 59.94)
+        ET.SubElement(rate, 'timebase').text = timebase
         ET.SubElement(rate, 'ntsc').text = 'TRUE' if is_ntsc else 'FALSE'
 
         # Timecode
         tc = ET.SubElement(sequence, 'timecode')
         tc_rate = ET.SubElement(tc, 'rate')
-        ET.SubElement(tc_rate, 'timebase').text = str(int(tl.frame_rate))
+        ET.SubElement(tc_rate, 'timebase').text = timebase
         ET.SubElement(tc_rate, 'ntsc').text = 'TRUE' if is_ntsc else 'FALSE'
         ET.SubElement(tc, 'string').text = '00:00:00:00'
         ET.SubElement(tc, 'frame').text = '0'
@@ -203,16 +222,17 @@ class DaVinciExporter:
             clip_data['name'], 512
         )
 
-        duration_frames = int(clip_data['duration_seconds'] * frame_rate)
+        duration_frames = _to_frames(clip_data['duration_seconds'], frame_rate)
         ET.SubElement(clipitem, 'duration').text = str(duration_frames)
 
         rate = ET.SubElement(clipitem, 'rate')
-        ET.SubElement(rate, 'timebase').text = str(int(frame_rate))
-        is_ntsc = frame_rate in (29.97, 23.976, 59.94)
-        ET.SubElement(rate, 'ntsc').text = 'TRUE' if is_ntsc else 'FALSE'
+        ET.SubElement(rate, 'timebase').text = str(nominal_fps(frame_rate))
+        ET.SubElement(rate, 'ntsc').text = (
+            'TRUE' if is_ntsc_rate(frame_rate) else 'FALSE'
+        )
 
-        start_frame = int(clip_data['start_seconds'] * frame_rate)
-        source_in = int(clip_data['source_start_seconds'] * frame_rate)
+        start_frame = _to_frames(clip_data['start_seconds'], frame_rate)
+        source_in = _to_frames(clip_data['source_start_seconds'], frame_rate)
         source_out = source_in + duration_frames
 
         ET.SubElement(clipitem, 'start').text = str(start_frame)

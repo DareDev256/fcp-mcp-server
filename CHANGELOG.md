@@ -2,6 +2,71 @@
 
 ## [Unreleased]
 
+### Fixed
+
+**Every broadcast frame rate was arithmetic on the wrong timebase.** (issue #17)
+`TimeValue` built its denominators with `int(fps)`. `int(23.976)` is 23, so
+3604 seconds was stored as `86410/23s` and read back as **3756.957s** — a
+152-second error on a value that is exact on the page. It affected 23.976,
+29.97, 59.94, 47.952 and 119.88, which is to say every rate the project claims
+to support except the clean integer ones. 23.98 is the most common sequence
+format in Final Cut.
+
+The rates are exact rationals and are now carried as such end to end:
+
+| nominal | exact      |
+|---------|------------|
+| 23.976  | 24000/1001 |
+| 29.97   | 30000/1001 |
+| 59.94   | 60000/1001 |
+
+`fcpxml/rational.py` gained `rational_fps()`, which resolves any spelling of a
+rate (`23.976`, `23.98`, `23.976023976...`) to the rational it stands in for,
+plus `frame_duration_seconds/_attr`, `nominal_fps`, `fcp_frame_rate_name`,
+`is_ntsc_rate` and `tick_timebase`. Nothing downstream sees a rounded rate any
+more. Integer rates produce byte-identical output to before.
+
+What that fixed, each of which was independently wrong:
+
+- **Plain seconds are no longer quantised on the way in.** `"3604s"` is already
+  exact in FCPXML; rounding it to a frame grid during a *parse* only lost
+  information, and at a broadcast rate lost minutes of it.
+- **`to_timecode()` could not render frame 23.** It divided by `int(fps)`, so
+  23.98 timecode counted 0..22 and mislabelled every second. Non-drop timecode
+  counts by the *nominal* rate (24), which is now a separate concept from the
+  exact one.
+- **`snap_to_frame()` snapped to a unit that is not a frame.** A 23.98 frame is
+  100.1 ticks of the 2400-tick timebase, and `2400 // int(23.976)` gave 104.
+  Integer rates keep the 2400 timebase unchanged; NTSC rates snap in the
+  format's own (1001 ticks of 24000).
+- **`change_speed()` had the same 2400-tick flaw** and now stays frame-aligned
+  at broadcast rates.
+- **One-frame durations were written as `1/23s`** on markers, gaps and
+  transitions. Now `1001/24000s`.
+- **`<conform-rate srcFrameRate>` was written as `"23"`,** which is not a member
+  of the enumeration FCP accepts. Now `"23.98"`.
+- **Generated `<format>` resources** wrote `frameDuration="1/23s"`.
+- **`_check_frame_alignment()` measured against a 23fps grid that does not
+  exist,** so its warnings at broadcast rates were noise in both directions.
+- **XMEML export named a rate that does not exist.** It wrote `timebase 23` with
+  `ntsc FALSE`; XMEML expresses 23.98 as timebase 24 *plus* the NTSC flag. The
+  flag was set by exact float membership (`fps in (23.976, ...)`), which never
+  matched the `23.976023976...` a real file parses to. Frame counts also
+  truncated rather than rounded, losing a frame off the end of every exported
+  clip at a broadcast rate.
+- **`Timecode`** carried the same `int(frame_rate)` in `seconds`, `to_smpte`,
+  `from_rational`, `to_rational` and `to_time_value`.
+
+Verified on `examples/music-video.fcpxml` (23.98): 37 time attributes read back
+with zero drift, and all 24 frames of a second round-trip through timecode
+where frame 23 was previously unrepresentable. 131 new tests in
+`tests/test_broadcast_rates.py`, every one of which fails against the old
+implementation.
+
+Note for existing 23.98 projects: `diagnose` will now correctly report
+hand-authored round-second values (`164s`, `4s`) as frame-misaligned, because
+at 24000/1001 they are. That is the check working, not a new defect.
+
 ## [0.15.0] - 2026-08-04
 
 

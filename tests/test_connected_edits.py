@@ -86,15 +86,15 @@ def _snap(path, output, **kwargs):
 # ---------------------------------------------------------------------------
 
 class TestRationalTime:
-    """``TimeValue`` cannot represent a fractional frame rate. This can."""
+    """Exact seconds survive a fractional frame rate on both paths."""
 
     def test_plain_seconds_survive_a_fractional_frame_rate(self):
-        # TimeValue.from_timecode quantises through int(fps), so at 23.976 it
-        # stores 3604 seconds as 86410/23s and reads it back as 3756.96 — a
-        # 2.5-minute error on a single offset. Sabotaging parse_seconds to
-        # route through TimeValue fails this immediately.
+        # This guard originally asserted that TimeValue got 3604s WRONG at
+        # 23.976 (86410/23s, read back as 3756.96s), to prove parse_seconds
+        # was not routing through it. #17 fixed TimeValue itself, so the two
+        # now agree — and agreeing on the exact value is the stronger claim.
         ntsc = 24000 / 1001
-        assert TimeValue.from_timecode("3604s", ntsc).to_seconds() != 3604
+        assert TimeValue.from_timecode("3604s", ntsc).to_seconds() == 3604
         assert parse_seconds("3604s") == Fraction(3604)
 
     def test_rational_attributes_stay_exact(self):

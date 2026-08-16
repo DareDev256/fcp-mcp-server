@@ -77,7 +77,7 @@ Clip(
 )
 ```
 
-Every time value stays as a rational fraction — `720/24s`, not `30.0` — so trim, split, and speed operations have **zero rounding error** across any frame rate. Comparisons use cross-multiplication (`a/b < c/d` → `a*d < c*b`) to stay in integer-land end to end. Denominators are always normalized to positive values at construction, so sign lives on the numerator and cross-multiplication is always correct. Addition and subtraction share a single `_binop()` code path that handles same-denominator fast paths and LCM alignment in one place.
+Every time value stays as a rational fraction — `720/24s`, not `30.0` — so trim, split, and speed operations have **zero rounding error** across any frame rate, including the NTSC-fractional ones. A broadcast rate is carried as the exact rational it is (23.976 is `24000/1001`, not a decimal), never as a truncated integer. Comparisons use cross-multiplication (`a/b < c/d` → `a*d < c*b`) to stay in integer-land end to end. Denominators are always normalized to positive values at construction, so sign lives on the numerator and cross-multiplication is always correct. Addition and subtraction share a single `_binop()` code path that handles same-denominator fast paths and LCM alignment in one place.
 
 ---
 

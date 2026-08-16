@@ -50,9 +50,14 @@ from .models import (
     ValidationIssueType,
 )
 from .rational import (
+    fcp_frame_rate_name,
     format_seconds,
+    frame_duration_attr,
     frame_duration_from_attr,
+    nominal_fps,
     parse_seconds,
+    rational_fps,
+    tick_timebase,
     to_frames,
 )
 
@@ -578,7 +583,10 @@ def _check_timebases(root: ET.Element) -> List[ValidationIssue]:
 def _check_frame_alignment(root: ET.Element, fps: float = 24.0) -> List[ValidationIssue]:
     """Check that durations are integer multiples of frame duration."""
     issues = []
-    fps_int = int(fps)
+    # Exact, not int(fps): at 23.976 every duration on the real frame grid
+    # was reported misaligned against a 23fps grid that does not exist.
+    rate = rational_fps(fps)
+    rate_label = fcp_frame_rate_name(rate)
     for elem in root.iter():
         dur_str = elem.get('duration')
         if not dur_str or not dur_str.endswith('s'):
@@ -586,15 +594,14 @@ def _check_frame_alignment(root: ET.Element, fps: float = 24.0) -> List[Validati
         if elem.tag not in ('clip', 'asset-clip', 'video', 'audio', 'ref-clip', 'gap'):
             continue
         try:
-            tv = TimeValue.from_timecode(dur_str)
-            frames = tv.to_seconds() * fps_int
-            if abs(frames - round(frames)) > 0.01:
+            frames = parse_seconds(dur_str) * rate
+            if frames.denominator != 1:
                 issues.append(ValidationIssue(
                     issue_type=ValidationIssueType.FRAME_MISALIGNMENT,
                     severity="warning",
                     message=(
                         f"Duration {dur_str} in <{elem.tag}> "
-                        f"'{elem.get('name', '')}' is not frame-aligned at {fps_int}fps."
+                        f"'{elem.get('name', '')}' is not frame-aligned at {rate_label}fps."
                     ),
                     clip_name=elem.get('name'),
                 ))
@@ -1688,7 +1695,7 @@ class FCPXMLModifier:
             parent=clip,
             marker_type=marker_type,
             start=time_value.to_fcpxml(),
-            duration=f"1/{int(self.fps)}s",
+            duration=frame_duration_attr(self.fps),
             name=name,
             note=note,
         )
@@ -1724,7 +1731,7 @@ class FCPXMLModifier:
             parent=clip,
             marker_type=marker_type,
             start=relative_tc.to_fcpxml(),
-            duration=f"1/{int(self.fps)}s",
+            duration=frame_duration_attr(self.fps),
             name=name,
             note=note,
         )
@@ -1820,7 +1827,7 @@ class FCPXMLModifier:
                     parent=clip,
                     marker_type=MarkerType.STANDARD,
                     start=clip_start,
-                    duration=f"1/{int(self.fps)}s",
+                    duration=frame_duration_attr(self.fps),
                     name=f"Cut {i+1}",
                 )
                 created.append(marker)
@@ -1845,7 +1852,7 @@ class FCPXMLModifier:
                         parent=clip,
                         marker_type=MarkerType.STANDARD,
                         start=rel_tv.to_fcpxml(),
-                        duration=f"1/{int(self.fps)}s",
+                        duration=frame_duration_attr(self.fps),
                         name=f"Marker {count}",
                     )
                     created.append(marker)
@@ -2166,21 +2173,28 @@ class FCPXMLModifier:
         # Use rational arithmetic to avoid floating-point time values.
         # FCPXML requires rational fractions with a consistent timebase,
         # not decimal floats like "2.6666666666666665s".
-        denom = current_duration.denominator if current_duration.denominator > 0 else int(self.fps)
-        source_num = current_duration.numerator
         from fractions import Fraction
+        rate = rational_fps(self.fps or 24)
+        denom = (
+            current_duration.denominator
+            if current_duration.denominator > 0
+            else (1 / rate).denominator
+        )
+        source_num = current_duration.numerator
         speed_frac = Fraction(speed).limit_denominator(1000)
         raw_num = source_num * speed_frac.denominator
         raw_denom = denom * speed_frac.numerator
 
-        # Snap to frame boundary in a standard timebase (2400 ticks/sec).
-        # Each frame at Nfps = 2400/N ticks (e.g. 24fps → 100 ticks/frame).
-        fps_int = int(self.fps) if self.fps else 24
-        ticks_per_frame = 2400 // fps_int
-        dur_ticks = round(raw_num / raw_denom * 2400)
+        # Snap to a frame boundary in a timebase where a frame is a whole
+        # number of ticks. Integer rates keep 2400 ticks/sec (24fps → 100
+        # ticks/frame); 23.98 cannot use it — a frame there is 100.1 ticks,
+        # and the old `2400 // int(23.976)` gave 104, which is not a frame of
+        # any rate. Those snap in the format's own timebase instead.
+        ticks_per_second, ticks_per_frame = tick_timebase(rate)
+        dur_ticks = round(Fraction(raw_num, raw_denom) * ticks_per_second)
         dur_ticks = round(dur_ticks / ticks_per_frame) * ticks_per_frame
         new_num = dur_ticks
-        new_denom = 2400
+        new_denom = ticks_per_second
 
         # Remove any existing timeMap/conform-rate from a prior speed change
         # to prevent duplicate children that produce invalid FCPXML.
@@ -2210,7 +2224,7 @@ class FCPXMLModifier:
         # Add conform-rate (DTD-ordered insertion)
         conform = ET.Element('conform-rate')
         conform.set('scaleEnabled', '1')
-        conform.set('srcFrameRate', str(int(self.fps)))
+        conform.set('srcFrameRate', fcp_frame_rate_name(self.fps))
         _dtd_insert(clip, conform)
 
         return clip
@@ -3375,7 +3389,7 @@ class FCPXMLModifier:
                         parent=child,
                         marker_type=MarkerType.STANDARD,
                         start=child.get('start', '0s'),
-                        duration=f"1/{int(self.fps)}s",
+                        duration=frame_duration_attr(self.fps),
                         name=f"SILENCE: {c['reason']}",
                     )
                     actions.append({
@@ -3447,7 +3461,7 @@ class FCPXMLWriter:
 
     def _tc_to_rational(self, tc: Timecode) -> str:
         """Convert a Timecode to FCPXML rational time string (e.g. '48/24s')."""
-        return f"{tc.frames}/{int(tc.frame_rate)}s"
+        return tc.to_rational()
 
     def write_project(self, project: Project, filepath: str):
         """Write a project to an FCPXML file."""
@@ -3465,8 +3479,8 @@ class FCPXMLWriter:
             format_id = self._next_resource_id()
             ET.SubElement(resources, 'format',
                 id=format_id,
-                name=f"FFVideoFormat{timeline.height}p{int(timeline.frame_rate)}",
-                frameDuration=f"1/{int(timeline.frame_rate)}s",
+                name=f"FFVideoFormat{timeline.height}p{nominal_fps(timeline.frame_rate)}",
+                frameDuration=frame_duration_attr(timeline.frame_rate),
                 width=str(timeline.width), height=str(timeline.height))
             resource_map['_format'] = format_id
 

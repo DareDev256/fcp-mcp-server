@@ -8,9 +8,18 @@ timelines, clips, markers, and other elements.
 import operator
 from dataclasses import dataclass, field
 from enum import Enum
+from fractions import Fraction
 from functools import total_ordering
 from math import gcd
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from .rational import (
+    frame_duration_seconds,
+    nominal_fps,
+    parse_seconds,
+    rational_fps,
+    tick_timebase,
+)
 
 # ============================================================================
 # ENUMS
@@ -253,6 +262,18 @@ class TimeValue:
             object.__setattr__(self, 'denominator', -self.denominator)
 
     @classmethod
+    def _from_frames(cls, frames: int, fps: float) -> 'TimeValue':
+        """Build a TimeValue from a whole frame count at an exact rate.
+
+        ``fps = p/q`` means one frame is ``q/p`` seconds, so *n* frames is
+        ``n*q/p``. At an integer rate that reduces to the old ``(frames, fps)``
+        pair; at 23.98 it is ``(frames*1001, 24000)`` rather than the
+        ``(frames, 23)`` that ``int(fps)`` produced.
+        """
+        duration = frame_duration_seconds(fps)
+        return cls(frames * duration.numerator, duration.denominator)
+
+    @classmethod
     def from_timecode(cls, tc: str, fps: float = 30.0) -> 'TimeValue':
         """
         Create TimeValue from various string formats.
@@ -263,6 +284,12 @@ class TimeValue:
         - "30s" - Seconds
         - "90/30s" - FCPXML rational format
         - "15f" - Frames
+
+        Seconds are kept exact. ``"3604s"`` is already an exact rational on
+        the FCPXML page, so quantising it to the frame grid on the way in
+        only loses information — and at a broadcast rate it lost 152 seconds
+        of it (#17). Frame counts and SMPTE strings *are* frame quantities,
+        so those resolve through the exact rate.
         """
         if not tc:
             return cls(0, 1)
@@ -279,40 +306,39 @@ class TimeValue:
                     raise ValueError(f"Zero denominator in timecode: {tc}")
                 return cls(num, denom)
             else:
-                seconds = float(tc_val)
-                frames = int(round(seconds * fps))
-                return cls(frames, int(fps))
+                exact = Fraction(tc_val)
+                return cls(exact.numerator, exact.denominator)
 
         # Frame format: "15f"
         if tc.endswith('f'):
-            frames = int(tc[:-1])
-            return cls(frames, int(fps))
+            return cls._from_frames(int(tc[:-1]), fps)
 
         # Timecode format: "HH:MM:SS:FF" or "HH:MM:SS;FF"
         if ':' in tc or ';' in tc:
             parts = tc.replace(';', ':').split(':')
+            # Non-drop timecode counts `nominal` frames per labelled second
+            # (24 at 23.98), which is not the same number as the real rate.
+            nominal = nominal_fps(fps)
             if len(parts) == 4:
                 h, m, s, f = map(int, parts)
-                total_frames = int((h * 3600 + m * 60 + s) * fps + f)
-                return cls(total_frames, int(fps))
+                return cls._from_frames((h * 3600 + m * 60 + s) * nominal + f, fps)
             elif len(parts) == 3:
                 h, m, s = map(int, parts)
-                total_frames = int((h * 3600 + m * 60 + s) * fps)
-                return cls(total_frames, int(fps))
+                return cls._from_frames((h * 3600 + m * 60 + s) * nominal, fps)
 
         # Try as plain number (seconds)
         try:
-            seconds = float(tc)
-            frames = int(round(seconds * fps))
-            return cls(frames, int(fps))
-        except ValueError:
+            exact = Fraction(tc)
+        except (ValueError, ZeroDivisionError):
             raise ValueError(f"Invalid timecode format: {tc}")
+        return cls(exact.numerator, exact.denominator)
 
     @classmethod
     def from_seconds(cls, seconds: float, fps: float = 30.0) -> 'TimeValue':
-        """Create TimeValue from decimal seconds."""
-        frames = int(round(seconds * fps))
-        return cls(frames, int(fps))
+        """Create TimeValue from decimal seconds, snapped to the frame grid."""
+        duration = frame_duration_seconds(fps)
+        frames = int(round(Fraction(seconds).limit_denominator(1000000) / duration))
+        return cls._from_frames(frames, fps)
 
     @classmethod
     def zero(cls) -> 'TimeValue':
@@ -341,16 +367,23 @@ class TimeValue:
         return self.numerator / self.denominator
 
     def to_timecode(self, fps: float = 30.0) -> str:
-        """Convert to HH:MM:SS:FF timecode string."""
-        total_frames = int(round(self.to_seconds() * fps))
-        total_secs, frames = divmod(total_frames, int(fps))
+        """Convert to HH:MM:SS:FF timecode string.
+
+        The frame count comes from the exact rate; the labelled seconds come
+        from the nominal one (24 frames per second of 23.98 non-drop). Using
+        ``int(fps)`` for both gave 23 frames per second, which both mislabels
+        every second and makes frame 23 unrepresentable.
+        """
+        total_frames = self.to_frames(fps)
+        total_secs, frames = divmod(total_frames, nominal_fps(fps))
         total_mins, secs = divmod(total_secs, 60)
         hours, mins = divmod(total_mins, 60)
         return f"{hours:02d}:{mins:02d}:{secs:02d}:{frames:02d}"
 
     def to_frames(self, fps: float = 30.0) -> int:
-        """Convert to frame count."""
-        return int(round(self.to_seconds() * fps))
+        """Convert to frame count on the exact frame grid."""
+        exact = Fraction(self.numerator, self.denominator) * rational_fps(fps)
+        return round(exact.numerator / exact.denominator)
 
     def simplify(self) -> 'TimeValue':
         """Reduce fraction to simplest form."""
@@ -420,22 +453,26 @@ class TimeValue:
     def snap_to_frame(self, fps: float) -> 'TimeValue':
         """Round this time value to the nearest frame boundary at the given fps.
 
-        Uses the 2400-tick timebase (LCM of common frame rates) so results
-        always land on clean frame boundaries.
+        Integer rates use the 2400-tick timebase (LCM of the common integer
+        frame rates) so results land on clean frame boundaries. NTSC rates
+        cannot: a 23.98 frame is 100.1 ticks of 2400, so those snap in the
+        format's own timebase (1001 ticks of 24000) instead. See
+        :func:`fcpxml.rational.tick_timebase`.
 
         Args:
-            fps: Frame rate to snap to (e.g. 24, 30, 60)
+            fps: Frame rate to snap to (e.g. 24, 30, 23.976)
 
         Returns:
-            New TimeValue snapped to the nearest frame in 2400-tick timebase.
+            New TimeValue on a whole frame of *fps*.
+
+        Raises:
+            ValueError: if *fps* is not positive.
         """
-        fps_int = int(fps)
-        if fps_int <= 0:
-            raise ValueError(f"fps must be positive, got {fps}")
-        ticks_per_frame = 2400 // fps_int
-        total_ticks = round(self.to_seconds() * 2400)
+        ticks_per_second, ticks_per_frame = tick_timebase(fps)
+        exact_ticks = Fraction(self.numerator, self.denominator) * ticks_per_second
+        total_ticks = round(exact_ticks.numerator / exact_ticks.denominator)
         snapped_ticks = round(total_ticks / ticks_per_frame) * ticks_per_frame
-        return TimeValue(snapped_ticks, 2400)
+        return TimeValue(snapped_ticks, ticks_per_second)
 
     def is_standard_timebase(self) -> bool:
         """Check if this TimeValue's denominator is an FCP-accepted timebase."""
@@ -463,8 +500,18 @@ class Timecode:
     drop_frame: bool = False
 
     @property
+    def _exact_seconds(self) -> Fraction:
+        """Exact seconds for this frame count at the exact frame rate."""
+        return self.frames * frame_duration_seconds(self.frame_rate)
+
+    @property
     def seconds(self) -> float:
-        return self.frames / self.frame_rate
+        if not self.frame_rate:
+            raise ZeroDivisionError(
+                "Timecode.frame_rate is zero — a frame count has no duration "
+                "without a rate."
+            )
+        return float(self._exact_seconds)
 
     @property
     def total_frames(self) -> int:
@@ -472,11 +519,11 @@ class Timecode:
 
     def to_smpte(self) -> str:
         """Convert to SMPTE timecode string (HH:MM:SS:FF)."""
-        total_seconds = int(self.seconds)
+        nominal = nominal_fps(self.frame_rate)
+        total_seconds, frames = divmod(self.frames, nominal)
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         secs = total_seconds % 60
-        frames = int((self.seconds - total_seconds) * self.frame_rate)
         separator = ";" if self.drop_frame else ":"
         return f"{hours:02d}:{minutes:02d}:{secs:02d}{separator}{frames:02d}"
 
@@ -485,23 +532,24 @@ class Timecode:
         """Parse FCPXML rational time format (e.g., '3600/24s')."""
         if not rational_str:
             return cls(frames=0, frame_rate=frame_rate)
-        if rational_str.endswith('s'):
-            rational_str = rational_str[:-1]
-        if '/' in rational_str:
-            num, denom = rational_str.split('/')
-            seconds = int(num) / int(denom)
-        else:
-            seconds = float(rational_str)
-        frames = int(seconds * frame_rate)
+        seconds = parse_seconds(rational_str)
+        frames = int(seconds / frame_duration_seconds(frame_rate))
         return cls(frames=frames, frame_rate=frame_rate)
 
     def to_rational(self) -> str:
-        """Convert to FCPXML rational format."""
-        return f"{self.frames}/{int(self.frame_rate)}s"
+        """Convert to FCPXML rational format.
+
+        Kept unsimplified in the rate's own timebase — ``"48/24s"``, not
+        ``"2s"`` — because that is the shape Final Cut writes and what
+        downstream consumers of this writer already expect. At 23.98 the
+        timebase is 24000, so 24 frames is ``"24024/24000s"``.
+        """
+        duration = frame_duration_seconds(self.frame_rate)
+        return f"{self.frames * duration.numerator}/{duration.denominator}s"
 
     def to_time_value(self) -> TimeValue:
         """Convert to TimeValue for rational math."""
-        return TimeValue(self.frames, int(self.frame_rate))
+        return TimeValue._from_frames(self.frames, self.frame_rate)
 
 
 # ============================================================================

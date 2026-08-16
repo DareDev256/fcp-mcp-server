@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .models import TimeValue
+from .rational import frame_duration_attr, nominal_fps
 from .writer import (
     _create_asset_element,
     _sanitize_xml_value,
@@ -246,7 +247,7 @@ def apply_template(
             )
 
     # Build FCPXML
-    fps_int = int(fps)
+    fps_int = nominal_fps(fps)
     root = ET.Element('fcpxml', version='1.13')
     resources = ET.SubElement(root, 'resources')
 
@@ -255,7 +256,7 @@ def apply_template(
     ET.SubElement(resources, 'format',
                   id=format_id,
                   name=f"FFVideoFormat1080p{fps_int}",
-                  frameDuration=f"1/{fps_int}s",
+                  frameDuration=frame_duration_attr(fps),
                   width="1920", height="1080")
 
     # Create assets for each filled slot
