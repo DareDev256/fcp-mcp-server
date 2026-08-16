@@ -6,6 +6,7 @@ import re
 import pytest
 
 import server
+from fcpxml.mcp_compat import tool_input_schema
 
 
 class TestGroupDispatch:
@@ -103,9 +104,10 @@ class TestGroupTool:
 
         assert tool.name == "inspect"
         assert any(action in tool.description for action in actions)
-        assert tool.inputSchema["properties"]["action"]["enum"] == actions
-        assert tool.inputSchema["required"] == ["action"]
-        assert tool.inputSchema["properties"]["args"]["type"] == "object"
+        schema = tool_input_schema(tool)
+        assert schema["properties"]["action"]["enum"] == actions
+        assert schema["required"] == ["action"]
+        assert schema["properties"]["args"]["type"] == "object"
 
 
 class TestGroupCoverage:
@@ -190,7 +192,7 @@ class TestLegacyGating:
 
         def size(ts):
             return len(json.dumps(
-                [{"n": t.name, "d": t.description, "s": t.inputSchema} for t in ts]
+                [{"n": t.name, "d": t.description, "s": tool_input_schema(t)} for t in ts]
             ))
 
         assert size(grouped) < size(legacy) * 0.35, (

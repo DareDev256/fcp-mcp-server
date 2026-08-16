@@ -21,6 +21,8 @@ negative lanes below, per FCPXML's magnetic-timeline semantics
 
 from html import escape
 
+from .rational import fcp_frame_rate_name
+
 # Distinct hues per lane so connected clips (B-roll, titles, connected audio)
 # read as separate layers from each other and from the spine.
 _LANE_COLORS = [
@@ -181,7 +183,7 @@ def render_timeline_html(timeline) -> str:
 <h1>{escape(str(timeline.name))}</h1>
 <div class="meta">
   {_clip_summary(len(timeline.clips), len(connected), len(lanes))} &#183;
-  {total:.2f}s &#183; {timeline.width}&#215;{timeline.height} @ {timeline.frame_rate:.2f}fps
+  {total:.2f}s &#183; {timeline.width}&#215;{timeline.height} @ {fcp_frame_rate_name(timeline.frame_rate)}fps
 </div>
 {above_html}
 {spine_html}

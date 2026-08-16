@@ -83,3 +83,48 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+  # The 2.x API has to be tested too, for the same reason the floor does.
+  # mcp 2.0 removed the low-level decorator API this server was built on, and
+  # the breakage was total: every 2.x install failed at import. The pin that
+  # unbroke it also made the 2.x path untested, so it could rot silently the
+  # whole time it was pinned away. fcpxml/mcp_compat.py registers against
+  # whichever API is present; this job is what keeps that claim honest.
+  #
+  # The floor job above and this one are the two ends of the supported range.
+  # The matrix jobs cover whatever is latest, which is neither.
+  mcp-2x:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg (media intelligence integration tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,intelligence]"
+
+      - name: Install mcp 2.x
+        run: pip install "mcp>=2.0.0"
+
+      # A silent fallback to 1.x would make this job green while testing
+      # nothing, which is the exact failure mode it exists to prevent.
+      - name: Assert the 2.x API is what got installed
+        run: |
+          python -c "
+          from fcpxml.mcp_compat import MCP_API_VERSION
+          import importlib.metadata as m
+          print('mcp', m.version('mcp'), '->', MCP_API_VERSION)
+          assert MCP_API_VERSION == '2.x', 'expected the 2.x Server API'
+          "
+
+      - name: Run tests
+        run: pytest tests/ -v

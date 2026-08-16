@@ -2,7 +2,49 @@
 
 ## [Unreleased]
 
+### Changed
+
+**The `mcp<2.0.0` pin is gone; the server runs on both SDK generations.**
+(issue #9) `mcp` 2.0.0 shipped on 2026-07-28 and removed the low-level `Server`
+decorator API this project was built on — all six of `list_resources`,
+`read_resource`, `list_prompts`, `get_prompt`, `list_tools` and `call_tool`.
+Every 2.x install failed at import with `AttributeError: 'Server' object has no
+attribute 'list_resources'`, taking six test modules down during collection.
+v0.13.2 pinned the ceiling to unbreak installs, which fixed the crash and made
+the 2.x path untested for as long as the pin held.
+
+`fcpxml/mcp_compat.py` now registers the same six handler functions against
+whichever API the installed SDK exposes — decorators on 1.x, and
+`add_request_handler` on 2.x with adapters that unpack `(ctx, params)` and wrap
+the return in a Result model. The handler bodies keep their 1.x shape, so there
+is still one implementation of each rather than two. Detection is by attribute
+probe, not version string, so a fork or a pre-release that restores the
+decorators is judged by what it exposes.
+
+Two further 2.x breaks the migration issue had not caught, both from fields
+renamed to snake_case while keeping the old spelling as a *serialisation* alias
+— so building with `inputSchema=` still worked while reading `.inputSchema`
+raised:
+
+- `Tool.inputSchema` → `input_schema`. This one was a live product break, not
+  just a test break: it took out the missing-argument help path, turning a
+  recoverable "you forgot `media_path`" into an unhandled exception, while
+  every tool definition kept constructing fine.
+- `TextResourceContents.mimeType` → `mime_type`.
+
+`tool_input_schema()` and `resource_mime_type()` read either spelling.
+
+Verified by a real stdio handshake against both SDKs — initialize, list_tools,
+list_prompts, call_tool and a `preview://` read all return byte-identical
+output on mcp 1.28.1 and mcp 2.0.0. The full suite passes on both, and CI now
+runs a `mcp-2x` job alongside the existing floor job, asserting it actually got
+the 2.x API rather than silently falling back and going green on nothing.
+
 ### Fixed
+
+**`analyze_timeline` and the preview render printed `23.976023976023978fps`.**
+Surfaced by the stdio smoke test above. Frame rates now display as the name
+Final Cut uses — `23.98`, `29.97` — via `fcp_frame_rate_name`.
 
 **Every broadcast frame rate was arithmetic on the wrong timebase.** (issue #17)
 `TimeValue` built its denominators with `int(fps)`. `int(23.976)` is 23, so

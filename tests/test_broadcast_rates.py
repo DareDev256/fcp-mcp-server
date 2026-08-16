@@ -406,3 +406,34 @@ class TestXmemlExportAtBroadcastRates:
         assert _to_frames(2.0, 23.976) == 48
         assert _to_frames(1.0, 29.97) == 30
         assert _to_frames(2.0, 24) == 48
+
+
+class TestFrameRateDisplay:
+    """23.976023976023978fps is not a frame rate anyone writes down."""
+
+    def test_analyze_timeline_prints_the_enum_name(self):
+        import asyncio
+
+        import server as server_module
+
+        result = asyncio.run(
+            server_module.call_tool(
+                "inspect",
+                {
+                    "action": "analyze_timeline",
+                    "args": {"filepath": "examples/music-video.fcpxml"},
+                },
+            )
+        )
+        text = result[0].text
+        assert "23.98fps" in text
+        assert "23.976023976" not in text
+
+    def test_preview_render_prints_the_enum_name(self):
+        from fcpxml.parser import FCPXMLParser
+        from fcpxml.preview import render_timeline_html
+
+        tl = FCPXMLParser().parse_file("examples/music-video.fcpxml").primary_timeline
+        html = render_timeline_html(tl)
+        assert "23.98fps" in html
+        assert "23.976023976" not in html

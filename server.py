@@ -32,6 +32,7 @@ from mcp.types import (
 
 from fcpxml.diff import compare_timelines
 from fcpxml.export import DaVinciExporter
+from fcpxml.mcp_compat import register_handlers, tool_input_schema
 from fcpxml.media_intel import (
     detect_beats,
     detect_silence,
@@ -50,6 +51,7 @@ from fcpxml.models import (
 )
 from fcpxml.parser import FCPXMLParser
 from fcpxml.preview import render_timeline_html
+from fcpxml.rational import fcp_frame_rate_name
 from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.templates import ClipSpec, apply_template, list_templates
 from fcpxml.transcribe import (
@@ -828,7 +830,6 @@ def parse_transcript_timestamps(text: str) -> list[dict]:
 # MCP RESOURCES — File discovery
 # ============================================================================
 
-@server.list_resources()
 async def list_resources() -> list[Resource]:
     """Expose discovered FCPXML files as MCP resources."""
     files = find_fcpxml_files(PROJECTS_DIR)
@@ -870,7 +871,6 @@ def _uri_to_path(uri: str, scheme: str) -> str:
     return unquote(uri.removeprefix(scheme))
 
 
-@server.read_resource()
 async def read_resource(uri: str) -> str | list[ReadResourceContents]:
     """Read an FCPXML file and return a summary."""
     raw = str(uri)
@@ -898,7 +898,7 @@ async def read_resource(uri: str) -> str | list[ReadResourceContents]:
 
     return f"""FCPXML Project: {tl.name}
 Duration: {format_duration(tl.duration.seconds)}
-Resolution: {tl.width}x{tl.height} @ {tl.frame_rate}fps
+Resolution: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 Clips: {tl.total_clips}
 Markers: {len(tl.markers)}
 Cuts/min: {tl.cuts_per_minute:.1f}
@@ -909,7 +909,6 @@ Path: {filepath}"""
 # MCP PROMPTS — Pre-built workflows
 # ============================================================================
 
-@server.list_prompts()
 async def list_prompts() -> list[Prompt]:
     return [
         Prompt(
@@ -963,7 +962,6 @@ For example: `inspect` with action `analyze_timeline` and args {"filepath": "...
 """
 
 
-@server.get_prompt()
 async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> GetPromptResult:
     args = arguments or {}
     filepath = args.get("filepath", "<path to your .fcpxml file>")
@@ -2004,7 +2002,6 @@ def _legacy_tools_enabled() -> bool:
     }
 
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     tools = [_group_tool(name) for name in TOOL_GROUPS]
     if _legacy_tools_enabled():
@@ -2183,7 +2180,7 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
 
 ## Overview
 - **Duration**: {format_duration(tl.duration.seconds)}
-- **Resolution**: {tl.width}x{tl.height} @ {tl.frame_rate}fps
+- **Resolution**: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 
 ## Clip Statistics
 - **Total Clips**: {tl.total_clips}
@@ -4509,7 +4506,7 @@ def _action_param_help(action: str | None) -> str:
     if not action:
         return ""
     if _ACTION_SCHEMAS is None:
-        _ACTION_SCHEMAS = {t.name: (t.inputSchema or {}) for t in _legacy_tool_list()}
+        _ACTION_SCHEMAS = {t.name: tool_input_schema(t) for t in _legacy_tool_list()}
     schema = _ACTION_SCHEMAS.get(action)
     if schema is None:
         return ""
@@ -4527,7 +4524,6 @@ def _action_param_help(action: str | None) -> str:
     return f"'{action}' accepts:\n" + "\n".join(lines)
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     handler = TOOL_HANDLERS.get(name)
     if not handler and name not in TOOL_GROUPS:
@@ -4550,6 +4546,24 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
         return _text_result(f"{msg}\n\n{help_text}" if help_text else msg)
     except Exception as e:
         return _text_result(f"Error: {type(e).__name__}")
+
+
+# ============================================================================
+# HANDLER REGISTRATION
+# ============================================================================
+
+# Registered here rather than by decorator: mcp 2.0 removed the decorator API
+# entirely (issue #9). register_handlers detects which API the installed SDK
+# exposes and wires the same six functions either way — see fcpxml/mcp_compat.
+register_handlers(
+    server,
+    list_resources=list_resources,
+    read_resource=read_resource,
+    list_prompts=list_prompts,
+    get_prompt=get_prompt,
+    list_tools=list_tools,
+    call_tool=call_tool,
+)
 
 
 # ============================================================================

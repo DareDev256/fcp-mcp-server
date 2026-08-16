@@ -39,11 +39,13 @@ dependencies = [
     # there is deliberately no try/except fallback — degrading to text/plain
     # would silently break the timeline preview instead of failing loudly.
     #
-    # Upper bound 2.0.0: mcp 2.0.0 (2026-07-28) removed the low-level Server
-    # decorator API (list_tools/call_tool/list_resources/read_resource/
-    # list_prompts/get_prompt) that server.py is built on, replaced by
-    # add_request_handler. Lift this only alongside the 2.x migration (issue #9).
-    "mcp>=1.3.0,<2.0.0",
+    # No upper bound. mcp 2.0.0 (2026-07-28) removed the low-level Server
+    # decorator API this server was built on; fcpxml/mcp_compat.py registers
+    # against whichever API the installed SDK exposes, and CI runs the full
+    # suite on both the declared floor and 2.x (issue #9). Restore a ceiling
+    # only if a future release breaks something the shim cannot absorb — and
+    # add the failing case to tests/test_mcp_compat.py first.
+    "mcp>=1.3.0",
     "defusedxml>=0.7.1",
 ]
 

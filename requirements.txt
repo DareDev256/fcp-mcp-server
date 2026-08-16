@@ -4,9 +4,10 @@
 # in mcp 1.3.0. Older versions ImportError at startup and the client shows a
 # bare "disconnected". That type carries the text/html mime type for the
 # preview:// resource, so there is no fallback path.
-# Ceiling is 2.0.0: mcp 2.0 removed the low-level Server decorator API.
+# No ceiling: mcp 2.0 removed the low-level Server decorator API, and
+# fcpxml/mcp_compat.py registers against whichever API is installed.
 # Keep in sync with the same pin in pyproject.toml.
-mcp>=1.3.0,<2.0.0
+mcp>=1.3.0
 
 # XML Parsing
 lxml>=4.9.0

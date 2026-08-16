@@ -10,6 +10,7 @@ import pytest
 from mcp.types import ReadResourceRequest, ReadResourceRequestParams
 
 import server as server_module
+from fcpxml.mcp_compat import is_legacy_api, resource_mime_type
 from fcpxml.models import ConnectedClip, Timecode
 from fcpxml.parser import FCPXMLParser
 from fcpxml.preview import render_timeline_html
@@ -235,19 +236,35 @@ class TestRenderTimelineHTML:
 
 
 def _read_resource(uri: str):
-    """Drive the real ReadResourceRequest handler for `uri`.
+    """Drive the real registered resources/read handler for `uri`.
 
-    `method=` is passed explicitly on purpose. mcp only gained a default for it
-    after 1.3.0, so omitting it makes these tests fail with a pydantic
-    ValidationError on the oldest supported SDK while the product itself works
-    fine — exactly the kind of blind spot that let the dependency floor drift.
+    Goes through the SDK's handler registry rather than calling
+    `server_module.read_resource` directly, because the thing under test is
+    partly what the SDK does to the return value — a bare str gets stamped
+    text/plain no matter what mimeType list_resources advertised.
+
+    Both SDK generations are driven, since the registry moved: 1.x keys by
+    request *type* and hands the handler a whole Request; 2.x keys by method
+    string and hands it `(ctx, params)`. Testing only the installed one would
+    let the other rot exactly the way the decorator API did.
     """
-    handler = server_module.server.request_handlers[ReadResourceRequest]
-    request = ReadResourceRequest(
-        method="resources/read",
-        params=ReadResourceRequestParams(uri=uri),
-    )
-    return asyncio.run(handler(request)).root.contents
+    if is_legacy_api():
+        # `method=` is passed explicitly on purpose. mcp only gained a default
+        # for it after 1.3.0, so omitting it makes these tests fail with a
+        # pydantic ValidationError on the oldest supported SDK while the
+        # product itself works fine — exactly the kind of blind spot that let
+        # the dependency floor drift.
+        handler = server_module.server.request_handlers[ReadResourceRequest]
+        request = ReadResourceRequest(
+            method="resources/read",
+            params=ReadResourceRequestParams(uri=uri),
+        )
+        return asyncio.run(handler(request)).root.contents
+
+    entry = server_module.server._request_handlers["resources/read"]
+    handler = getattr(entry, "handler", entry)
+    params = ReadResourceRequestParams(uri=uri)
+    return asyncio.run(handler(None, params)).contents
 
 
 class TestPreviewResourceServesHTML:
@@ -262,7 +279,7 @@ class TestPreviewResourceServesHTML:
     def test_preview_uri_is_served_with_html_mime_type(self):
         contents = _read_resource("preview://examples/sample.fcpxml")
         assert len(contents) == 1
-        assert contents[0].mimeType == "text/html"
+        assert resource_mime_type(contents[0]) == "text/html"
         assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
 
     def test_file_uri_is_unaffected(self):
@@ -293,7 +310,7 @@ class TestResourceUriWithSpacesInFilename:
         target = self._spaced_copy(tmp_path)
         uri = "preview://" + quote(str(target))
         contents = _read_resource(uri)
-        assert contents[0].mimeType == "text/html"
+        assert resource_mime_type(contents[0]) == "text/html"
         assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
 
     def test_file_uri_percent_encoded_space_resolves(self, tmp_path):
@@ -334,7 +351,7 @@ class TestResourceUriWithSpacesInFilename:
         previews = [r for r in resources if str(r.uri).startswith("preview://")]
         assert previews, "expected a preview:// resource for the percent-named file"
         contents = _read_resource(str(previews[0].uri))
-        assert contents[0].mimeType == "text/html"
+        assert resource_mime_type(contents[0]) == "text/html"
         assert contents[0].text.lstrip().startswith("<!DOCTYPE html>")
         assert "File not found" not in contents[0].text
 
