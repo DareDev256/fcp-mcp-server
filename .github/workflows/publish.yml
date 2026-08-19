@@ -44,7 +44,12 @@ jobs:
       # Fail before upload if the tag and the packaged version disagree —
       # otherwise `git tag v0.17.0` on a tree still saying 0.16.0 silently
       # re-uploads the old version and PyPI rejects it as a duplicate.
+      # Only meaningful for a tag push: on workflow_dispatch GITHUB_REF_NAME is
+      # the branch name, so comparing it to the packaged version would always
+      # fail. Skipped there rather than made lenient, so the tag path keeps a
+      # hard assertion.
       - name: Tag must match packaged version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           tag="${GITHUB_REF_NAME#v}"
           built=$(ls dist/*.tar.gz | sed -E 's/.*-([0-9][^-]*)\.tar\.gz/\1/')
