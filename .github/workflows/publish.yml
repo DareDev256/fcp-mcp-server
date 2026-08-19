@@ -1,0 +1,55 @@
+name: Publish
+
+# Pushing a v* tag is what releases. Until this existed the upload was a manual
+# `twine upload` run from a laptop, and v0.16.0 proved how that fails: the git
+# tag and the GitHub release were both cut on 2026-08-16, so the release looked
+# done from every surface a human checks, while PyPI kept serving 0.15.0 —
+# which still pinned `mcp<2.0.0` and held every installer on the old SDK for
+# two weeks. The tag is now the single trigger, so the two cannot drift.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # Re-run the suite against the tag rather than trusting the run from whatever
+  # commit main was on. A tag can point anywhere.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,intelligence,transcribe]"
+      - run: python -m pytest -q
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Trusted publishing (OIDC) — no API token stored in repo secrets.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install build twine
+      - run: python -m build
+
+      # Fail before upload if the tag and the packaged version disagree —
+      # otherwise `git tag v0.17.0` on a tree still saying 0.16.0 silently
+      # re-uploads the old version and PyPI rejects it as a duplicate.
+      - name: Tag must match packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          built=$(ls dist/*.tar.gz | sed -E 's/.*-([0-9][^-]*)\.tar\.gz/\1/')
+          echo "tag=$tag packaged=$built"
+          test "$tag" = "$built"
+
+      - run: twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
