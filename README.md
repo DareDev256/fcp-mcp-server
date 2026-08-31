@@ -8,8 +8,6 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP%20SDK-1.3%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
 [![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![Tests](https://img.shields.io/badge/tests-1337_passing-brightgreen.svg)](#testing)
-[![Suites](https://img.shields.io/badge/suites-30-blue.svg)](#testing)
 [![MCP Marketplace](https://img.shields.io/badge/MCP%20Marketplace-Indexed-blueviolet)](https://getlulu.dev/mcps/fcpxml-mcp-server)
 
 **Hardened for real libraries:** 182 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
@@ -593,7 +591,7 @@ Found a vulnerability? Report it privately via the repo's **Security → Report 
 | **Output suffixes** | Path separators and special characters stripped — no traversal via suffix injection |
 | **Marker types** | `completed` attribute strict-matched (`'0'`/`'1'` only) — rejects `"true"`, `"1 OR 1=1"`, whitespace-padded values |
 
-182 security-specific tests across `test_security.py` covering XXE, path traversal, sandbox root confinement (single and multi-root), resource caps (discovery walk, marker batch, inline transcript), output path anchoring, input validation, subprocess bounds, minidom hardening, JSON depth limits, role sanitization, ffmpeg parameter bounds, symlink resolution, resource-URI decoding, `preview://` rejection paths, symlinked Final Cut library media, and write-handler sandbox enforcement. Ruff `S` (bandit) rules enforced in CI — `S314`/`S320` block unsafe XML parsing, `S105` catches hardcoded passwords, `S108` flags insecure temp paths. Security events (null bytes, sandbox escapes, unhandled exceptions) are logged via Python `logging` for audit trails.
+182 security-specific tests across `test_security.py` (`pytest tests/test_security.py --collect-only -q`) covering XXE, path traversal, sandbox root confinement (single and multi-root), resource caps (discovery walk, marker batch, inline transcript), output path anchoring, input validation, subprocess bounds, minidom hardening, JSON depth limits, role sanitization, ffmpeg parameter bounds, symlink resolution, resource-URI decoding, `preview://` rejection paths, symlinked Final Cut library media, and write-handler sandbox enforcement. Ruff `S` (bandit) rules enforced in CI — `S314`/`S320` block unsafe XML parsing, `S105` catches hardcoded passwords, `S108` flags insecure temp paths. Security events (null bytes, sandbox escapes, unhandled exceptions) are logged via Python `logging` for audit trails.
 
 ---
 
@@ -676,7 +674,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1199 tests across 27 suites (1195 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
+`pytest --collect-only -q` collects 1,343 tests across the 30 files in `tests/` (a handful skip without ffmpeg or Final Cut Pro present), covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
 
 ---
 
