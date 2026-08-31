@@ -760,7 +760,7 @@ PRs welcome. If you're a video editor who codes (or a coder who edits), let's bu
 
 ## Credits
 
-Built by [@DareDev256](https://github.com/DareDev256) — former music video director (350+ videos), now building AI tools for creators.
+Built by [@DareDev256](https://github.com/DareDev256) — former music video director, now building AI tools for creators.
 
 ## License
 
