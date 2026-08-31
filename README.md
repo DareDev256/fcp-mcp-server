@@ -530,7 +530,7 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1199 tests across 27 suites (1195 pass, 4 skip without ffmpeg/FCP)
+├── tests/                 1,343 tests across 30 files (a few skip without ffmpeg/FCP)
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
