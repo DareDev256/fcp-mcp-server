@@ -279,6 +279,39 @@ import, and selects-reel assembly.
 | `find_shots` | Natural-language query → ranked shots with source paths and exact timecodes. |
 | `find_to_timeline` | Same query, but assemble the hits directly into a selects reel via the existing `rough_cut` path. |
 
+**`find` is a ROUTER, not an indexer.** Google shipped agentic video
+understanding in Gemini on 2026-09-01: rather than ingesting media at a fixed
+frame rate, the model decides what to watch, at what speed, and through which
+modality — frames, audio, or transcript — fetching only the moments it needs.
+Reported: up to 66% lower cost, up to 88% fewer tokens, and *higher* accuracy.
+
+That is a direct verdict on the first draft of this layer, which said "caption
+every shot, embed, index." Uniform ingestion is exactly the static processing
+being deprecated, and on a 2TB shoot it is hours of compute spent captioning
+footage no query will ever reach.
+
+The revision costs nothing to build, because the cheap modalities are already
+in the index. `find_shots` reads them in ascending order of cost and stops as
+soon as the query is answered:
+
+1. **Transcript text** — free, already stored. Most queries about an interview
+   or a podcast terminate here.
+2. **Scene and analysis metadata** — shot boundaries, beats, silences. Narrows
+   a query to candidate windows without decoding a frame.
+3. **Frames, via the VLM** — only for the windows that survive step 2, and only
+   when the query is genuinely visual.
+
+An hour of footage becomes on the order of a dozen VLM calls instead of several
+hundred. `find_index` stops being a mandatory up-front pass and becomes an
+optional warm-up. Every result states which tier answered it, because a hit
+from transcript text and a hit from frame analysis are different kinds of
+evidence and must not read the same.
+
+`preview_check` (Layer 2) is already an instance of this pattern — it fetches
+one narrow window through exactly two modalities rather than ingesting the
+timeline. The Gemini announcement names the principle the codebase had
+stumbled into; this makes it the rule for the whole layer.
+
 The model runs locally through `mlx-vlm` on Apple silicon (InternVL3 / Qwen-VL class),
 under the `find` extra. No frames, captions, embeddings or media ever leave the
 machine. The model identifier is configuration, not a hard-coded constant, so the
@@ -474,9 +507,16 @@ ships, so that real usage informs them rather than this document's guesses.
    rather than per frame, and an explicit up-front estimate before it starts.
 4. **Refactor regression in Layer 0.** Mitigation: the public tool surface is asserted
    identical before and after, and Layer 0 ships with no behavioural change at all.
-5. **`video-use` grows an FCPXML writer itself.** Seven commits, ~2.4k lines, moving
+5. **Hosted agentic video understanding outruns the local tier.** Gemini's
+   API does this today at a cost and accuracy the local path will not match.
+   Mitigation: keep the routing policy — which is the actual value — provider
+   agnostic, so a Gemini backend can slot in beside `mlx-vlm` as an opt-in that
+   states plainly that frames leave the machine, exactly as the Scribe
+   transcription backend does. Local stays the default; the promise that
+   nothing leaves the machine is only worth anything if it holds by default.
+6. **`video-use` grows an FCPXML writer itself.** Seven commits, ~2.4k lines, moving
    fast. Mitigation: an FCPXML writer that survives real libraries is years of format
    depth, not a weekend — but the window is open now, so ship `import_edl_json` in
    v0.17.0 rather than holding it for v0.19.0.
-6. **Apple changes FCPXML or the import event.** Mitigation: unchanged — validate
+7. **Apple changes FCPXML or the import event.** Mitigation: unchanged — validate
    against the DTDs shipped inside the app bundle, which remain the only real spec.
