@@ -31,6 +31,7 @@ expensive to undo.
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
 | `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
 | `watch` | Close the round-trip: notice the operator's Cmd-E export and diff it against the last one. |
+| `index` | The analysis cache. `index_status` says how old it is; `index_build` warms every source in a timeline; `index_clear` drops it. Nothing depends on it. |
 
 Every call takes `{"action": "...", "args": {...}}`. If you pass an action the
 group does not own, the error lists the valid ones — read it rather than
