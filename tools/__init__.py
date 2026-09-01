@@ -79,11 +79,13 @@ def _register_all() -> None:
     """
     from tools import index as _idx
     from tools import preview as _preview
+    from tools import scenes as _scenes
     from tools import watch as _watch
 
     register_group("preview", _preview.DESCRIPTION, _preview.ACTIONS)
     register_group("watch", _watch.DESCRIPTION, _watch.ACTIONS)
     register_group("index", _idx.DESCRIPTION, _idx.ACTIONS)
+    register_group("scenes", _scenes.DESCRIPTION, _scenes.ACTIONS)
 
 
 _register_all()
