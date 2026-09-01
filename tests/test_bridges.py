@@ -30,7 +30,16 @@ def test_probe_returns_true_when_something_is_listening():
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port = listener.getsockname()[1]
-    threading.Thread(target=listener.accept, daemon=True).start()
+
+    def accept_once():
+        # Swallow the OSError from close() below; leaking it out of the thread
+        # makes pytest warn, and the warning is about the test, not the code.
+        try:
+            listener.accept()
+        except OSError:
+            pass
+
+    threading.Thread(target=accept_once, daemon=True).start()
     try:
         assert bridges.probe(port=port, timeout=2.0) is True
     finally:
