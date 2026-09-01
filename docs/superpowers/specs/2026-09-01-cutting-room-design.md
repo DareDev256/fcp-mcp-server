@@ -163,6 +163,17 @@ New tool group. Gives the loop eyes.
 | `preview_sheet` | Extract one representative frame per cut and tile them into a contact sheet. Reads a cut's rhythm at a glance for a fraction of the render cost. |
 | `preview_timeline` | Text timeline rendered for the terminal: spine and lanes, cut positions, durations, markers. Recomputed and reprinted after each write when auto-preview is on. |
 | `preview_frame` | Single frame at a given timeline position. |
+| `preview_check` | Filmstrip **plus audio waveform** across a time range, sampled from the **source media**, with word labels from the transcript where one exists. The verification instrument for a specific cut. |
+
+**Why `preview_check` is separate from `preview_render`.** `preview.py` today draws
+coloured blocks from the XML — a picture of what we *wrote*, not of what the media
+*looks like*. `fix_flash_frames` and `remove_media_silence` are therefore currently
+verified by re-parsing our own output, which is precisely the failure mode the project's
+own rule names: a check that cannot see the failure certifies nothing. `preview_check`
+reads the media. Borrowed directly from `browser-use/video-use`, which renders a
+filmstrip + waveform + word-label PNG at every cut boundary and looks at it before
+showing the user anything. We already shell ffmpeg as a bounded subprocess in
+`media_intel.py`, so this adds no dependency.
 
 **Compilation rules.** The filtergraph is built from the same `TimeValue` rationals the
 writer uses, so preview timing is exact rather than approximate. Connected clips on
@@ -241,6 +252,20 @@ already owns exactly this kind of 1.x/2.x divergence and gains one more probe.
 
 ### Layer 4 — the moat
 
+**`transcript` extensions** — the reading surface, not just the data.
+
+- `transcript_pack` — collapse N sources into a single packed markdown view, phrase
+  lines broken on silence >= 0.5s or speaker change, each prefixed `[start-end] S0`.
+  `video-use` gets an entire multi-take shoot into roughly 12KB this way, which is what
+  makes a model able to *reason over the whole shoot* rather than one file at a time.
+  Our `transcribe.py` is per-file spans with no packed multi-source view.
+- **Diarization and audio events.** An optional ElevenLabs Scribe backend alongside the
+  local faster-whisper default, adding speaker labels and audio events — `(laughter)`,
+  `(applause)`, `(sigh)`. Those are cut signals, not decoration: they feed
+  `auto_rough_cut` and `detect_beats` directly. The local backend stays the default and
+  the only one that requires no network; Scribe is opt-in and states plainly that audio
+  leaves the machine.
+
 **`scenes`** — shot-boundary detection. PySceneDetect 0.7 as the default detector
 (content and adaptive modes), with TransNetV2 as an optional heavier backend for hard
 content. Results land in `analysis` as `kind='scene'`. Feeds `preview_sheet`, marker
@@ -266,6 +291,23 @@ AI-assembled cuts. `tests/test_diversity.py` already encodes the idea as a test;
 promotes it to an enforced constraint in the assembly path — a configurable minimum
 separation between reuses of the same source, and a similarity ceiling between adjacent
 shots once embeddings exist. Assemblies report their diversity score.
+
+### Layer 4b — the EDL bridge
+
+New action on `generate`: **`import_edl_json`** — read an `edl.json` of the shape
+`browser-use/video-use` emits and author a real FCPXML from it.
+
+This is small (`writer.py` already does the hard part) and it is the sharpest wedge in
+this document. `video-use` is a Claude Code skill with ffmpeg helpers whose pipeline
+terminates at `render.py` -> `final.mp4`. It never touches an NLE. It solves the half we
+skip; we solve the half it skips. The bridge means its reasoning can finish *in Final
+Cut Pro* instead of dead-ending in a flat file — which is the only outcome that works
+for anyone who has to deliver a project file rather than a video. Every colorist and
+finishing editor is in that bucket.
+
+Deliberately **not** copied from `video-use`: the Manim/Remotion overlay machinery
+(Final Cut does titles better) and the render loop generally. Burning subtitles and
+grades into pixels is the opposite of what an FCPXML round-trip exists to preserve.
 
 ### Layer 5 — organization and trust
 
@@ -365,7 +407,7 @@ established style, and CI keeps running against both the declared `mcp` floor an
 |---|---|
 | 0 | Group/action resolution unchanged; `TimeValue` unification proven by round-tripping all six broadcast rates including the NTSC-fractionals; public tool surface byte-identical before and after the split. |
 | 1 | Watch fires on a real file write; diff correctness against a known pair; bridge probe returns *unavailable* cleanly with nothing listening; polling fallback exercised with `watchdog` absent. |
-| 2 | Filtergraph is asserted against expected output for known timelines, including lanes and transitions; render is skipped without ffmpeg; a rendered proxy's actual duration is read back from the file and compared against the timeline's rational duration — not merely that a file exists and not by its byte count. |
+| 2 | Filtergraph is asserted against expected output for known timelines, including lanes and transitions; render is skipped without ffmpeg; a rendered proxy's actual duration is read back from the file and compared against the timeline's rational duration — not merely that a file exists and not by its byte count. `preview_check` proven by a mutation test: introduce a flash frame, confirm the emitted filmstrip differs — an instrument that reads identically on a good and a bad cut is rejected. |
 | 3 | Whole suite passes twice, once with the index disabled, proving the cache is never load-bearing. Invalidation asserted by mutating mtime. Progress notifications asserted on both SDK versions. |
 | 4 | Scene detection against a fixture with known cuts; `find` fallback path with the extra absent; diversity constraint proven by a mutation test — remove the constraint and a redundancy assertion must go red. |
 | 5 | Journal append/replay; undo restores a byte-identical prior file; the review gate is proven by a mutation test — delete the gate and a `deliver`-without-preview test must fail. |
@@ -379,12 +421,15 @@ suite green is not a guard.
 
 Three releases, each usable on its own.
 
-**v0.17.0 — the loop.** Layer 0, Layer 1, Layer 2.
+**v0.17.0 — the loop.** Layer 0, Layer 1, Layer 2, plus Layer 4b (`import_edl_json`,
+which is small and unblocks the `video-use` bridge immediately).
 Ships when: an operator can prompt an edit, see a rendered proxy beside the terminal,
+**confirm a flash-frame fix from a `preview_check` image rather than from the XML**,
 push it into Final Cut Pro, export, and have the change detected and diffed — without
 opening a file browser.
 
-**v0.18.0 — speed and sight.** Layer 3, Layer 4 `scenes`.
+**v0.18.0 — speed and sight.** Layer 3, Layer 4 `scenes`, `transcript_pack` and the
+optional diarization backend.
 Ships when: the second prompt on a project returns in well under a second, and every
 operation over two seconds streams progress.
 
@@ -429,5 +474,9 @@ ships, so that real usage informs them rather than this document's guesses.
    rather than per frame, and an explicit up-front estimate before it starts.
 4. **Refactor regression in Layer 0.** Mitigation: the public tool surface is asserted
    identical before and after, and Layer 0 ships with no behavioural change at all.
-5. **Apple changes FCPXML or the import event.** Mitigation: unchanged — validate
+5. **`video-use` grows an FCPXML writer itself.** Seven commits, ~2.4k lines, moving
+   fast. Mitigation: an FCPXML writer that survives real libraries is years of format
+   depth, not a weekend — but the window is open now, so ship `import_edl_json` in
+   v0.17.0 rather than holding it for v0.19.0.
+6. **Apple changes FCPXML or the import event.** Mitigation: unchanged — validate
    against the DTDs shipped inside the app bundle, which remain the only real spec.
