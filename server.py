@@ -73,7 +73,7 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.16.0"
+__version__ = "0.18.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -1089,7 +1089,9 @@ Please:
 # ============================================================================
 
 def _legacy_tool_list() -> list[Tool]:
-    """The original 62 flat tools. Still dispatchable; advertised only on opt-in."""
+    """The flat tool schemas (the original 62 plus transcript_pack). Still
+    dispatchable; advertised only on opt-in. Operations born as group actions
+    (preview, watch, index, scenes) have no flat schema."""
     return [
         # ===== READ TOOLS =====
         Tool(
@@ -2020,7 +2022,7 @@ def _legacy_tool_list() -> list[Tool]:
 
 
 def _legacy_tools_enabled() -> bool:
-    """Advertise the original 62 flat tools alongside the groups.
+    """Advertise the flat tool schemas alongside the groups.
 
     Off by default so new users pay only the small schema cost. Existing configs
     that call flat tool names keep working either way, because call_tool
@@ -4564,8 +4566,9 @@ TOOL_HANDLERS = {
 # GROUPED TOOL FACADE
 #
 # 62 flat tools cost ~9,000 tokens of schema in every conversation before the
-# user types anything. These 7 groups (inspect, diagnose, edit, mark,
-# generate, transcript, deliver) advertise the same capability for a
+# user types anything. These groups (inspect, diagnose, edit, mark, generate,
+# transcript, deliver here; preview, watch, index, scenes registered from
+# tools/) advertise the same capability for a
 # fraction of that. They dispatch straight into TOOL_HANDLERS, so behaviour is
 # identical and every legacy tool name keeps working whether or not it is
 # advertised in list_tools.

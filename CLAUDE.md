@@ -2,17 +2,34 @@
 
 ## What This Is
 
-MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 9 grouped tools (`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`, `preview`, `watch`) are advertised by default, dispatching into 72 underlying operations for timeline analysis, batch editing, QC, generation, multi-track support, media relink, NLE export, transcript-based editing (local Whisper), and LIVE FCP control (push_to_fcp / list_fcp_libraries via Apple events). Set `FCP_MCP_LEGACY_TOOLS=1` to advertise the flat tools alongside the groups (additive — 81 advertised tools, not 72). Reads FCPXML 1.8–1.14 (incl. `.fcpxmld` bundles with sidecar preservation), writes 1.13 by default. Dual-mode (XML + Live) direction: `docs/CAPABILITY-AUDIT-2026-06.md`.
+MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 11 grouped tools (`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`, `preview`, `watch`, `index`, `scenes`) are advertised by default, dispatching into 79 underlying operations for timeline analysis, batch editing, QC, generation, multi-track support, media relink, NLE export, transcript-based editing (local Whisper, or ElevenLabs Scribe opt-in for speakers), shot-boundary detection, and LIVE FCP control (push_to_fcp / list_fcp_libraries via Apple events). Set `FCP_MCP_LEGACY_TOOLS=1` to also advertise the 63 flat tool schemas (74 advertised in total; the 16 operations born as group actions — preview, watch, index, scenes — have no flat schema). Reads FCPXML 1.8–1.14 (incl. `.fcpxmld` bundles with sidecar preservation), writes 1.13 by default. Dual-mode (XML + Live) direction: `docs/CAPABILITY-AUDIT-2026-06.md`.
 
 ## Architecture
 
 ```
-server.py           — MCP server entry point. All 62 tool definitions, handlers, resources, prompts.
+server.py           — MCP server entry point. 63 flat tool definitions, handlers, resources, prompts.
                       Dispatch dict pattern: TOOL_HANDLERS maps tool names → async handler functions.
-TOOL_GROUPS         — 7 grouped verbs advertised by default. Dispatch into
-                      TOOL_HANDLERS, which holds all 72 flat handlers. New groups are
+TOOL_GROUPS         — 11 grouped verbs advertised by default. Dispatch into
+                      TOOL_HANDLERS, which holds all 79 handlers. New groups are
                       defined in tools/ and merged in by _merge_extra_tools().
                       Hiding a tool from list_tools does NOT stop it dispatching.
+fcpxml/index.py     — SQLite cache at ~/.fcp-mcp/index.db (FCP_MCP_INDEX=off disables;
+                      any other value is a path). A CACHE, never a source of truth:
+                      the suite runs green with it off (CI job `index-off`). Rows
+                      keyed to (path, mtime, size); a re-exported source drops its
+                      rows on the next touch. Time stored as integer num/den.
+fcpxml/progress.py  — MCP progress notifications per clip. Resolves the request
+                      context on either SDK (1.x property, 2.x contextvar set by
+                      mcp_compat) and mutes itself on the first send failure.
+fcpxml/scenes.py    — Shot boundaries. PySceneDetect ([scenes] extra) when
+                      installed, else ffmpeg's `select=gt(scene,T)`, which is
+                      coarse: red->green scores 0.0 and is missed. Results cached.
+fcpxml/transcript_pack.py — Every transcript on one page for planning a dialogue
+                      edit; sizes in BYTES, 60KB chat cap, full file on write=true.
+fcpxml/transcribe.py — backend="local" (faster-whisper, never leaves the machine)
+                      or "elevenlabs" (Scribe upload, speakers + audio events,
+                      ELEVENLABS_API_KEY in the xi-api-key header ONLY). A local
+                      cache never satisfies a diarize request — is_diarized().
 fcpxml/preview.py   — standalone HTML timeline render, served as preview://<path>.
                       Draws from the XML: shows what was WRITTEN. It cannot tell a
                       fixed cut from a broken one — use fcpxml/visual.py for that.
@@ -102,7 +119,7 @@ CI runs both on every push to main. If either fails, the commit gets an X on Git
 
 ## Testing
 
-1488 tests across 40 files (1482 pass, 6 skip without ffmpeg/FCP present; on mcp 2.x it is 1484 pass / 4 skip). Beyond the pre-existing suites, v0.17.0 adds: `test_filtergraph.py` (Timeline -> ffmpeg graph, exact Fractions at NTSC rates, the Clip/.start vs ConnectedClip/.offset distinction, transition substitution reporting), `test_render.py` (proxy render plus the artifact duration read-back and its mutation check), `test_visual.py` (filmstrip+waveform from source media, silent-source fallback, and the mutation check that caught the invisible white-on-white waveform), `test_watchfolder.py` (export detection, content digesting, bundle handling), `test_bridges.py` (loopback-only probing, session caching, describe() honesty), `test_preview_group.py` and `test_watch_group.py` (MCP wiring, UNVERIFIED labelling), `test_edl_import.py` (the real video-use schema, round-tripped against the literal from their own test file), `test_autopush.py`, and `test_tool_seam.py` (the tools/ registry, the merge guard, and the server binding). Tests use `examples/sample.fcpxml` and `examples/music-video.fcpxml` as fixture data plus inline XML and synthesised ffmpeg media. Tests create temp files and clean up after.
+1581 tests across 50 files (1574 pass, 7 skip without ffmpeg/FCP/PySceneDetect present; on mcp 2.x it is 1575 pass / 6 skip; with `FCP_MCP_INDEX=off` it is 1552 pass / 29 skip — the skips being tests OF the cache). v0.18.0 adds `test_index.py` (schema, invalidation on a touched source, corrupt-file rebuild, dir mode 700), `test_index_wiring.py` (second call skips ffmpeg/whisper; index off hits them every time), `test_index_group.py`, `test_progress.py` (both SDKs), `test_scenes.py` + `test_scenes_group.py` (synthesised colour-bar clips; real PySceneDetect when installed), `test_transcript_pack.py` + `test_transcript_pack_handler.py`, `test_transcribe_scribe.py` (urlopen patched throughout; the key-leak guard is mutation-checked), and `test_version.py`. Beyond the pre-existing suites, v0.17.0 added: `test_filtergraph.py` (Timeline -> ffmpeg graph, exact Fractions at NTSC rates, the Clip/.start vs ConnectedClip/.offset distinction, transition substitution reporting), `test_render.py` (proxy render plus the artifact duration read-back and its mutation check), `test_visual.py` (filmstrip+waveform from source media, silent-source fallback, and the mutation check that caught the invisible white-on-white waveform), `test_watchfolder.py` (export detection, content digesting, bundle handling), `test_bridges.py` (loopback-only probing, session caching, describe() honesty), `test_preview_group.py` and `test_watch_group.py` (MCP wiring, UNVERIFIED labelling), `test_edl_import.py` (the real video-use schema, round-tripped against the literal from their own test file), `test_autopush.py`, and `test_tool_seam.py` (the tools/ registry, the merge guard, and the server binding). Tests use `examples/sample.fcpxml` and `examples/music-video.fcpxml` as fixture data plus inline XML and synthesised ffmpeg media. Tests create temp files and clean up after.
 
 ## FCPXML Gotchas
 

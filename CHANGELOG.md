@@ -2,6 +2,83 @@
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-01
+
+### Added — Speed and Sight (the second call is instant, and the cuts are visible)
+- **Analysis index** — `fcpxml/index.py`, a SQLite cache at
+  `~/.fcp-mcp/index.db` (dir mode 700) holding silence spans, beats, scene
+  cuts and transcripts keyed to `(path, mtime, size)`. Time is stored as
+  integer `num/den`, converted once at the boundary with the same
+  `limit_denominator` rule the rest of the codebase applies. A re-exported
+  source drops its rows on the next touch; a corrupt or foreign file is
+  rebuilt. **It is a cache and never a source of truth**: `FCP_MCP_INDEX=off`
+  disables it and every tool still answers, only slower — the suite runs
+  under both conditions and CI now has an `index-off` job to keep that honest.
+  Measured on a 10s clip: scene detection 0.6s cold, 1ms warm.
+- **`index` tool group** — `index_status` (counts and the age of the oldest
+  row — a correct number with an expired timestamp is the failure nobody
+  catches), `index_build` (warm every source in a timeline, optional
+  transcripts, capped at 100 files), `index_clear`.
+- **Streaming progress** — `fcpxml/progress.py` sends one MCP progress
+  notification per clip from `detect_media_silence`, `transcribe_media`,
+  `transcript_pack`, every `scenes` action and `index_build`, on both the
+  1.x and 2.x SDKs (2.x has no `request_context` property; `mcp_compat` now
+  parks the request context in a contextvar around each `call_tool`). A send
+  failure mutes progress for that call rather than failing the tool.
+- **`scenes` tool group** — `detect_scenes` reports every shot boundary per
+  clip in source AND timeline time, filtered to the window of the source the
+  clip actually uses; `scenes_to_markers` drops a marker on each;
+  `scenes_split` cuts the clips there. Backends: PySceneDetect (`[scenes]`
+  extra — content or adaptive) when installed, else ffmpeg's
+  `select=gt(scene,T)`. The fallback is coarse and the report says so:
+  measured on synthetic bars, red→blue scores exactly 0.4 and red→green
+  0.0, so ffmpeg cannot see a cut between similar hues that PySceneDetect
+  finds without effort.
+- **`transcript_pack`** — the whole shoot on one page: a header per source,
+  one line per utterance in `[S-E]` form with a speaker tag when known,
+  broken on 0.5s of silence (`gap`) or a speaker change, audio events
+  inline. Chat copy is cut at 60KB on a whole-line boundary (measured in
+  bytes, not characters) with the full size stated; `write=true` saves the
+  untruncated pack as `<project>_pack.md`.
+- **ElevenLabs Scribe backend, opt-in** — `backend: "elevenlabs"` on
+  `transcribe_media`, `transcript_pack`, `edit_by_transcript` and
+  `remove_filler_words` uploads the media to `api.elevenlabs.io` (scribe_v2,
+  diarize + audio events) and adds `speaker` (S0, S1… in order of first
+  appearance) on every word plus an `events` list. The key travels in the
+  `xi-api-key` header only and a test asserts it is absent from the URL,
+  body and result — moving it into the URL makes that test red. Every result
+  built on Scribe states **"Audio left this machine"**. The default `local`
+  backend is unchanged and never makes a network call. A cached local
+  transcript never satisfies a diarize request (`is_diarized()`), so asking
+  for speakers on an already-transcribed file re-transcribes rather than
+  returning a transcript without them.
+- `[scenes]` optional extra: `scenedetect[opencv]>=0.7.0`.
+
+### Fixed
+- `server.__version__` still said 0.16.0 after the 0.17.0 cut and the MCP
+  `initialize` handshake reported it. `tests/test_version.py` now asserts it
+  matches `pyproject.toml`.
+- README's architecture block had the "mutation checks" paragraph spliced
+  into the middle of the tree; the legacy-tools count (81) was hand-typed
+  and never true (9 groups + 62 flat = 71 then, 11 + 63 = 74 now). All
+  counts in the docs are measured for this release.
+
+### Known
+- **Marker start semantics.** `FCPXMLModifier.add_marker_at_timeline` and
+  `_find_spine_clip_at_seconds` place a marker's `start` relative to the
+  clip's `offset` and ignore the clip's `start` (source in-point). Apple's
+  semantics put a marker's `start` in the clip's local time. Parser, writer,
+  preview and `examples/sample.fcpxml` all share the clip-relative
+  convention, so the round trip through this server is self-consistent, but a
+  marker written here onto a clip with a non-zero `start` lands early by that
+  amount in Final Cut Pro. `scenes_to_markers` inherits this. Slated for the
+  refactor after 0.19.0 alongside the Timecode → TimeValue unification.
+- **TransNetV2 was evaluated and not shipped.** PySceneDetect's content
+  detector found every cut on the synthetic fixtures at 0.7.1, and a second
+  model would have added a torch dependency for no measured gain on this
+  release's fixtures. Shot understanding (captions, embeddings — the `shot`
+  table already exists in the index schema) is the next layer.
+
 ## [0.17.0] - 2026-09-01
 
 ### Added — The Loop (the round-trip closes, and it has eyes)
