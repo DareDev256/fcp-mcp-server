@@ -110,7 +110,7 @@ class TestTranscriptsThroughTheIndex:
             "segments": [{"text": "hello world", "start": 0.0, "end": 1.0}],
             "words": [{"word": "hello", "start": 0.0, "end": 0.5}, {"word": "world", "start": 0.5, "end": 1.0}],
         }
-        monkeypatch.setattr(server, "transcribe", lambda p, model_size, language: calls.append(p) or data)
+        monkeypatch.setattr(server, "transcribe", lambda p, model_size, language, backend="local": calls.append(p) or data)
         first, _ = server._load_or_transcribe(media, "base", None)
         sidecar = Path(media).with_name("interview_transcript.json")
         assert sidecar.is_file()

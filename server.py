@@ -59,10 +59,14 @@ from fcpxml.rational import fcp_frame_rate_name
 from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.templates import ClipSpec, apply_template, list_templates
 from fcpxml.transcribe import (
+    BACKENDS,
     DEFAULT_FILLERS,
+    SCRIBE_KEY_ENV,
+    SCRIBE_MODEL,
     find_filler_spans,
     find_phrase_spans,
     invert_ranges,
+    is_diarized,
     merge_ranges,
     segments_to_srt,
     transcribe,
@@ -1775,6 +1779,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "clip_name": {"type": "string", "description": "Only transcribe the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size: tiny, base, small, medium, large-v3 (default base; larger = slower + more accurate)"},
                     "language": {"type": "string", "description": "ISO language code hint (e.g. 'en'); auto-detected if omitted"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "write_srt": {"type": "boolean", "default": False, "description": "Also write a _transcript.srt next to each media file (plugs into import_srt_markers)"},
                 },
                 "required": ["filepath"]
@@ -1791,6 +1796,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "mode": {"type": "string", "enum": ["remove", "keep_only"], "default": "remove", "description": "remove=cut matches out; keep_only=keep only matches"},
                     "clip_name": {"type": "string", "description": "Only edit the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "padding": {"type": "number", "default": 0.0, "description": "Seconds to widen each cut on both sides (0-2, default 0)"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _transcript_edit suffix)"},
                 },
@@ -1807,6 +1813,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "fillers": {"type": "array", "items": {"type": "string"}, "description": "Filler words/phrases to cut (default: um, uh, uhh, umm, erm, ehm, mmm, hmm, mhm)"},
                     "clip_name": {"type": "string", "description": "Only clean the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "padding": {"type": "number", "default": 0.02, "description": "Seconds to widen each cut on both sides (0-2, default 0.02)"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _defillered suffix)"},
                 },
@@ -1824,6 +1831,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "clip_name": {"type": "string", "description": "Only pack the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
                     "language": {"type": "string", "description": "ISO language code hint if transcription is needed"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "gap": {"type": "number", "default": 0.5, "description": "Seconds of silence that end an utterance (0.1-5, default 0.5)"},
                     "write": {"type": "boolean", "default": False, "description": "Also write the full, untruncated pack to <project>_pack.md next to the FCPXML"},
                 },
@@ -3708,6 +3716,11 @@ async def handle_detect_beats(arguments: dict) -> Sequence[TextContent]:
 # ===== TRANSCRIPT INTELLIGENCE (v0.13.1) =====
 
 TRANSCRIBE_MAX_MEDIA = 10
+TRANSCRIBE_BACKENDS = BACKENDS
+_EGRESS_NOTE = (
+    "- **Audio left this machine**: sent to api.elevenlabs.io (Scribe) for "
+    "speakers and audio events. The local backend never does this.\n"
+)
 
 _TRANSCRIBE_INSTALL_HINT = (
     "\n\nInstall the optional transcription extra:\n\n"
@@ -3722,7 +3735,22 @@ def _transcript_json_path(media_path: str) -> Path:
     return p.with_name(p.stem + "_transcript.json")
 
 
-def _load_or_transcribe(media_path: str, model: str, language: str | None) -> tuple[dict | None, str]:
+def _backend_arg(arguments: dict) -> str:
+    backend = arguments.get("backend", "local")
+    if backend not in TRANSCRIBE_BACKENDS:
+        raise ValueError(f"backend must be one of {', '.join(TRANSCRIBE_BACKENDS)}, got {backend!r}")
+    return backend
+
+
+def _cache_satisfies(data: dict, backend: str) -> bool:
+    """A local transcript answers a local request. A request for speakers is
+    only answered by a transcript that has them."""
+    return backend == "local" or is_diarized(data)
+
+
+def _load_or_transcribe(
+    media_path: str, model: str, language: str | None, backend: str = "local",
+) -> tuple[dict | None, str]:
     """Load a cached ``_transcript.json`` for a media file, else transcribe and cache it.
 
     Returns ``(transcript, "")`` or ``(None, reason)``. The cache makes
@@ -3733,7 +3761,8 @@ def _load_or_transcribe(media_path: str, model: str, language: str | None) -> tu
         try:
             with open(json_path) as f:
                 data = json.load(f)
-            if isinstance(data, dict) and isinstance(data.get("words"), list):
+            if isinstance(data, dict) and isinstance(data.get("words"), list) \
+                    and _cache_satisfies(data, backend):
                 return data, ""
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             pass  # unreadable cache falls through to re-transcribe
@@ -3741,10 +3770,14 @@ def _load_or_transcribe(media_path: str, model: str, language: str | None) -> tu
     if ix is not None:
         with ix:
             data = ix.get_transcript(media_path)
-        if data is not None:
+        if data is not None and _cache_satisfies(data, backend):
             return data, ""
-    result = transcribe(media_path, model_size=model, language=language)
+    result = transcribe(media_path, model_size=model, language=language, backend=backend)
     if result is None:
+        if backend == "elevenlabs":
+            if not os.environ.get(SCRIBE_KEY_ENV, "").strip():
+                return None, f"elevenlabs backend needs {SCRIBE_KEY_ENV} set in the server's environment"
+            return None, "untranscribable (api.elevenlabs.io request failed or media unreadable)"
         return None, "untranscribable (faster-whisper not installed or media unreadable)"
     out_path = _validate_output_path(str(json_path), anchor_dir=str(Path(media_path).parent))
     with open(out_path, "w") as f:
@@ -3756,7 +3789,8 @@ def _load_or_transcribe(media_path: str, model: str, language: str | None) -> tu
     return result, ""
 
 
-def _cut_transcript_spans(modifier, clip_filter, model, language, padding, spans_fn, keep_only=False):
+def _cut_transcript_spans(modifier, clip_filter, model, language, padding, spans_fn, keep_only=False,
+                          backend="local"):
     """Shared cut engine for transcript-driven editing.
 
     ``spans_fn(words) -> [(start, end), ...]`` in source seconds. Spans are
@@ -3786,7 +3820,7 @@ def _cut_transcript_spans(modifier, clip_filter, model, language, padding, spans
             if len(cache) >= TRANSCRIBE_MAX_MEDIA:
                 skipped.append((name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
                 continue
-            cache[media_path] = _load_or_transcribe(media_path, model, language)
+            cache[media_path] = _load_or_transcribe(media_path, model, language, backend)
         data, reason = cache[media_path]
         if data is None:
             skipped.append((name, reason))
@@ -3855,6 +3889,7 @@ def _transcript_cut_report(title, summary_lines, cuts_made, skipped, output_path
 async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
     model = arguments.get("model", "base")
     language = arguments.get("language")
+    backend = _backend_arg(arguments)
     write_srt = bool(arguments.get("write_srt", False))
     _, tl = _require_timeline(arguments["filepath"])
     clip_filter = arguments.get("clip_name")
@@ -3877,7 +3912,7 @@ async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
         if len(done) >= TRANSCRIBE_MAX_MEDIA:
             skipped.append((clip.name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
             continue
-        data, reason = _load_or_transcribe(media_path, model, language)
+        data, reason = _load_or_transcribe(media_path, model, language, backend)
         done[media_path] = data
         if data is None:
             skipped.append((clip.name, reason))
@@ -3899,12 +3934,15 @@ async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
             preview + ("…" if len(data.get("text", "")) > 160 else ""),
         ])
 
-    result = f"""# Media Transcription (local Whisper)
+    title = "ElevenLabs Scribe" if backend == "elevenlabs" else "local Whisper"
+    result = f"""# Media Transcription ({title})
 
 ## Summary
-- **Model**: {model}
+- **Model**: {SCRIBE_MODEL if backend == "elevenlabs" else model}
 - **Media Files Transcribed**: {len(rows)}
 """
+    if backend == "elevenlabs" and rows:
+        result += _EGRESS_NOTE
     if rows:
         result += "\n## Transcripts (saved as _transcript.json next to each media file)\n"
         result += _markdown_table(
@@ -3941,6 +3979,7 @@ async def handle_edit_by_transcript(arguments: dict) -> Sequence[TextContent]:
         raise ValueError(f"padding must be between 0 and 2 seconds, got {padding}")
     model = arguments.get("model", "base")
     language = arguments.get("language")
+    backend = _backend_arg(arguments)
 
     filepath, output_path, modifier = _setup_modifier(arguments, "_transcript_edit")
 
@@ -3951,7 +3990,7 @@ async def handle_edit_by_transcript(arguments: dict) -> Sequence[TextContent]:
 
     cuts_made, skipped = _cut_transcript_spans(
         modifier, arguments.get("clip_name"), model, language, padding,
-        spans_fn, keep_only=(mode == "keep_only"),
+        spans_fn, keep_only=(mode == "keep_only"), backend=backend,
     )
     if cuts_made:
         modifier.save(output_path)
@@ -3970,6 +4009,7 @@ async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
     filepath = arguments["filepath"]
     model = arguments.get("model", "base")
     language = arguments.get("language")
+    backend = _backend_arg(arguments)
     gap = float(arguments.get("gap", _tpack.DEFAULT_GAP))
     if not 0.1 <= gap <= 5.0:
         raise ValueError("gap must be between 0.1 and 5 seconds")
@@ -3993,7 +4033,7 @@ async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
         if len(sources) >= TRANSCRIBE_MAX_MEDIA:
             skipped.append((clip.name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
             continue
-        data, reason = _load_or_transcribe(media_path, model, language)
+        data, reason = _load_or_transcribe(media_path, model, language, backend)
         if data is None:
             skipped.append((clip.name, reason))
             continue
@@ -4025,6 +4065,8 @@ async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
     )
     if written:
         result += f"- **Written**: {written}\n"
+    if backend == "elevenlabs" and sources:
+        result += _EGRESS_NOTE
     if sources:
         result += "\n" + _tpack.truncate(full, limit=_tpack.PACK_LIMIT_BYTES)
     if skipped:
@@ -4045,12 +4087,14 @@ async def handle_remove_filler_words(arguments: dict) -> Sequence[TextContent]:
         raise ValueError(f"padding must be between 0 and 2 seconds, got {padding}")
     model = arguments.get("model", "base")
     language = arguments.get("language")
+    backend = _backend_arg(arguments)
 
     filepath, output_path, modifier = _setup_modifier(arguments, "_defillered")
 
     cuts_made, skipped = _cut_transcript_spans(
         modifier, arguments.get("clip_name"), model, language, padding,
         lambda words: merge_ranges(find_filler_spans(words, fillers)),
+        backend=backend,
     )
     if cuts_made:
         modifier.save(output_path)

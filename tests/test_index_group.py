@@ -64,7 +64,7 @@ class TestBuild:
         monkeypatch.setattr("tools.index.probe_duration", lambda p: None)
         monkeypatch.setattr(
             server, "transcribe",
-            lambda p, model_size, language: {"language": "en", "duration": 1.0, "text": "hi",
+            lambda p, model_size, language, backend="local": {"language": "en", "duration": 1.0, "text": "hi",
                                              "segments": [], "words": [{"word": "hi", "start": 0, "end": 1}]},
         )
         text = await _call("index_build", {"filepath": filepath, "with_transcript": True})

@@ -27,7 +27,7 @@ expensive to undo.
 | `edit` | Change clips: insert, delete, trim, split, reorder, retime, remove silence. |
 | `mark` | Markers and chapters, including SRT/VTT and beat import. |
 | `generate` | Build new structure: rough cuts, montages, A/B roll, templates, and `import_edl_json` from a video-use cut list. |
-| `transcript` | Transcribe locally, then edit or clean up by what was SAID. `transcript_pack` puts the whole shoot on one page — read it before planning a dialogue edit. |
+| `transcript` | Transcribe locally, then edit or clean up by what was SAID. `transcript_pack` puts the whole shoot on one page — read it before planning a dialogue edit. Every action takes `backend: "elevenlabs"` for speaker labels and audio events; that uploads the media to ElevenLabs and needs `ELEVENLABS_API_KEY` — the default `local` never leaves the machine. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
 | `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
 | `watch` | Close the round-trip: notice the operator's Cmd-E export and diff it against the last one. |
