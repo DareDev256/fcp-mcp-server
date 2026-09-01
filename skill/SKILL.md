@@ -30,6 +30,7 @@ expensive to undo.
 | `transcript` | Transcribe locally, then edit or clean up by what was SAID. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
 | `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
+| `watch` | Close the round-trip: notice the operator's Cmd-E export and diff it against the last one. |
 
 Every call takes `{"action": "...", "args": {...}}`. If you pass an action the
 group does not own, the error lists the valid ones — read it rather than
@@ -78,6 +79,10 @@ Use the media versions when correctness matters. Say which one you used.
    `preview_check` reads the media. Do not substitute one for the other, and
    do not skip it because the tool call reported success.
 5. `deliver`, either exporting or `push_to_fcp` into the running app.
+6. `watch` with action `watch_start` once per session, then `watch_pull` after
+   the operator exports. Final Cut Pro has NO programmatic export — Apple never
+   shipped one — so the loop only closes when they press Cmd-E. Say so plainly
+   rather than waiting in silence.
 
 ## Do not
 

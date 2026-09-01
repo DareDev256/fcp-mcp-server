@@ -52,6 +52,53 @@ class TimelineDiff:
         return self.total_changes > 0
 
 
+def format_diff(diff: TimelineDiff) -> str:
+    """Render a TimelineDiff as operator-readable markdown.
+
+    Lives here rather than in a handler because two callers need it: the
+    diff_timelines tool and watch_pull, which diffs each detected export
+    against the last one seen.
+    """
+    if not diff.has_changes:
+        return (
+            f"# Timeline Diff: No Changes\n\n"
+            f"**{diff.timeline_a_name}** vs **{diff.timeline_b_name}** are identical."
+        )
+
+    result = (
+        f"# Timeline Diff\n\n"
+        f"**Baseline**: {diff.timeline_a_name}\n"
+        f"**Comparison**: {diff.timeline_b_name}\n"
+        f"**Total changes**: {diff.total_changes}\n\n"
+    )
+
+    if diff.format_changes:
+        result += "## Format Changes\n\n"
+        for change in diff.format_changes:
+            result += f"- {change}\n"
+        result += "\n"
+
+    clip_changes = [d for d in diff.clip_diffs if d.action != "unchanged"]
+    if clip_changes:
+        result += "## Clip Changes\n\n| Action | Clip | Details |\n|--------|------|--------|\n"
+        for d in clip_changes:
+            result += f"| {d.action.upper()} | {d.clip_name} | {d.details} |\n"
+        result += "\n"
+
+    if diff.marker_diffs:
+        result += "## Marker Changes\n\n| Action | Marker | Details |\n|--------|--------|--------|\n"
+        for d in diff.marker_diffs:
+            result += f"| {d.action.upper()} | {d.marker_name} | {d.details} |\n"
+        result += "\n"
+
+    if diff.transition_diffs:
+        result += "## Transition Changes\n\n"
+        for change in diff.transition_diffs:
+            result += f"- {change}\n"
+
+    return result
+
+
 def _clip_identity(clip) -> Tuple[str, float]:
     """Build identity key for a clip: (name, source_start rounded to 0.01s)."""
     source_start = round(clip.source_start.seconds, 2) if clip.source_start else 0.0

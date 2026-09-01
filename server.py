@@ -30,7 +30,7 @@ from mcp.types import (
     Tool,
 )
 
-from fcpxml.diff import compare_timelines
+from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.export import DaVinciExporter
 from fcpxml.mcp_compat import register_handlers, tool_input_schema
 from fcpxml.media_intel import (
@@ -3395,46 +3395,8 @@ async def handle_diff_timelines(arguments: dict) -> Sequence[TextContent]:
     filepath_a = _validate_filepath(arguments["filepath_a"], ('.fcpxml', '.fcpxmld'))
     filepath_b = _validate_filepath(arguments["filepath_b"], ('.fcpxml', '.fcpxmld'))
 
-    diff = compare_timelines(filepath_a, filepath_b)
-
-    if not diff.has_changes:
-        return _text_result((
-            f"# Timeline Diff: No Changes\n\n"
-            f"**{diff.timeline_a_name}** vs **{diff.timeline_b_name}** are identical."
-        ))
-
-    result = (
-        f"# Timeline Diff\n\n"
-        f"**Baseline**: {diff.timeline_a_name}\n"
-        f"**Comparison**: {diff.timeline_b_name}\n"
-        f"**Total changes**: {diff.total_changes}\n\n"
-    )
-
-    if diff.format_changes:
-        result += "## Format Changes\n\n"
-        for change in diff.format_changes:
-            result += f"- {change}\n"
-        result += "\n"
-
-    clip_changes = [d for d in diff.clip_diffs if d.action != "unchanged"]
-    if clip_changes:
-        result += "## Clip Changes\n\n| Action | Clip | Details |\n|--------|------|--------|\n"
-        for d in clip_changes:
-            result += f"| {d.action.upper()} | {d.clip_name} | {d.details} |\n"
-        result += "\n"
-
-    if diff.marker_diffs:
-        result += "## Marker Changes\n\n| Action | Marker | Details |\n|--------|--------|--------|\n"
-        for d in diff.marker_diffs:
-            result += f"| {d.action.upper()} | {d.marker_name} | {d.details} |\n"
-        result += "\n"
-
-    if diff.transition_diffs:
-        result += "## Transition Changes\n\n"
-        for change in diff.transition_diffs:
-            result += f"- {change}\n"
-
-    return _text_result(result)
+    # Formatting lives in fcpxml.diff so watch_pull renders diffs identically.
+    return _text_result(format_diff(compare_timelines(filepath_a, filepath_b)))
 
 
 # ----- SOCIAL MEDIA REFORMAT HANDLER (v0.5.0) -----

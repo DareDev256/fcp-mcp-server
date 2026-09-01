@@ -78,8 +78,10 @@ def _register_all() -> None:
     Called at import. Group modules are added here as they land.
     """
     from tools import preview as _preview
+    from tools import watch as _watch
 
     register_group("preview", _preview.DESCRIPTION, _preview.ACTIONS)
+    register_group("watch", _watch.DESCRIPTION, _watch.ACTIONS)
 
 
 _register_all()
