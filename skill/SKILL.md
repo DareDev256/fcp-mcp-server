@@ -29,6 +29,7 @@ expensive to undo.
 | `generate` | Build new structure: rough cuts, montages, A/B roll, templates. |
 | `transcript` | Transcribe locally, then edit or clean up by what was SAID. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
+| `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
 
 Every call takes `{"action": "...", "args": {...}}`. If you pass an action the
 group does not own, the error lists the valid ones — read it rather than
@@ -70,9 +71,12 @@ Use the media versions when correctness matters. Say which one you used.
 1. `inspect` → `diagnose` → read the `preview://` resource.
 2. `transcript` with action `transcribe_media` if the edit is dialogue-driven.
 3. `generate` for the assembly, `edit` for the refinement, `mark` for chapters.
-4. Read `preview://` again and compare against the first render before
-   offering the edit as done. This is what makes the edit non-blind — do not
-   skip it just because the tool call reported success.
+4. `preview` with action `preview_check` over the range you changed, before
+   offering the edit as done. This is what makes the edit non-blind. The
+   `preview://` resource and `preview_timeline` both draw from the XML — they
+   show what was WRITTEN, so they cannot tell a fixed cut from a broken one.
+   `preview_check` reads the media. Do not substitute one for the other, and
+   do not skip it because the tool call reported success.
 5. `deliver`, either exporting or `push_to_fcp` into the running app.
 
 ## Do not
@@ -80,6 +84,11 @@ Use the media versions when correctness matters. Say which one you used.
 - Do not edit without a diagnose pass. Flash frames and gaps compound.
 - Do not assume ffmpeg or Whisper are installed. Both degrade gracefully and
   return nothing rather than erroring, so check the response.
+- Do not read a `preview_render` summary past the word UNVERIFIED. It means the
+  rendered file's duration could not be read back, so nothing about that render
+  has been confirmed.
+- Do not ignore a `Substituted:` line. The proxy renders transitions as hard
+  cuts, so a dissolve in the timeline is NOT what you are looking at.
 - Do not claim an edit landed in Final Cut Pro unless `push_to_fcp` was called
   and reported success. Writing an .fcpxml file is not the same as importing it.
 - Do not trust a tool's own success message as proof the timeline looks

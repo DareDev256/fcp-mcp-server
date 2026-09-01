@@ -4430,16 +4430,38 @@ TOOL_GROUPS: dict[str, dict] = {
 # The import is deliberately down here, not at the top of the file: tools/
 # group modules import fcpxml.* and tools._common, never server, but keeping
 # the import adjacent to the merge makes the dependency direction obvious.
+import sys  # noqa: E402
+
 import tools as _extra_tools  # noqa: E402
 
-for _name, _spec in _extra_tools.EXTRA_GROUPS.items():
-    if _name in TOOL_GROUPS:
-        raise RuntimeError(f"tools/ group shadows a builtin group: {_name}")
-    TOOL_GROUPS[_name] = _spec
-for _action, _handler in _extra_tools.EXTRA_HANDLERS.items():
-    if _action in TOOL_HANDLERS:
-        raise RuntimeError(f"tools/ action shadows a builtin action: {_action}")
-    TOOL_HANDLERS[_action] = _handler
+# Hand tools/ the live module object rather than letting it `import server`.
+# In production this file runs as __main__, so that import would execute a
+# second copy under a different name, with its own handler registry and its own
+# sandbox state.
+_extra_tools.bind_server(sys.modules[__name__])
+
+def _merge_extra_tools(
+    groups: dict, handlers: dict, into_groups: dict, into_handlers: dict
+) -> None:
+    """Fold tools/ groups and handlers into the server's registries.
+
+    A function rather than inline statements so the shadowing guard can be
+    tested. A guard nothing exercises is a guard nobody knows is broken.
+    """
+    for name, spec in groups.items():
+        if name in into_groups:
+            raise RuntimeError(f"tools/ group shadows a builtin group: {name}")
+    for action in handlers:
+        if action in into_handlers:
+            raise RuntimeError(f"tools/ action shadows a builtin action: {action}")
+    into_groups.update(groups)
+    into_handlers.update(handlers)
+
+
+_merge_extra_tools(
+    _extra_tools.EXTRA_GROUPS, _extra_tools.EXTRA_HANDLERS,
+    TOOL_GROUPS, TOOL_HANDLERS,
+)
 
 
 def _group_action_error(group: str, action: str | None) -> list[TextContent]:

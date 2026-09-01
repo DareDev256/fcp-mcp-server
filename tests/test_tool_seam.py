@@ -24,13 +24,69 @@ def test_every_extra_action_resolves_to_a_real_handler():
             assert action in tools.EXTRA_HANDLERS, f"{name}.{action} has no handler"
 
 
-def test_extra_groups_do_not_collide_with_builtin_groups():
-    assert not set(tools.EXTRA_GROUPS) & set(server.TOOL_GROUPS)
+BUILTIN_GROUPS = {
+    "inspect", "diagnose", "edit", "mark", "generate", "transcript", "deliver",
+}
 
 
-def test_extra_actions_do_not_collide_with_builtin_actions():
-    builtin = {a for spec in server.TOOL_GROUPS.values() for a in spec["actions"]}
-    assert not set(tools.EXTRA_HANDLERS) & builtin
+def test_the_merge_keeps_every_builtin_group():
+    """server.py folds tools/ groups in. Nothing may be displaced doing it."""
+    assert BUILTIN_GROUPS <= set(server.TOOL_GROUPS)
+
+
+def test_every_extra_group_reached_the_server_intact():
+    for name, spec in tools.EXTRA_GROUPS.items():
+        assert server.TOOL_GROUPS[name] == spec
+
+
+def test_every_extra_handler_reached_the_server():
+    for action, handler in tools.EXTRA_HANDLERS.items():
+        assert server.TOOL_HANDLERS[action] is handler
+
+
+def test_an_extra_group_may_not_shadow_a_builtin_one():
+    """The merge raises rather than overwriting. Exercise the real guard."""
+    import pytest
+
+    async def noop(args):
+        return []
+
+    into_groups = {"edit": {"description": "builtin", "actions": ["trim_clip"]}}
+    with pytest.raises(RuntimeError, match="shadows a builtin group"):
+        server._merge_extra_tools(
+            {"edit": {"description": "impostor", "actions": ["x"]}}, {},
+            into_groups, {},
+        )
+    assert into_groups["edit"]["description"] == "builtin", "must not partially apply"
+
+
+def test_an_extra_action_may_not_shadow_a_builtin_one():
+    import pytest
+
+    async def noop(args):
+        return []
+
+    into_handlers = {"trim_clip": noop}
+    with pytest.raises(RuntimeError, match="shadows a builtin action"):
+        server._merge_extra_tools({}, {"trim_clip": noop}, {}, into_handlers)
+
+
+def test_a_clean_merge_applies_both_registries():
+    async def noop(args):
+        return []
+
+    groups, handlers = {}, {}
+    server._merge_extra_tools(
+        {"newgroup": {"description": "d", "actions": ["newaction"]}},
+        {"newaction": noop}, groups, handlers,
+    )
+    assert groups["newgroup"]["actions"] == ["newaction"]
+    assert handlers["newaction"] is noop
+
+
+def test_the_server_module_is_bound():
+    """Group handlers reach server through the bound module, never an import."""
+    assert tools.server_module() is server
 
 
 def test_registering_a_duplicate_group_raises():

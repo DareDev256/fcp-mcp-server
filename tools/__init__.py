@@ -16,9 +16,42 @@ would execute a SECOND copy of the whole module under a different name. Group
 modules use tools._common instead.
 """
 
-from typing import Any, Awaitable, Callable
+from types import ModuleType
+from typing import Any, Awaitable, Callable, Optional
 
 Handler = Callable[[dict], Awaitable[list]]
+
+# The server module object, handed over by server.py at import.
+#
+# Group modules need server's helpers — _text_result, _parse_project, and the
+# sandbox-enforcing path validators. They must NOT `import server` to get them:
+# in production server.py runs as __main__, so that import would execute a
+# SECOND copy of the whole module under a different name, with its own
+# TOOL_HANDLERS and its own sandbox state. Binding the live module object
+# instead means there is exactly one, whatever it happens to be called, and the
+# security helpers are shared rather than duplicated into a copy that drifts.
+_SERVER: Optional[ModuleType] = None
+
+
+def bind_server(module: ModuleType) -> None:
+    """Hand the live server module to the group modules. Called by server.py."""
+    global _SERVER
+    _SERVER = module
+
+
+def server_module() -> ModuleType:
+    """The bound server module.
+
+    Raises rather than importing a fallback: a missing binding is a wiring bug,
+    and importing our way out of it would produce the duplicate-module state
+    this exists to prevent.
+    """
+    if _SERVER is None:
+        raise RuntimeError(
+            "tools.bind_server() was never called — the server module is not "
+            "bound, so tool handlers cannot reach its helpers."
+        )
+    return _SERVER
 
 EXTRA_GROUPS: dict[str, dict[str, Any]] = {}
 EXTRA_HANDLERS: dict[str, Handler] = {}
@@ -44,7 +77,9 @@ def _register_all() -> None:
 
     Called at import. Group modules are added here as they land.
     """
-    return
+    from tools import preview as _preview
+
+    register_group("preview", _preview.DESCRIPTION, _preview.ACTIONS)
 
 
 _register_all()
