@@ -30,6 +30,7 @@ from mcp.types import (
     Tool,
 )
 
+from fcpxml import live
 from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.export import DaVinciExporter
 from fcpxml.mcp_compat import register_handlers, tool_input_schema
@@ -2474,7 +2475,10 @@ async def handle_add_marker(arguments: dict) -> Sequence[TextContent]:
         marker_type=marker_type, note=arguments.get("note"),
     )
     modifier.save(output_path)
-    return _text_result(f"Added marker '{arguments['name']}' at {arguments['timecode']}\n\nSaved to: {output_path}")
+    return _text_result(
+        f"Added marker '{arguments['name']}' at {arguments['timecode']}\n\n"
+        f"Saved to: {output_path}" + _maybe_autopush(output_path)
+    )
 
 
 async def handle_batch_add_markers(arguments: dict) -> Sequence[TextContent]:
@@ -4204,6 +4208,35 @@ async def handle_list_fcp_libraries(arguments: dict) -> Sequence[TextContent]:
 # ============================================================================
 # TOOL DISPATCH
 # ============================================================================
+
+# Anything not in this set turns autopush ON. An UNSET variable reads as "",
+# which is in the set, so the default is OFF — repeated imports accumulate
+# library churn in Final Cut Pro, and that is the operator's call to make
+# rather than a default to inflict on them.
+_AUTOPUSH_OFF = {"", "0", "false", "no", "off"}
+
+
+def _autopush_enabled() -> bool:
+    """Whether every write should also land in the running Final Cut Pro."""
+    return os.environ.get("FCP_MCP_AUTOPUSH", "").strip().lower() not in _AUTOPUSH_OFF
+
+
+def _maybe_autopush(output_path: str) -> str:
+    """Push *output_path* into FCP when autopush is on. Returns a report line.
+
+    Never raises. The edit already succeeded and is on disk; a failed push is a
+    note about the PUSH, not a failure of the edit, and turning it into an
+    exception would lose the operator a file they already have.
+    """
+    if not _autopush_enabled():
+        return ""
+    try:
+        result = live.push_to_fcp(output_path)
+    except (RuntimeError, OSError) as exc:
+        return f"\nAutopush: not pushed — {exc}"
+    launched = " (launched Final Cut Pro)" if result.get("launched_fcp") else ""
+    return f"\nPushed to Final Cut Pro: {result.get('sent', output_path)}{launched}"
+
 
 async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
     """Author an FCPXML timeline from a video-use style edl.json cut list.
