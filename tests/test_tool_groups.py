@@ -116,7 +116,16 @@ class TestGroupCoverage:
     }
 
     def test_all_seven_groups_present(self):
-        assert set(server.TOOL_GROUPS) == self.EXPECTED_GROUPS
+        """The seven builtin groups, plus whatever tools/ registered.
+
+        server.py merges tools/ groups into TOOL_GROUPS at import, so this set
+        grows as new subsystems land. The builtin seven must all still be here:
+        a group vanishing is the regression this guards.
+        """
+        import tools
+
+        assert self.EXPECTED_GROUPS <= set(server.TOOL_GROUPS)
+        assert set(server.TOOL_GROUPS) == self.EXPECTED_GROUPS | set(tools.EXTRA_GROUPS)
 
     def test_every_handler_belongs_to_exactly_one_group(self):
         """No orphaned tool, no tool reachable from two groups."""
@@ -129,7 +138,13 @@ class TestGroupCoverage:
         assert not missing, f"handlers in no group: {sorted(missing)}"
 
     def test_group_count_is_a_real_reduction(self):
-        assert len(server.TOOL_GROUPS) <= 8
+        """A dozen verbs is still a reduction from 62 flat tools.
+
+        The cap exists so grouping does not quietly un-group itself one new
+        verb at a time. It is not a limit on capability: TOOL_HANDLERS grows
+        freely underneath.
+        """
+        assert len(server.TOOL_GROUPS) <= 12
         assert len(server.TOOL_HANDLERS) >= 62
 
 

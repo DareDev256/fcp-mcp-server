@@ -4417,6 +4417,31 @@ TOOL_GROUPS: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# tools/ package merge
+# ---------------------------------------------------------------------------
+# Groups defined in tools/ are folded into TOOL_GROUPS and TOOL_HANDLERS here,
+# rather than kept in a second registry that every call site would have to
+# consult. One source of truth means list_tools, handle_group, call_tool,
+# _action_param_help and the "valid actions" error messages all keep working
+# unchanged, and test_every_handler_belongs_to_exactly_one_group keeps its
+# meaning.
+#
+# The import is deliberately down here, not at the top of the file: tools/
+# group modules import fcpxml.* and tools._common, never server, but keeping
+# the import adjacent to the merge makes the dependency direction obvious.
+import tools as _extra_tools  # noqa: E402
+
+for _name, _spec in _extra_tools.EXTRA_GROUPS.items():
+    if _name in TOOL_GROUPS:
+        raise RuntimeError(f"tools/ group shadows a builtin group: {_name}")
+    TOOL_GROUPS[_name] = _spec
+for _action, _handler in _extra_tools.EXTRA_HANDLERS.items():
+    if _action in TOOL_HANDLERS:
+        raise RuntimeError(f"tools/ action shadows a builtin action: {_action}")
+    TOOL_HANDLERS[_action] = _handler
+
+
 def _group_action_error(group: str, action: str | None) -> list[TextContent]:
     """Reject an action while telling the caller what it should have used."""
     if group not in TOOL_GROUPS:
