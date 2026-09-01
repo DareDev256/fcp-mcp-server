@@ -27,7 +27,7 @@ expensive to undo.
 | `edit` | Change clips: insert, delete, trim, split, reorder, retime, remove silence. |
 | `mark` | Markers and chapters, including SRT/VTT and beat import. |
 | `generate` | Build new structure: rough cuts, montages, A/B roll, templates, and `import_edl_json` from a video-use cut list. |
-| `transcript` | Transcribe locally, then edit or clean up by what was SAID. |
+| `transcript` | Transcribe locally, then edit or clean up by what was SAID. `transcript_pack` puts the whole shoot on one page — read it before planning a dialogue edit. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
 | `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
 | `watch` | Close the round-trip: notice the operator's Cmd-E export and diff it against the last one. |
@@ -72,7 +72,7 @@ Use the media versions when correctness matters. Say which one you used.
 ## Working order that tends to hold
 
 1. `inspect` → `diagnose` → read the `preview://` resource.
-2. `transcript` with action `transcribe_media` if the edit is dialogue-driven.
+2. `transcript` with action `transcript_pack` if the edit is dialogue-driven — one page of everything said, so the plan is made from the words rather than the clip names.
 3. `generate` for the assembly, `edit` for the refinement, `mark` for chapters.
 4. `preview` with action `preview_check` over the range you changed, before
    offering the edit as done. This is what makes the edit non-blind. The

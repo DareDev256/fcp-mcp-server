@@ -33,6 +33,7 @@ from mcp.types import (
 from fcpxml import index as _index
 from fcpxml import live
 from fcpxml import progress as _progress
+from fcpxml import transcript_pack as _tpack
 from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.export import DaVinciExporter
 from fcpxml.mcp_compat import register_handlers, tool_input_schema
@@ -1808,6 +1809,23 @@ def _legacy_tool_list() -> list[Tool]:
                     "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
                     "padding": {"type": "number", "default": 0.02, "description": "Seconds to widen each cut on both sides (0-2, default 0.02)"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _defillered suffix)"},
+                },
+                "required": ["filepath"]
+            }
+        ),
+
+        Tool(
+            name="transcript_pack",
+            description="The whole shoot on one page: every clip's transcript packed into one document — a header per source, one line per utterance, broken on silence or a speaker change, audio events inline. Built for planning an edit from what was said. Uses each media file's _transcript.json / the index (auto-transcribes if missing). Truncated at 60KB; write=true saves the full pack as <project>_pack.md beside the FCPXML.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "Path to FCPXML file"},
+                    "clip_name": {"type": "string", "description": "Only pack the clip with this name"},
+                    "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
+                    "language": {"type": "string", "description": "ISO language code hint if transcription is needed"},
+                    "gap": {"type": "number", "default": 0.5, "description": "Seconds of silence that end an utterance (0.1-5, default 0.5)"},
+                    "write": {"type": "boolean", "default": False, "description": "Also write the full, untruncated pack to <project>_pack.md next to the FCPXML"},
                 },
                 "required": ["filepath"]
             }
@@ -3948,6 +3966,76 @@ async def handle_edit_by_transcript(arguments: dict) -> Sequence[TextContent]:
     )
 
 
+async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
+    filepath = arguments["filepath"]
+    model = arguments.get("model", "base")
+    language = arguments.get("language")
+    gap = float(arguments.get("gap", _tpack.DEFAULT_GAP))
+    if not 0.1 <= gap <= 5.0:
+        raise ValueError("gap must be between 0.1 and 5 seconds")
+    write = bool(arguments.get("write", False))
+    _, tl = _require_timeline(filepath)
+    clip_filter = arguments.get("clip_name")
+
+    sources: dict[str, dict] = {}
+    skipped: list[tuple[str, str]] = []
+    prog = _progress.start(total=len(tl.clips))
+    for clip in tl.clips:
+        await prog.step(f"pack: {clip.name}")
+        if clip_filter and clip.name != clip_filter:
+            continue
+        media_path = media_src_to_path(clip.media_path or "")
+        if not media_path or not Path(media_path).is_file():
+            skipped.append((clip.name, "media file missing"))
+            continue
+        if media_path in sources:
+            continue
+        if len(sources) >= TRANSCRIBE_MAX_MEDIA:
+            skipped.append((clip.name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
+            continue
+        data, reason = _load_or_transcribe(media_path, model, language)
+        if data is None:
+            skipped.append((clip.name, reason))
+            continue
+        sources[media_path] = {
+            "name": Path(media_path).name,
+            "words": data.get("words", []),
+            "events": data.get("events", []),
+        }
+
+    full = _tpack.pack(list(sources.values()), gap=gap)
+    size = _tpack.pack_size(full)
+    written = ""
+    if write and sources:
+        fp = Path(_validate_filepath(filepath, ('.fcpxml', '.fcpxmld')))
+        out = _validate_output_path(
+            str(fp.with_name(fp.stem + "_pack.md")), anchor_dir=str(fp.parent),
+        )
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(full)
+        written = out
+
+    result = (
+        "# Transcript Pack\n\n"
+        f"- **Sources**: {len(sources)}\n"
+        f"- **Utterances**: {sum(1 for ln in full.splitlines() if ln.startswith('['))}\n"
+        f"- **Size**: {size} bytes"
+        + (f" (shown truncated to {_tpack.PACK_LIMIT_BYTES})" if size > _tpack.PACK_LIMIT_BYTES else "")
+        + "\n"
+    )
+    if written:
+        result += f"- **Written**: {written}\n"
+    if sources:
+        result += "\n" + _tpack.truncate(full, limit=_tpack.PACK_LIMIT_BYTES)
+    if skipped:
+        result += "\n## Skipped Clips\n" + _markdown_table(
+            ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
+        ) + "\n"
+    if not sources and any("faster-whisper" in reason for _, reason in skipped):
+        result += _TRANSCRIBE_INSTALL_HINT
+    return _text_result(result)
+
+
 async def handle_remove_filler_words(arguments: dict) -> Sequence[TextContent]:
     fillers = arguments.get("fillers") or list(DEFAULT_FILLERS)
     if not isinstance(fillers, list) or not all(isinstance(f, str) for f in fillers):
@@ -4406,6 +4494,7 @@ TOOL_HANDLERS = {
     "transcribe_media": handle_transcribe_media,
     "edit_by_transcript": handle_edit_by_transcript,
     "remove_filler_words": handle_remove_filler_words,
+    "transcript_pack": handle_transcript_pack,
     "detect_beats": handle_detect_beats,
     "detect_silence_candidates": handle_detect_silence_candidates,
     "remove_silence_candidates": handle_remove_silence_candidates,
@@ -4504,6 +4593,7 @@ TOOL_GROUPS: dict[str, dict] = {
         ),
         "actions": [
             "transcribe_media", "edit_by_transcript", "remove_filler_words",
+            "transcript_pack",
         ],
     },
     "deliver": {
