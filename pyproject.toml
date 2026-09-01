@@ -7,9 +7,9 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.16.0"
+version = "0.17.0"
 
-description = "MCP server for Final Cut Pro XML. 7 grouped tools (62 underlying operations) for timeline analysis, batch editing, QC, generation, multi-track support, NLE export, templates, media relink, .fcpxmld bundles, and real media analysis (silence detection + auto-removal, beat detection, local Whisper transcript editing) via Claude."
+description = "MCP server for Final Cut Pro XML. 9 grouped tools (72 underlying operations) for timeline analysis, batch editing, QC, generation, multi-track support, NLE export, templates, media relink, .fcpxmld bundles, real media analysis (silence detection + auto-removal, beat detection, local Whisper transcript editing), ffmpeg proxy preview with source-media visual verification, export watch-folder round-trip, and EDL import — via Claude."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [

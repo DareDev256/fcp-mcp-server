@@ -1,6 +1,6 @@
 # FCPXML MCP
 
-**The bridge between Final Cut Pro and AI. 7 grouped tools (62 underlying operations) that turn timeline XML into structured data Claude can read, edit, and generate.**
+**The bridge between Final Cut Pro and AI. 9 grouped tools (72 underlying operations) that turn timeline XML into structured data Claude can read, edit, generate — and now SEE.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,8 +8,8 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP%20SDK-1.3%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
 [![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![Tests](https://img.shields.io/badge/tests-1337_passing-brightgreen.svg)](#testing)
-[![Suites](https://img.shields.io/badge/suites-30-blue.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1480-brightgreen.svg)](#testing)
+[![Suites](https://img.shields.io/badge/suites-40-blue.svg)](#testing)
 [![MCP Marketplace](https://img.shields.io/badge/MCP%20Marketplace-Indexed-blueviolet)](https://getlulu.dev/mcps/fcpxml-mcp-server)
 
 **Hardened for real libraries:** 182 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
@@ -141,6 +141,39 @@ show a modal library picker that blocks until you answer. First use triggers a
 one-time macOS Automation permission prompt for your terminal/MCP host. The
 [capability audit](docs/CAPABILITY-AUDIT-2026-06.md) maps the full surface and
 the optional SpliceKit/CommandPost bridges planned for v1.0.
+
+---
+
+## The Round Trip
+
+Final Cut Pro has a fully scriptable **import** and **no programmatic export** —
+verified unchanged across FCP 11.0 → 12.2. So the loop closes on exactly one
+keystroke, and everything either side of it is automated:
+
+```
+watch_start                    ← once per session (or set FCP_WATCH_DIR)
+   ↓
+edit / generate / mark         ← the change
+   ↓
+preview_check                  ← SEE it. Reads the media, not the XML
+   ↓
+deliver.push_to_fcp            ← zero-click import (or FCP_MCP_AUTOPUSH=1)
+   ↓
+Cmd-E in Final Cut Pro         ← the one manual step Apple leaves you
+   ↓
+watch_pull                     ← detected and diffed against the last export
+```
+
+**`preview_check` is the part that matters.** The `preview://` resource and
+`preview_timeline` both draw from the XML — they show what was *written*, so a
+fixed flash frame and a broken one read identically through them. `preview_check`
+samples the source media into a filmstrip over an audio waveform. It is the
+difference between a tool reporting success and you knowing the cut is right.
+
+If you have SpliceKit or CommandPost installed, `watch_start` says so. This
+server **does not call either one** — their RPC signatures have not been verified
+against a live install, and it never patches or injects anything. That is why it
+runs on a managed Mac and survives an FCP update.
 
 ---
 
@@ -327,8 +360,8 @@ operation goes in `action`:
 
 ## Tools
 
-As of v0.14.0, the MCP tool list Claude sees by default is **7 grouped
-verbs**, not 62 flat tool names:
+As of v0.17.0, the MCP tool list Claude sees by default is **9 grouped
+verbs**, not 72 flat tool names:
 
 | Group | Covers |
 |-------|--------|
@@ -339,9 +372,11 @@ verbs**, not 62 flat tool names:
 | `generate` | Building new structure — rough cuts, montages, A/B roll, templates |
 | `transcript` | Local Whisper transcription and transcript-driven cuts |
 | `deliver` | Getting the timeline out — NLE export, reformat, relink, push-to-FCP |
+| `preview` | **Seeing** the edit — ffmpeg proxy render, contact sheet, and a filmstrip+waveform check read from the SOURCE MEDIA |
+| `watch` | Closing the round-trip — notice the operator's Cmd-E export and diff it against the last one |
 
 Each call has the same shape: `{"action": "trim_clip", "args": {...}}`. The
-`action` is one of the 62 original tool names below; `args` is whatever that
+`action` is one of the 72 tool names below; `args` is whatever that
 tool always took. The group dispatches straight into the same handler — the
 behavior is identical, only the schema Claude sees up front is smaller. An
 unknown or cross-group action returns an error listing the valid actions for
@@ -388,7 +423,7 @@ ln -s "$PWD/fcp-mcp-server/skill" ~/.claude/skills/final-cut-pro
 
 ---
 
-## All 62 Tools
+## All 72 Tools
 
 The 62 tools below are the operations behind the 7 groups in
 [Tools](#tools) — every `action` value the groups accept, unchanged from
@@ -484,7 +519,9 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 | `FCP_MAX_BATCH_MARKERS` | No | `10000` | Cap on markers written by one batch or import operation. Excess markers are reported as dropped, never silently skipped |
 | `FCP_MAX_TRANSCRIPT_CHARS` | No | `1048576` | Cap on inline transcript text passed to `import_transcript_markers` |
 | `FCPXML_DTD_DIR` | No | FCP app bundle | Directory of Apple `FCPXMLv*_*.dtd` files for DTD validation (auto-detected from the installed Final Cut Pro) |
-| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the original 62 flat tools alongside the 7 grouped tools |
+| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the original flat tools alongside the 9 grouped tools |
+| `FCP_WATCH_DIR` | No | unset | Default folder `watch_start` observes for Final Cut Pro XML exports |
+| `FCP_MCP_AUTOPUSH` | No | unset | Set to `1` so every write also imports into the running Final Cut Pro. Off by default — repeated imports accumulate library churn, which is your call to make |
 
 ---
 
@@ -507,16 +544,31 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 
 ```
 fcp-mcp-server/           ~9.4k lines Python
-├── server.py              MCP entry point — 7 grouped tools advertised by default
-│                          (TOOL_GROUPS), dispatching into 62 flat handlers
+├── server.py              MCP entry point — 9 grouped tools advertised by default
+│                          (TOOL_GROUPS), dispatching into 72 flat handlers
 │                          (TOOL_HANDLERS); 5 prompts, resource discovery.
-│                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the 62 flat tools.
+│                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the flat tools.
+│                          Binds itself to tools/ via bind_server() — group modules
+│                          must never `import server` (it runs as __main__).
+├── tools/                 New tool groups, registered without growing server.py
+│   ├── __init__.py        EXTRA_GROUPS/EXTRA_HANDLERS registry + bind_server()
+│   ├── _common.py         text_result / parse_project through the bound module
+│   ├── preview.py         preview group — render, sheet, frame, check, timeline
+│   └── watch.py           watch group — start, status, stop, pull
 │                          _resolve_io_paths() / _setup_modifier() / _setup_generator()
 │                          _format_clip_table() / _markdown_table() / _format_batch_result()
 │                          _raw_markers_to_batch()
 │                          _detect_flash_frames() / _detect_gaps() / _detect_duplicate_groups()
 │                          consolidate path validation, QC detection, rendering, handler boilerplate
 ├── fcpxml/
+│   ├── filtergraph.py     Timeline → ffmpeg graph. PURE — Fraction end to end,
+│   │                       so compilation is asserted without ffmpeg installed
+│   ├── render.py          Executes the graph; probes the artifact's OWN duration
+│   │                       back and reports drift against the timeline rational
+│   ├── visual.py          Filmstrip + waveform from SOURCE MEDIA (preview_check)
+│   ├── watchfolder.py     Export detection. Digests CONTENT, not (mtime, size)
+│   ├── bridges.py         SpliceKit :9876 / CommandPost :27480 — DETECTION ONLY
+│   ├── edl.py             video-use edl.json → FCPXML
 │   ├── models.py          TimeValue, Timecode, Clip, ConnectedClip, MarkerType, Timeline
 │   ├── parser.py          FCPXML → Python (spine, connected clips, roles, markers)
 │   ├── writer.py          Modify & write (markers, trim, gaps, transitions, silence)
@@ -532,7 +584,13 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1199 tests across 27 suites (1195 pass, 4 skip without ffmpeg/FCP)
+├── tests/                 1480 tests across 40 suites — see Testing below
+
+Three of those tests are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
+
+- `test_the_instrument_can_see_a_wrong_duration` renders a one-second timeline and asserts the probe reads something other than two seconds.
+- `test_the_waveform_is_actually_drawn` renders the same video against loud and near-silent audio, so the filmstrips are identical by construction and any byte difference must come from the waveform. This one caught a real shipped defect: `showwavespic` draws on a transparent background that flattens to white, so a white trace was invisible while every ordinary check still passed.
+- `test_the_edit_still_reports_success_when_the_push_fails` proves an autopush failure never costs you a file that is already on disk.
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -676,7 +734,13 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1199 tests across 27 suites (1195 pass, 4 skip without ffmpeg or Final Cut Pro present) covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
+1480 tests across 40 suites — 1474 pass and 6 skip on the declared `mcp` floor, 1476 pass and 4 skip on `mcp` 2.x, the skips being the cases that need ffmpeg or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+
+Three of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
+
+- `test_the_instrument_can_see_a_wrong_duration` renders a one-second timeline and asserts the probe reads something other than two seconds.
+- `test_the_waveform_is_actually_drawn` renders the same video against loud and near-silent audio, so the filmstrips are identical by construction and any byte difference must come from the waveform. This one caught a real shipped defect: `showwavespic` draws on a transparent background that flattens to white, so a white trace was invisible while every ordinary check still passed.
+- `test_the_edit_still_reports_success_when_the_push_fails` proves an autopush failure never costs you a file that is already on disk.
 
 ---
 

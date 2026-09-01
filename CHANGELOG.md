@@ -2,6 +2,63 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-01
+
+### Added — The Loop (the round-trip closes, and it has eyes)
+- **`watch` tool group** — `watch_start`, `watch_status`, `watch_stop`,
+  `watch_pull`. Detects an FCPXML export the moment it lands in the watched
+  folder and diffs it against the last one seen. Apple ships a fully scriptable
+  import (`odoc` + `<import-options>`) and NO programmatic export, unchanged
+  across FCP 11.0 → 12.2; this is how one Cmd-E closes the loop without
+  touching an unofficial surface. `FCP_WATCH_DIR` sets the default folder.
+- **`preview` tool group** — `preview_render` (ffmpeg proxy of the timeline),
+  `preview_sheet` (one frame per cut), `preview_frame`, **`preview_check`**
+  (filmstrip + waveform read from the SOURCE MEDIA), `preview_timeline`.
+  Artifacts open in a pane beside the terminal via `cmux-image-preview`.
+- **`generate.import_edl_json`** — author FCPXML from a `browser-use/video-use`
+  style cut list (`{sources, ranges, grade?}`), so an agentic editing pipeline
+  can finish in Final Cut Pro instead of dead-ending at a flat mp4.
+- **Bridge detection** for SpliceKit (`:9876`) and CommandPost (`:27480`),
+  loopback only. Detection and reporting ONLY — this server does not call
+  either, and `describe()` says so, because their RPC signatures have not been
+  verified against a live install and writing one without that is inventing an
+  API rather than integrating with one.
+- **`FCP_MCP_AUTOPUSH=1`** — writes also land in the running Final Cut Pro. Off
+  by default; a failed push never fails the edit.
+- **`tools/` package** — new groups register here instead of growing
+  `server.py`'s dispatch. `server.py` binds the live module object rather than
+  letting group modules `import server`, which in production (where it runs as
+  `__main__`) would execute a second copy with its own handler registry and its
+  own sandbox state.
+
+### Fixed
+- **Edits were verified by re-parsing our own output.** `fcpxml/preview.py`
+  draws coloured blocks from the XML, so a fixed flash frame and a broken one
+  read identically through it. `preview_check` reads the media.
+- `showwavespic` draws on a transparent background that flattens to white, so
+  a white trace was invisible while every ordinary check still passed — the PNG
+  existed, was valid, and two ranges still differed because the FILMSTRIP
+  differed. Caught by looking at the artifact, not the exit code. Now composited
+  over a dark plate, with a test that renders the same video against loud and
+  near-silent audio so any difference must come from the waveform.
+- The watch snapshot digests CONTENT, not `(mtime, size)`. Re-exporting over the
+  same filename is the normal iteration loop, and two exports of equal byte
+  count inside one filesystem timestamp tick produce an identical stat pair —
+  a stat-only watcher reports "no export" for the change just made.
+- `format_diff()` extracted from `handle_diff_timelines` into `fcpxml/diff.py`
+  so `watch_pull` and `diff_timelines` cannot drift into two formats for the
+  same data. The handler went from 45 lines to 5.
+
+### Known
+- Transitions render as **hard cuts** in the proxy. Every one is REPORTED as a
+  substitution rather than applied silently — a preview that lies about the cut
+  is worse than no preview. Crossfade compilation follows.
+- Connected-clip lanes are compiled and reported but not yet composited into the
+  rendered proxy; the spine is what is drawn.
+- Bridge export triggering is not implemented (see above).
+- `_maybe_autopush` is wired into `handle_add_marker` only. The remaining write
+  handlers are mechanical and follow separately.
+
 ## [0.16.0] - 2026-08-16
 
 ### Changed

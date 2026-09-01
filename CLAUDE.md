@@ -2,7 +2,7 @@
 
 ## What This Is
 
-MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 7 grouped tools (`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`) are advertised by default, dispatching into 62 underlying operations for timeline analysis, batch editing, QC, generation, multi-track support, media relink, NLE export, transcript-based editing (local Whisper), and LIVE FCP control (push_to_fcp / list_fcp_libraries via Apple events). Set `FCP_MCP_LEGACY_TOOLS=1` to advertise the original 62 flat tools alongside the groups (additive — 69 advertised tools, not 62). Reads FCPXML 1.8–1.14 (incl. `.fcpxmld` bundles with sidecar preservation), writes 1.13 by default. Dual-mode (XML + Live) direction: `docs/CAPABILITY-AUDIT-2026-06.md`.
+MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 9 grouped tools (`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`, `preview`, `watch`) are advertised by default, dispatching into 72 underlying operations for timeline analysis, batch editing, QC, generation, multi-track support, media relink, NLE export, transcript-based editing (local Whisper), and LIVE FCP control (push_to_fcp / list_fcp_libraries via Apple events). Set `FCP_MCP_LEGACY_TOOLS=1` to advertise the flat tools alongside the groups (additive — 81 advertised tools, not 72). Reads FCPXML 1.8–1.14 (incl. `.fcpxmld` bundles with sidecar preservation), writes 1.13 by default. Dual-mode (XML + Live) direction: `docs/CAPABILITY-AUDIT-2026-06.md`.
 
 ## Architecture
 
@@ -10,9 +10,33 @@ MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 7 grouped tools (
 server.py           — MCP server entry point. All 62 tool definitions, handlers, resources, prompts.
                       Dispatch dict pattern: TOOL_HANDLERS maps tool names → async handler functions.
 TOOL_GROUPS         — 7 grouped verbs advertised by default. Dispatch into
-                      TOOL_HANDLERS, which still holds all 62 flat handlers.
+                      TOOL_HANDLERS, which holds all 72 flat handlers. New groups are
+                      defined in tools/ and merged in by _merge_extra_tools().
                       Hiding a tool from list_tools does NOT stop it dispatching.
-fcpxml/preview.py   — standalone HTML timeline render, served as preview://<path>
+fcpxml/preview.py   — standalone HTML timeline render, served as preview://<path>.
+                      Draws from the XML: shows what was WRITTEN. It cannot tell a
+                      fixed cut from a broken one — use fcpxml/visual.py for that.
+fcpxml/filtergraph.py — Timeline -> ffmpeg graph. PURE (no subprocess, no I/O), so
+                      compilation is asserted exactly on machines without ffmpeg.
+                      Fraction end to end; float seconds drift visibly at 23.976.
+                      Spine Clip carries timeline position on .start; ConnectedClip
+                      carries it on .offset and reuses .start for the source in-point.
+fcpxml/render.py    — Executes the graph. Probes the artifact's OWN duration back and
+                      reports drift — a rendered file existing is not evidence.
+fcpxml/visual.py    — Filmstrip + waveform from SOURCE MEDIA. The verification
+                      instrument. showwavespic draws on a transparent background that
+                      flattens to white, so the trace is composited over a dark plate.
+fcpxml/watchfolder.py — Export detection. Digests CONTENT, not (mtime, size): two
+                      exports of equal byte count in one timestamp tick are otherwise
+                      indistinguishable from no export at all.
+fcpxml/bridges.py   — SpliceKit :9876 / CommandPost :27480. DETECTION ONLY, loopback
+                      only. Their RPC signatures are unverified; never call them.
+fcpxml/edl.py       — video-use edl.json -> FCPXML. Schema is {sources, ranges, grade?}
+                      and ranges[].source is a KEY into sources, NOT a path.
+tools/              — New tool groups register here instead of growing server.py.
+                      server.py binds itself via tools.bind_server(); group modules
+                      must NEVER `import server` — in production it runs as __main__,
+                      so that loads a SECOND copy with its own registry and sandbox.
 skill/              — the final-cut-pro Claude Code skill wrapping this server
 
 fcpxml/parser.py    — Reads FCPXML → Python objects (Timeline, Clip, ConnectedClip, Marker, etc.)
@@ -78,7 +102,7 @@ CI runs both on every push to main. If either fails, the commit gets an X on Git
 
 ## Testing
 
-1343 tests across 30 files (1337 pass, 6 skip without ffmpeg/FCP present; on mcp 2.x it is 1339 pass / 4 skip — two compat tests are 2.x-only). `test_models.py` covers TimeValue arithmetic, Timecode parsing/formatting, Clip properties, validation models, and Timeline helpers. `test_writer.py` covers insert_clip, add_marker (all types), trim_clip, delete_clip, split_clip, and change_speed operations. `test_server.py` covers MCP tool handlers, parsers, and dispatch. `test_rough_cut.py` covers RoughCutGenerator. `test_features_v05.py` covers connected clips, roles, timeline diff, reformat, silence detection, export, and backward compatibility. `test_marker_pipeline.py` covers build_marker_element shared builder, batch auto-modes, clip index duplicate-name behavior, and write_fcpxml output format. `test_refactored_helpers.py` covers _index_elements, _iter_spine_clips, _find_spine_clip_at_seconds, _resolve_clip_duration, _make_asset_clip, _format_batch_result, and serialize_xml edge cases. `test_transcribe.py` covers phrase/filler span matching, range merge/invert algebra, whisper graceful degradation, and transcript-driven handler cuts against cached transcripts. `test_media_intel.py` covers silencedetect stderr parsing, source-to-timeline mapping, parameter bounds, and real-WAV ffmpeg integration (skips without ffmpeg; CI installs it). `test_broadcast_rates.py` covers the NTSC-fractional rates end to end (rational_fps snapping, from_timecode/to_timecode/snap_to_frame/change_speed at 23.98 and 29.97, one-frame durations, conform-rate enum, XMEML timebase+ntsc, frame-rate display) — every test in it fails against the pre-#17 `int(fps)` implementation. `test_mcp_compat.py` covers handler registration on both SDK generations and the snake_case field-alias accessors. `test_tool_groups.py` covers the 7 TOOL_GROUPS dispatching to the 62 TOOL_HANDLERS, legacy-flag opt-in, and the schema-size reduction. `test_preview.py` covers the `preview://` HTML timeline render. `test_skill.py` covers the `final-cut-pro` skill's structure. Tests use `examples/sample.fcpxml` as fixture data and inline XML fixtures. Tests create temp files and clean up after.
+1480 tests across 40 files (1474 pass, 6 skip without ffmpeg/FCP present; on mcp 2.x it is 1476 pass / 4 skip). Beyond the pre-existing suites, v0.17.0 adds: `test_filtergraph.py` (Timeline -> ffmpeg graph, exact Fractions at NTSC rates, the Clip/.start vs ConnectedClip/.offset distinction, transition substitution reporting), `test_render.py` (proxy render plus the artifact duration read-back and its mutation check), `test_visual.py` (filmstrip+waveform from source media, silent-source fallback, and the mutation check that caught the invisible white-on-white waveform), `test_watchfolder.py` (export detection, content digesting, bundle handling), `test_bridges.py` (loopback-only probing, session caching, describe() honesty), `test_preview_group.py` and `test_watch_group.py` (MCP wiring, UNVERIFIED labelling), `test_edl_import.py` (the real video-use schema, round-tripped against the literal from their own test file), `test_autopush.py`, and `test_tool_seam.py` (the tools/ registry, the merge guard, and the server binding). Tests use `examples/sample.fcpxml` and `examples/music-video.fcpxml` as fixture data plus inline XML and synthesised ffmpeg media. Tests create temp files and clean up after.
 
 ## FCPXML Gotchas
 
