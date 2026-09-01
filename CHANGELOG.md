@@ -49,6 +49,19 @@
   so `watch_pull` and `diff_timelines` cannot drift into two formats for the
   same data. The handler went from 45 lines to 5.
 
+### Fixed — validation warned on Final Cut Pro's own output
+- `_check_timebases` inlined `tv.simplify().denominator not in
+  _FCPXML_STANDARD_TIMEBASES`, a second copy of a rule that already lives on
+  `TimeValue.is_standard_timebase()` — and the copy is the one that drifted.
+  `36/24s` (36 frames at 24fps, the canonical form FCP itself writes) reduces
+  to `3/2`, so **every generated timeline logged a validation warning for every
+  clip that was not a whole number of seconds long**. `is_standard_timebase()`
+  now checks the denominator as WRITTEN as well as simplified, matching what
+  `to_fcpxml()` actually emits, and the validator asks it instead of
+  re-deriving. Found by running the new tools end to end on real media rather
+  than trusting a green suite; covered by a mutation check proving `15/7s` and
+  `5/13s` still warn.
+
 ### Known
 - Transitions render as **hard cuts** in the proxy. Every one is REPORTED as a
   substitution rather than applied silently — a preview that lies about the cut

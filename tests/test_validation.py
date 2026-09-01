@@ -348,3 +348,47 @@ def test_validate_fcpxml_clean_returns_empty():
         '</fcpxml>'
     )
     assert validate_fcpxml(root) == []
+
+
+class TestTimebaseCheckDoesNotWarnOnCanonicalFCPOutput:
+    """Regression: the validator warned on Final Cut Pro's own canonical form.
+
+    _check_timebases inlined `tv.simplify().denominator not in
+    _FCPXML_STANDARD_TIMEBASES` — a second copy of a rule that already lives on
+    TimeValue.is_standard_timebase(), and the copy is the one that drifted.
+    "36/24s" reduces to 3/2, so every generated timeline logged a warning for
+    every clip that was not a whole number of seconds long. An alarm that fires
+    on correct output trains people to ignore the alarm.
+    """
+
+    @staticmethod
+    def _tree(*durations):
+        import xml.etree.ElementTree as ET
+
+        root = ET.Element('fcpxml')
+        sequence = ET.SubElement(root, 'sequence')
+        for duration in durations:
+            ET.SubElement(sequence, 'asset-clip', duration=duration)
+        return root
+
+    def test_frame_aligned_values_do_not_warn(self):
+        from fcpxml.writer import _check_timebases
+
+        tree = self._tree("36/24s", "18/24s", "108/24s", "42/30s", "1001/24000s")
+        assert _check_timebases(tree) == []
+
+    def test_a_genuinely_non_standard_denominator_still_warns(self):
+        """Mutation check: the guard must not have been merely switched off."""
+        from fcpxml.writer import _check_timebases
+
+        issues = _check_timebases(self._tree("15/7s", "5/13s"))
+        assert len(issues) == 2
+        assert "7" in issues[0].message
+        assert "13" in issues[1].message
+
+    def test_good_and_bad_values_are_told_apart_in_one_pass(self):
+        from fcpxml.writer import _check_timebases
+
+        issues = _check_timebases(self._tree("36/24s", "15/7s", "1001/24000s"))
+        assert len(issues) == 1
+        assert '15/7s' in issues[0].message

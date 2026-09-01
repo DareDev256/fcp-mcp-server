@@ -475,9 +475,24 @@ class TimeValue:
         return TimeValue(snapped_ticks, ticks_per_second)
 
     def is_standard_timebase(self) -> bool:
-        """Check if this TimeValue's denominator is an FCP-accepted timebase."""
-        simplified = self.simplify()
-        return simplified.denominator in _FCPXML_STANDARD_TIMEBASES
+        """Whether this value can be WRITTEN on an FCP-accepted timebase.
+
+        Checks the denominator as written as well as the simplified one,
+        because that is exactly what ``to_fcpxml()`` emits: it prefers the
+        simplified form and falls back to the original denominator when
+        simplifying would produce a non-standard one.
+
+        Inspecting only the simplified form made the predicate disagree with
+        the emitter. ``TimeValue(36, 24)`` — 36 frames at 24fps, and the
+        canonical form Final Cut Pro itself writes — simplifies to 3/2, so it
+        reported non-standard while ``to_fcpxml()`` correctly wrote "36/24s".
+        Every generated timeline therefore logged a validation warning for
+        every clip that was not a whole number of seconds long, which is most
+        of them. An alarm that fires on correct output is not an alarm.
+        """
+        if self.denominator in _FCPXML_STANDARD_TIMEBASES:
+            return True
+        return self.simplify().denominator in _FCPXML_STANDARD_TIMEBASES
 
     def __repr__(self) -> str:
         return f"TimeValue({self.numerator}/{self.denominator}s = {self.to_seconds():.3f}s)"

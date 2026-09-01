@@ -38,7 +38,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import (
-    _FCPXML_STANDARD_TIMEBASES,
     MARKER_XML_TAGS,
     Marker,
     MarkerColor,
@@ -561,8 +560,16 @@ def _check_timebases(root: ET.Element) -> List[ValidationIssue]:
             if val and val.endswith('s') and '/' in val:
                 try:
                     tv = TimeValue.from_timecode(val)
+                    # Ask the model, do not re-derive. This check used to
+                    # inline `tv.simplify().denominator not in
+                    # _FCPXML_STANDARD_TIMEBASES`, which is a second copy of a
+                    # rule that already lives on TimeValue — and the copy was
+                    # the one that drifted. It warned on "36/24s", the
+                    # canonical form Final Cut Pro itself writes, because 36/24
+                    # reduces to 3/2. Every generated timeline logged a warning
+                    # for every clip that was not a whole number of seconds.
                     denom = tv.simplify().denominator
-                    if denom not in _FCPXML_STANDARD_TIMEBASES:
+                    if not tv.is_standard_timebase():
                         key = (elem.tag, attr, val)
                         if key not in seen:
                             seen.add(key)
