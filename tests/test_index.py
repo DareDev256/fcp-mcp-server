@@ -13,6 +13,7 @@ from fractions import Fraction
 import pytest
 
 from fcpxml import index as idx
+from tests.conftest import requires_index
 
 
 @pytest.fixture
@@ -47,6 +48,7 @@ class TestPairs:
         assert Fraction(num, den) == Fraction(1001, 30000)
 
 
+@requires_index
 class TestRoundTrip:
     def test_analysis_round_trip(self, media):
         with idx.Index.open() as ix:
@@ -99,6 +101,7 @@ class TestRoundTrip:
             assert ix.get_analysis(media, "silence") == []
 
 
+@requires_index
 class TestInvalidation:
     def test_a_touched_source_drops_its_rows(self, media):
         """Mutation target: remove the (mtime,size) check in media_id and this goes red."""
@@ -127,6 +130,7 @@ class TestInvalidation:
             assert ix.get_analysis(media, "silence") is None
 
 
+@requires_index
 class TestRebuild:
     def test_garbage_file_is_rebuilt(self, media):
         path = os.environ["FCP_MCP_INDEX"]
@@ -155,6 +159,7 @@ class TestRebuild:
         assert mode == 0o700
 
 
+@requires_index
 class TestStats:
     def test_counts_and_age(self, media):
         with idx.Index.open() as ix:

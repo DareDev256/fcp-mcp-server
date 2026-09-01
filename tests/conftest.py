@@ -17,3 +17,12 @@ def _isolated_index(tmp_path, monkeypatch):
     if current.strip().lower() in {"off", "0", "false", "no"}:
         return
     monkeypatch.setenv("FCP_MCP_INDEX", str(tmp_path / "index.db"))
+
+
+def index_is_off() -> bool:
+    return os.environ.get("FCP_MCP_INDEX", "").strip().lower() in {"off", "0", "false", "no"}
+
+
+# Tests OF the cache need the cache. They are skipped on the index-off pass,
+# whose job is to prove every OTHER test does not.
+requires_index = pytest.mark.skipif(index_is_off(), reason="FCP_MCP_INDEX=off pass")

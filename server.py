@@ -30,7 +30,9 @@ from mcp.types import (
     Tool,
 )
 
+from fcpxml import index as _index
 from fcpxml import live
+from fcpxml import progress as _progress
 from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.export import DaVinciExporter
 from fcpxml.mcp_compat import register_handlers, tool_input_schema
@@ -3436,6 +3438,46 @@ async def handle_reformat_timeline(arguments: dict) -> Sequence[TextContent]:
 
 # ----- SILENCE DETECTION HANDLERS (v0.5.0) -----
 
+def _silence_cached(media_path: str, noise_db: float, min_silence: float):
+    """``detect_silence`` through the index. Same answer with the index off."""
+    kind = f"silence@{noise_db}dB/{min_silence}s"
+    ix = _index.Index.open()
+    if ix is None:
+        return detect_silence(media_path, noise_db=noise_db, min_duration=min_silence)
+    with ix:
+        rows = ix.get_analysis(media_path, kind)
+        if rows is not None:
+            return [(float(r["start"]), float(r["end"])) for r in rows]
+        silences = detect_silence(media_path, noise_db=noise_db, min_duration=min_silence)
+        if silences is not None:
+            ix.put_analysis(
+                media_path, kind, [{"start": a, "end": b, "payload": None} for a, b in silences]
+            )
+        return silences
+
+
+def _beats_cached(media_path: str):
+    """``detect_beats`` through the index. Same answer with the index off."""
+    ix = _index.Index.open()
+    if ix is None:
+        return detect_beats(media_path)
+    with ix:
+        rows = ix.get_analysis(media_path, "beat")
+        if rows is not None and rows:
+            return {
+                "bpm": float(rows[0]["payload"]["bpm"]),
+                "beats": [float(r["start"]) for r in rows],
+            }
+        result = detect_beats(media_path)
+        if result is not None:
+            bpm = result["bpm"]
+            ix.put_analysis(
+                media_path, "beat",
+                [{"start": b, "end": b, "payload": {"bpm": bpm}} for b in result["beats"]],
+            )
+        return result
+
+
 async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
     noise_db = float(arguments.get("noise_db", -30.0))
     min_silence = float(arguments.get("min_silence", 0.5))
@@ -3453,7 +3495,9 @@ async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
     findings: list[tuple[str, float, float]] = []
     skipped: list[tuple[str, str]] = []
     probe_cache: dict[str, list | None] = {}
+    prog = _progress.start(total=len(tl.clips))
     for clip in tl.clips:
+        await prog.step(f"silence: {clip.name}")
         if clip_filter and clip.name != clip_filter:
             continue
         media_path = media_src_to_path(clip.media_path or "")
@@ -3464,9 +3508,7 @@ async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
             if len(probe_cache) >= max_media_probes:
                 skipped.append((clip.name, f"probe cap reached ({max_media_probes} media files)"))
                 continue
-            probe_cache[media_path] = detect_silence(
-                media_path, noise_db=noise_db, min_duration=min_silence
-            )
+            probe_cache[media_path] = _silence_cached(media_path, noise_db, min_silence)
         silences = probe_cache[media_path]
         if silences is None:
             skipped.append((clip.name, "unanalyzable (ffmpeg missing or media unreadable)"))
@@ -3541,9 +3583,7 @@ async def handle_remove_media_silence(arguments: dict) -> Sequence[TextContent]:
             if len(probe_cache) >= max_media_probes:
                 skipped.append((name, f"probe cap reached ({max_media_probes} media files)"))
                 continue
-            probe_cache[media_path] = detect_silence(
-                media_path, noise_db=noise_db, min_duration=min_silence
-            )
+            probe_cache[media_path] = _silence_cached(media_path, noise_db, min_silence)
         silences = probe_cache[media_path]
         if silences is None:
             skipped.append((name, "unanalyzable (ffmpeg missing or media unreadable)"))
@@ -3603,7 +3643,7 @@ AUDIO_MEDIA_EXTENSIONS = (
 async def handle_detect_beats(arguments: dict) -> Sequence[TextContent]:
     media_path = _validate_filepath(arguments["media_path"], AUDIO_MEDIA_EXTENSIONS)
 
-    result = detect_beats(media_path)
+    result = _beats_cached(media_path)
     if result is None:
         return _text_result(
             "Beat detection unavailable — librosa is not installed or the file "
@@ -3679,12 +3719,22 @@ def _load_or_transcribe(media_path: str, model: str, language: str | None) -> tu
                 return data, ""
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             pass  # unreadable cache falls through to re-transcribe
+    ix = _index.Index.open()
+    if ix is not None:
+        with ix:
+            data = ix.get_transcript(media_path)
+        if data is not None:
+            return data, ""
     result = transcribe(media_path, model_size=model, language=language)
     if result is None:
         return None, "untranscribable (faster-whisper not installed or media unreadable)"
     out_path = _validate_output_path(str(json_path), anchor_dir=str(Path(media_path).parent))
     with open(out_path, "w") as f:
         json.dump({"source": Path(media_path).name, **result}, f, indent=2)
+    ix = _index.Index.open()
+    if ix is not None:
+        with ix:
+            ix.put_transcript(media_path, result)
     return result, ""
 
 
@@ -3795,7 +3845,9 @@ async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
     skipped: list[tuple[str, str]] = []
     rows: list[list[str]] = []
     srt_paths: list[str] = []
+    prog = _progress.start(total=len(tl.clips))
     for clip in tl.clips:
+        await prog.step(f"transcribe: {clip.name}")
         if clip_filter and clip.name != clip_filter:
             continue
         media_path = media_src_to_path(clip.media_path or "")
