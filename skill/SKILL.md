@@ -26,7 +26,7 @@ expensive to undo.
 | `diagnose` | Find problems: gaps, flash frames, dead air, duplicates, beats. |
 | `edit` | Change clips: insert, delete, trim, split, reorder, retime, remove silence. |
 | `mark` | Markers and chapters, including SRT/VTT and beat import. |
-| `generate` | Build new structure: rough cuts, montages, A/B roll, templates. |
+| `generate` | Build new structure: rough cuts, montages, A/B roll, templates, and `import_edl_json` from a video-use cut list. |
 | `transcript` | Transcribe locally, then edit or clean up by what was SAID. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
 | `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |

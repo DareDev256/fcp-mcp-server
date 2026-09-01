@@ -4205,6 +4205,60 @@ async def handle_list_fcp_libraries(arguments: dict) -> Sequence[TextContent]:
 # TOOL DISPATCH
 # ============================================================================
 
+async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
+    """Author an FCPXML timeline from a video-use style edl.json cut list.
+
+    The bridge that lets an agentic editing pipeline finish in Final Cut Pro
+    instead of dead-ending at a flat mp4.
+    """
+    import json
+
+    from fcpxml.edl import EDLValidationError, edl_to_fcpxml
+
+    filepath = arguments.get("filepath")
+    if not filepath:
+        return _text_result("import_edl_json requires 'filepath' (an edl.json).")
+    path = _validate_filepath(filepath, ('.json',))
+
+    output_path = arguments.get("output_path") or str(
+        Path(path).with_suffix('.fcpxml')
+    )
+    output_path = _validate_output_path(output_path, anchor_dir=str(Path(path).parent))
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return _text_result(f"Could not read {path}: {exc}")
+
+    try:
+        result = edl_to_fcpxml(
+            data, output_path,
+            base_dir=str(Path(path).parent),
+            fps=float(arguments.get("fps", 24.0)),
+            name=arguments.get("name", "EDL Import"),
+        )
+    except EDLValidationError as exc:
+        return _text_result(f"Invalid EDL: {exc}")
+
+    lines = [
+        f"Authored {result['path']} from {result['clips']} ranges.",
+    ]
+    for note in result["ignored"]:
+        lines.append(f"Ignored: {note}")
+    if result["missing"]:
+        lines.append(
+            "Media not found on this machine (the timeline still references "
+            "it; relink in FCP or with deliver.relink_media): "
+            + ", ".join(result["missing"])
+        )
+    lines.append(
+        "Preview it with preview.preview_render, or import with "
+        "deliver.push_to_fcp."
+    )
+    return _text_result("\n".join(lines))
+
+
 TOOL_HANDLERS = {
     # Read
     "list_projects": handle_list_projects,
@@ -4239,6 +4293,7 @@ TOOL_HANDLERS = {
     "validate_timeline": handle_validate_timeline,
     # Generation
     "auto_rough_cut": handle_auto_rough_cut,
+    "import_edl_json": handle_import_edl_json,
     "generate_montage": handle_generate_montage,
     "generate_ab_roll": handle_generate_ab_roll,
     # Beat Sync
@@ -4354,6 +4409,7 @@ TOOL_GROUPS: dict[str, dict] = {
         "actions": [
             "auto_rough_cut", "generate_ab_roll", "generate_montage",
             "apply_template", "create_compound_clip", "flatten_compound_clip",
+            "import_edl_json",
         ],
     },
     "transcript": {
