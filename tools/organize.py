@@ -6,13 +6,18 @@ reads the folder's journal; ``undo`` parks the outputs of the last write
 operations (moves, never deletes — see ``fcpxml.journal``).
 """
 
+import json
 import time
+from collections import Counter
 from pathlib import Path
 
 import tools
+from fcpxml import find as _find
+from fcpxml import index as _index
 from fcpxml import journal
+from fcpxml.media_intel import media_src_to_path
 from fcpxml.writer import FCPXMLModifier
-from tools._common import text_result
+from tools._common import parse_project, text_result
 
 _JOURNAL_OFF = (
     "The journal is off (FCP_MCP_JOURNAL is set to a disabling value), so "
@@ -142,7 +147,89 @@ async def handle_undo(args: dict) -> list:
     return text_result("\n".join(lines))
 
 
+def _derivable_text(media_path: str):
+    """(caption text, transcript text) for a source — index, then sidecar. Never computes."""
+    captions, transcript = "", ""
+    ix = _index.Index.open()
+    if ix is not None:
+        with ix:
+            rows = ix.get_shots(media_path) or []
+            data = ix.get_transcript(media_path)
+        captions = " ".join(r.get("caption") or "" for r in rows)
+        if data is not None:
+            transcript = data.get("text", "")
+    if not transcript:
+        sidecar = tools.server_module()._transcript_json_path(media_path)
+        if sidecar.is_file():
+            try:
+                with open(sidecar) as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    transcript = str(data.get("text", ""))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                pass
+    return captions, transcript
+
+
+def _propose(clip, max_keywords: int):
+    """(keywords, sources) proposed for one parsed clip."""
+    media_path = media_src_to_path(clip.media_path or "")
+    if not media_path:
+        return [], []
+    captions, transcript = _derivable_text(media_path)
+    existing = {t for k in clip.keyword_values for t in _find.tokens(k)}
+    counts: Counter = Counter()
+    sources = []
+    for label, text in (("captions", captions), ("transcript", transcript)):
+        toks = [t for t in _find.tokens(text) if len(t) >= 4 and t not in existing]
+        if toks:
+            sources.append(label)
+            counts.update(toks)
+    return [w for w, _ in counts.most_common(max_keywords)], sources
+
+
+async def handle_organize_auto(args: dict) -> list:
+    max_keywords = int(args.get("max_keywords", 3))
+    if not (1 <= max_keywords <= 20):
+        raise ValueError("max_keywords must be between 1 and 20")
+    srv = tools.server_module()
+    filepath = srv._validate_filepath(args["filepath"])
+    _, tl = parse_project(filepath)
+    clip_filter = args.get("clip_name")
+    proposals, bare = [], []
+    for clip in tl.clips:
+        if clip_filter and clip.name != clip_filter:
+            continue
+        words, sources = _propose(clip, max_keywords)
+        if words:
+            proposals.append((clip.name, words, sources))
+        else:
+            bare.append(clip.name)
+    out = "# Auto Keywords\n\n"
+    if proposals:
+        out += srv._markdown_table(
+            ["Clip", "Proposed", "From"],
+            [[name, ", ".join(words), " + ".join(sources)] for name, words, sources in proposals],
+        ) + "\n"
+    if bare:
+        out += (f"\n**Nothing to derive from** ({len(bare)}): {', '.join(bare[:10])} — "
+                "no captions or transcript yet; run `find_index` (and `transcript_media`) first.\n")
+    if not proposals:
+        return text_result(out + "\nNothing proposed. Nothing written.")
+    if not args.get("apply"):
+        call = json.dumps({"action": "organize_auto", "args": {"filepath": filepath, "apply": True,
+                                                                "max_keywords": max_keywords}})
+        return text_result(out + f"\nProposal only — nothing written. To apply: organize {call}")
+    m = FCPXMLModifier(filepath)
+    touched = 0
+    for name, words, _ in proposals:
+        touched += m.bulk_keywords(m.select_clips(clip_name=name), words, "add")
+    written = _write(srv, filepath, m, args)
+    return text_result(out + f"\nApplied to {touched} clips.\nWritten: {written}")
+
+
 ACTIONS = {
+    "organize_auto": handle_organize_auto,
     "organize_keywords": handle_organize_keywords,
     "organize_rate": handle_organize_rate,
     "organize_roles": handle_organize_roles,
@@ -151,7 +238,8 @@ ACTIONS = {
 }
 
 DESCRIPTION = (
-    "Bulk library logging and the ledger. Select clips with clip_name (glob), "
+    "Bulk library logging and the ledger. organize_auto proposes keywords per clip "
+    "from cached captions and the transcript (apply=true writes them). Select clips with clip_name (glob), "
     "keyword and/or role, then organize_keywords (keywords, mode add|remove|replace), "
     "organize_rate (rating favorite|rejected|clear) or organize_roles (audio_role, "
     "video_role); each writes a _organized copy. history lists every recorded "

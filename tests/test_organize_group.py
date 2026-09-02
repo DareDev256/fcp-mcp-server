@@ -1,5 +1,6 @@
 """organize_keywords / organize_rate / organize_roles / history / undo through the MCP seam."""
 
+import json
 import os
 import shutil
 import xml.etree.ElementTree as ET
@@ -24,7 +25,6 @@ async def _call(action, args):
     return result[0].text
 
 
-@pytest.mark.xfail(strict=True, reason="organize_auto lands in Task 9")
 def test_advertised_actions():
     assert set(tools.EXTRA_GROUPS["organize"]["actions"]) == ADVERTISED
 
@@ -97,3 +97,44 @@ async def test_journal_off_names_the_variable(project, monkeypatch):
     monkeypatch.setenv("FCP_MCP_JOURNAL", "off")
     for action in ("history", "undo"):
         assert "FCP_MCP_JOURNAL" in await _call(action, {"filepath": project})
+
+
+@pytest.fixture
+def derivable(tmp_path):
+    from tests.test_find_group import PROJECT_XML, WORDS
+
+    a = tmp_path / "interview.mov"
+    b = tmp_path / "beach.mov"
+    a.write_bytes(b"\x00" * 64)
+    b.write_bytes(b"\x00" * 64)
+    (tmp_path / "interview_transcript.json").write_text(json.dumps({
+        "language": "en", "duration": 10.0, "text": " ".join(w["word"] for w in WORDS),
+        "segments": [], "words": WORDS, "events": [],
+    }))
+    path = tmp_path / "project.fcpxml"
+    path.write_text(PROJECT_XML.format(a=f"file://{a}", b=f"file://{b}"))
+    return str(path)
+
+
+async def test_organize_auto_proposes_without_writing(derivable):
+    text = await _call("organize_auto", {"filepath": derivable})
+    assert "| interview | budget" in text and "| transcript |" in text
+    assert "Nothing to derive from" in text and "Beach Wide" in text and "find_index" in text
+    assert "Proposal only" in text and '"apply": true' in text
+    assert not os.path.exists(derivable.replace(".fcpxml", "_organized.fcpxml"))
+
+
+async def test_organize_auto_apply_writes_keywords(derivable):
+    text = await _call("organize_auto", {"filepath": derivable, "apply": True, "max_keywords": 2})
+    out = derivable.replace(".fcpxml", "_organized.fcpxml")
+    assert "Applied to 1 clips" in text and os.path.exists(out)
+    root = ET.parse(out).getroot()
+    clip = next(c for c in root.iter("asset-clip") if c.get("name") == "interview")
+    assert "budget" in clip.find("keyword").get("value")
+    # Existing keywords are not re-proposed.
+    assert "budget" not in await _call("organize_auto", {"filepath": out})
+
+
+async def test_organize_auto_nothing_derivable(project):
+    text = await _call("organize_auto", {"filepath": project})
+    assert "Nothing proposed. Nothing written." in text and "find_index" in text
