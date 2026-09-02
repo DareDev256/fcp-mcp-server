@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+- **The release pipeline now checks PyPI and reports its own failures.** Two
+  jobs after `publish`: `verify` asks the index whether it actually serves the
+  tagged version, retrying for ten minutes, because a green publish job is not
+  evidence — v0.16.0 had a tag, a release page and a changelog entry while the
+  index served the previous version. `report` opens an issue when any job in a
+  tag run fails, since nothing watches the Actions tab between releases and a
+  failed publish leaves a tag and a release that both still look finished.
+  The index check was control-tested against a served version, an absent one,
+  and the prefix `0.2` — which must NOT match `0.21.0`, and does not, because
+  it anchors on the sdist filename.
+
 ## [0.21.0] - 2026-09-02
 
 ### Changed
