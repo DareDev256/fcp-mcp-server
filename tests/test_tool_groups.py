@@ -138,13 +138,14 @@ class TestGroupCoverage:
         assert not missing, f"handlers in no group: {sorted(missing)}"
 
     def test_group_count_is_a_real_reduction(self):
-        """A dozen verbs is still a reduction from 62 flat tools.
+        """Fourteen verbs is still a reduction from 62 flat tools.
 
         The cap exists so grouping does not quietly un-group itself one new
         verb at a time. It is not a limit on capability: TOOL_HANDLERS grows
-        freely underneath.
+        freely underneath. Raised 12 -> 14 in v0.19.0 for organize + find,
+        each of which carries several actions — a verb, not a tool.
         """
-        assert len(server.TOOL_GROUPS) <= 12
+        assert len(server.TOOL_GROUPS) <= 14
         assert len(server.TOOL_HANDLERS) >= 62
 
 
