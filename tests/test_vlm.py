@@ -87,7 +87,7 @@ def test_caption_handles_result_object(monkeypatch):
 def test_caption_shots_opens_no_socket(monkeypatch, tmp_path):
     monkeypatch.setattr(vlm, "caption", lambda p, model=None, max_tokens=60: "frame " + os.path.basename(p))
 
-    def fake_frame(src, at, out):
+    def fake_frame(src, at, out, max_short_side=None):
         open(out, "wb").write(b"jpg")
         return out
 
@@ -109,7 +109,25 @@ def test_caption_shots_opens_no_socket(monkeypatch, tmp_path):
 
 
 def test_caption_shots_skips_unrenderable(monkeypatch, tmp_path):
-    monkeypatch.setattr(render, "render_frame", lambda src, at, out: None)
+    monkeypatch.setattr(render, "render_frame", lambda src, at, out, max_short_side=None: None)
     monkeypatch.setattr(render, "cache_dir", lambda: tmp_path)
     monkeypatch.setattr(vlm, "caption", lambda *a, **k: pytest.fail("captioned a missing frame"))
     assert vlm.caption_shots(str(tmp_path / "m.mov"), [(Fraction(0), Fraction(1))]) == []
+
+
+def test_caption_shots_downscales_the_frame_it_captions(monkeypatch, tmp_path):
+    """The vision model gets a 1080p frame, not a 4K one — a fraction of the
+    caption time on this machine, same sentence. Plain render_frame is untouched."""
+    seen = []
+
+    def fake_frame(src, at, out, **kw):
+        seen.append(kw)
+        open(out, "wb").write(b"jpg")
+        return out
+
+    monkeypatch.setattr(render, "render_frame", fake_frame)
+    monkeypatch.setattr(render, "cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(vlm, "caption", lambda *a, **k: "ok")
+    vlm.caption_shots(str(tmp_path / "m.mov"), [(Fraction(0), Fraction(2))])
+    assert seen == [{"max_short_side": vlm.CAPTION_SHORT_SIDE}]
+    assert vlm.CAPTION_SHORT_SIDE <= 1080

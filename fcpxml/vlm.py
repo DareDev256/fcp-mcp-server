@@ -20,6 +20,11 @@ from fcpxml import render
 MODEL_ENV = "FCP_MCP_VLM_MODEL"
 DEFAULT_MODEL = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
 INSTALL = "pip install 'fcp-mcp-server[find]'   # Apple Silicon only"
+# Frames are downscaled to 1080p (short edge capped, aspect kept) before
+# captioning. Measured on a 2160x3840 HEVC frame: 32 s at full size,
+# 4.8 s at 1080x1920, same caption. The model looks at the picture; it
+# does not need to count pixels.
+CAPTION_SHORT_SIDE = 1080
 PROMPT = "Describe this video frame in one short sentence: subject, action, setting, shot size."
 _loaded: dict = {}
 
@@ -105,7 +110,7 @@ def caption_shots(
         mid = (Fraction(start) + Fraction(end)) / 2
         frame = frames_dir / f"{tag}_{n}.jpg"
         try:
-            if render.render_frame(str(media_path), mid, str(frame)) is None:
+            if render.render_frame(str(media_path), mid, str(frame), max_short_side=CAPTION_SHORT_SIDE) is None:
                 continue
             rows.append({"start": Fraction(start), "end": Fraction(end),
                          "caption": caption(str(frame), model)})

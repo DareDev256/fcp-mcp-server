@@ -123,6 +123,80 @@ def test_render_frame_on_a_missing_source_returns_none(tmp_path):
     ) is None
 
 
+def _fake_ffmpeg(monkeypatch, seen):
+    """Records the argv ffmpeg would have been given and pretends it wrote the frame."""
+    def run(args, **kw):
+        seen.append(list(args))
+        open(args[-1], "wb").write(b"jpg")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(render.subprocess, "run", run)
+
+
+def test_render_frame_is_full_resolution_unless_asked(tmp_path, monkeypatch):
+    """The preview tools measure frames; only a caller that asks gets a scaled one."""
+    src = tmp_path / "s.mov"
+    src.write_bytes(b"x")
+    seen = []
+    _fake_ffmpeg(monkeypatch, seen)
+    assert render.render_frame(str(src), Fraction(1), str(tmp_path / "a.jpg"))
+    assert "-vf" not in seen[0] and "scale" not in " ".join(seen[0])
+    assert render.render_frame(str(src), Fraction(1), str(tmp_path / "b.jpg"), max_short_side=1080)
+    assert seen[1][seen[1].index("-vf") + 1] == render.frame_scale_filter(1080)
+    assert "1080" in render.frame_scale_filter(1080) and "720" in render.frame_scale_filter(720)
+
+
+def _dims(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, timeout=60, check=True,
+    ).stdout.strip()
+    w, h = out.split(",")[:2]
+    return int(w), int(h)
+
+
+def _synth(tmp_path, name, size):
+    out = tmp_path / name
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostdin", "-y",
+         "-f", "lavfi", "-i", f"testsrc=size={size}:rate=24:duration=0.5",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)],
+        capture_output=True, timeout=120, check=True,
+    )
+    return out
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
+def test_max_short_side_caps_the_short_edge_and_never_upscales(bars, tmp_path):
+    """Checked on the real binary: a 4K frame comes back 1920x1080, a portrait
+    phone frame 1080x1920 (its width capped, not its height), a square source
+    is capped on both, and a source already smaller than the cap keeps its
+    own size."""
+    uhd = _synth(tmp_path, "uhd.mp4", "3840x2160")
+    plain = tmp_path / "plain.jpg"
+    assert render.render_frame(str(uhd), Fraction(0), str(plain))
+    assert _dims(plain) == (3840, 2160)  # the instrument sees full resolution
+
+    capped = tmp_path / "capped.jpg"
+    assert render.render_frame(str(uhd), Fraction(0), str(capped), max_short_side=1080)
+    assert _dims(capped) == (1920, 1080)
+
+    tall = _synth(tmp_path, "tall.mp4", "2160x3840")
+    portrait = tmp_path / "portrait.jpg"
+    assert render.render_frame(str(tall), Fraction(0), str(portrait), max_short_side=1080)
+    assert _dims(portrait) == (1080, 1920)
+
+    square_src = _synth(tmp_path, "square.mp4", "2160x2160")
+    square = tmp_path / "square.jpg"
+    assert render.render_frame(str(square_src), Fraction(0), str(square), max_short_side=1080)
+    assert _dims(square) == (1080, 1080)
+
+    small = tmp_path / "small.jpg"
+    assert render.render_frame(str(bars), Fraction(1), str(small), max_short_side=1080)
+    assert _dims(small) == (320, 240)
+
+
 @pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
 def test_a_failing_ffmpeg_reports_its_own_stderr(bars, tmp_path, monkeypatch):
     """A broken render must say why, not just return no path."""

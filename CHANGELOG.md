@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+- **Vision captions look at a 1080p frame, not a 4K one.** `caption_shots`
+  now asks `render_frame` for a frame with its short edge capped at 1080 px
+  (`vlm.CAPTION_SHORT_SIDE`), aspect preserved: 3840x2160 becomes 1920x1080,
+  a 2160x3840 phone clip 1080x1920, and a source already smaller than the cap
+  keeps its size. Measured on a 2160x3840 HEVC frame with Qwen3-VL-4B: 32 s
+  per caption at full size, 4.8 s at 1080p, same sentence. `render_frame`
+  itself is unchanged by default — the preview tools still get full
+  resolution — and takes the cap only as an explicit `max_short_side`
+  keyword. Checked against the real binary in `test_render.py`.
+
 ## [0.20.0] - 2026-09-02
 
 ### Added
