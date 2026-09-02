@@ -75,7 +75,7 @@ from fcpxml.transcribe import (
 )
 from fcpxml.writer import FCPXMLModifier, list_effects
 
-__version__ = "0.19.0"
+__version__ = "0.19.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 

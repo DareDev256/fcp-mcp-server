@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-02
+
+### Fixed
+- **PyPI had been serving 0.16.0 through three releases.** The `Publish`
+  workflow re-runs the suite on a runner with no ffmpeg, and
+  `test_render_with_all_media_missing_reports_rather_than_raises` read
+  "ffmpeg is not on PATH" there instead of the media error it asserts — so
+  the v0.18.0 and v0.19.0 uploads both failed at the test gate while the git
+  tag and the GitHub release looked done. The test now stubs `shutil.which`
+  so the check under test is the MEDIA one (`graph_to_args` refuses before
+  any subprocess, so nothing runs). The whole suite is green with ffmpeg
+  hidden from PATH (`1640 passed, 25 skipped`), which is the condition the
+  publish runner actually has. 0.17.0–0.19.0 ship to PyPI as this version.
+
 ## [0.19.0] - 2026-09-02
 
 ### Added — The Moat and the Ledger (every write is recorded, every ship is reviewed, and the shots can be found)

@@ -60,7 +60,12 @@ def test_render_without_ffmpeg_names_what_is_missing(monkeypatch, tmp_path):
     assert "install" in result["error"].lower()
 
 
-def test_render_with_all_media_missing_reports_rather_than_raises(tmp_path):
+def test_render_with_all_media_missing_reports_rather_than_raises(monkeypatch, tmp_path):
+    # Pretend ffmpeg is present so the check under test is the MEDIA one.
+    # graph_to_args refuses before any subprocess, so nothing runs. Without
+    # this the test read "ffmpeg is not on PATH" on the publish runner, which
+    # installs no ffmpeg — and that is what blocked the v0.18.0 upload.
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/ffmpeg")
     result = render.render_proxy(_timeline(tmp_path / "nope.mov"))
     assert result["path"] is None
     assert result["skipped"] == ["a"]
