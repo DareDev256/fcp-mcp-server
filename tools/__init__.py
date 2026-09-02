@@ -78,6 +78,7 @@ def _register_all() -> None:
     Called at import. Group modules are added here as they land.
     """
     from tools import index as _idx
+    from tools import organize as _organize
     from tools import preview as _preview
     from tools import scenes as _scenes
     from tools import watch as _watch
@@ -86,6 +87,7 @@ def _register_all() -> None:
     register_group("watch", _watch.DESCRIPTION, _watch.ACTIONS)
     register_group("index", _idx.DESCRIPTION, _idx.ACTIONS)
     register_group("scenes", _scenes.DESCRIPTION, _scenes.ACTIONS)
+    register_group("organize", _organize.DESCRIPTION, _organize.ACTIONS)
 
 
 _register_all()
