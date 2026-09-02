@@ -316,6 +316,36 @@ class Index:
         )
         self._con.commit()
 
+    # -- shots (vision captions) --------------------------------------------------
+
+    def get_shots(self, path: str) -> Optional[list[dict]]:
+        """Captioned shots for *path*, or ``None`` when it was never captioned."""
+        mid = self.media_id(path)
+        if mid is None:
+            return None
+        rows = self._con.execute(
+            "SELECT start_num, start_den, end_num, end_den, caption FROM shot "
+            "WHERE media_id = ? ORDER BY rowid", (mid,)
+        ).fetchall()
+        if not rows:
+            return None
+        return [
+            {"start": from_pair(sn, sd), "end": from_pair(en, ed), "caption": caption}
+            for sn, sd, en, ed, caption in rows
+        ]
+
+    def put_shots(self, path: str, rows: list[dict]) -> None:
+        mid = self.media_id(path, create=True)
+        if mid is None:
+            return
+        self._con.execute("DELETE FROM shot WHERE media_id = ?", (mid,))
+        self._con.executemany(
+            "INSERT INTO shot (media_id, start_num, start_den, end_num, end_den, caption) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(mid, *to_pair(r["start"]), *to_pair(r["end"]), r.get("caption")) for r in rows],
+        )
+        self._con.commit()
+
     # -- housekeeping -------------------------------------------------------------
 
     def stats(self) -> dict:

@@ -175,3 +175,19 @@ class TestStats:
             ix.put_analysis(media, "silence", [])
             ix.clear()
             assert ix.stats()["media"] == 0
+
+
+@requires_index
+def test_shots_round_trip_and_invalidate(tmp_path):
+    media = tmp_path / "m.mov"
+    media.write_bytes(b"x" * 10)
+    with idx.Index.open() as ix:
+        assert ix.get_shots(str(media)) is None
+        ix.put_shots(str(media), [{"start": 0.0, "end": 1.5, "caption": "a man"}])
+        assert ix.get_shots(str(media)) == [
+            {"start": Fraction(0), "end": Fraction(3, 2), "caption": "a man"}
+        ]
+        assert ix.stats()["shot"] == 1
+    media.write_bytes(b"y" * 11)
+    with idx.Index.open() as ix:
+        assert ix.get_shots(str(media)) is None

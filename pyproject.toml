@@ -59,6 +59,10 @@ transcribe = [
 scenes = [
     "scenedetect[opencv]>=0.7.0",
 ]
+find = [
+    "mlx-vlm>=0.1.0",
+    "numpy",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
