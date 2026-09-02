@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-02
+
+### Added — The Moat and the Ledger (every write is recorded, every ship is reviewed, and the shots can be found)
+- **Operation journal** — `fcpxml/journal.py`, an append-only JSON-lines
+  ledger under `~/.fcp-mcp/journal/` (dir mode 700). Every write and every
+  preview render passes through one seam in `server.py` and appends
+  `ts, tool, action, args, input{path,sha256}, output{path,sha256}`. Records
+  hold paths and hashes, never content. The project is the FOLDER: one ledger
+  per input directory follows the suffix chain wherever it goes.
+  `FCP_MCP_JOURNAL` relocates it, or `off` disables it.
+- **`organize` group** — `organize_keywords` (add / remove / replace),
+  `organize_rate` (favorite / rejected / clear), `organize_roles`, all over a
+  clip selection by glob name, keyword or role, written as an `_organized`
+  copy. `history` reads the ledger as a table with ages; `undo` moves the
+  last N recorded outputs to `<journal>/undone/` — it **never deletes**, and
+  refuses when the file's hash no longer matches the record.
+- **`organize_auto`** — proposes keywords per clip from what the index
+  already holds (shot captions, transcript text) and from transcript
+  sidecars. It never transcribes and never captions; with nothing derivable
+  it says so and names the `find_index` call that would fix that. Proposals
+  print the exact `apply=true` call; nothing is written until it is passed.
+- **Review gate on `deliver`** — `export_csv`, `export_edl`,
+  `export_fcp7_xml`, `export_resolve_xml`, `export_role_stems` and
+  `push_to_fcp` now refuse when the journal holds no `preview_render` whose
+  input hash matches the file's current state, and name the exact
+  `preview_render` call that satisfies it. `confirm_unreviewed=true` ships
+  anyway and stamps the result *Shipped UNREVIEWED*. With the journal off the
+  gate refuses to certify anything and says why.
+- **`find` group** — `find_shots` answers "find the shot where…" as a router
+  with the tier named on every hit: tier 1 transcript words, tier 2 metadata
+  (clip names, keywords, marker names and notes, event labels), tier 3
+  vision captions. Hits carry source in/out, timeline position, score and a
+  `why`. Vision is consulted when `visual=true`, when the query reads as
+  visual, or when the cheaper tiers came up short — never more than
+  `MAX_LIVE_FRAMES` (20) live captions per call, the rest from the cache.
+  `find_index` warms transcripts, scenes and (opt-in) captions for every
+  source and reports each as done / skipped / unavailable with the reason.
+  `find_to_timeline` assembles the hits into a `_found` selects reel.
+- **Offline shot captions** — `fcpxml/vlm.py` runs an MLX vision model
+  (`mlx-community/Qwen2-VL-2B-Instruct-4bit` by default, `FCP_MCP_VLM_MODEL`
+  to change it) over the frames `scenes` found. `HF_HUB_OFFLINE=1` and
+  `TRANSFORMERS_OFFLINE=1` are set BEFORE `mlx_vlm` is imported; a model
+  that is not in the local Hub cache is reported with the exact
+  `hf download <id>` command, never fetched. Captions are stored once in the
+  index (`get_shots` / `put_shots`) and invalidated with the source.
+- **`[find]` extra** — `pip install "fcp-mcp-server[find]"` pulls `mlx-vlm`
+  and `numpy`. Apple Silicon only; everywhere else `find` still answers from
+  transcript and metadata and says vision is unavailable.
+- **Diversity constraint** — `fcpxml/diversity.py`. `auto_rough_cut` takes
+  `min_source_separation` (0–20, default 0): no source may recur within that
+  many cuts, and every assembly now reports `Diversity: 0.50 (1 of 2 cuts
+  change source)`. `find_to_timeline` defaults to 1 and also drops hits whose
+  captions are near-duplicates of the previous pick.
+- **Writer bulk edits** — `select_clips`, `bulk_keywords`, `bulk_rating`,
+  `bulk_roles` on `FCPXMLModifier`; new `<keyword>` / `<rating>` children go
+  in through `_dtd_insert`, so the DTD element order survives.
+- **Env** — `FCP_MCP_JOURNAL`, `FCP_MCP_VLM_MODEL`.
+- **Tests** — `test_journal.py`, `test_journal_wiring.py`, `test_review_gate.py`,
+  `test_organize.py`, `test_organize_group.py`, `test_diversity_constraint.py`,
+  `test_find.py`, `test_vlm.py`, `test_find_group.py` (the never-transcribes /
+  never-downloads guards, the undo hash refusal, the diversity mutation check).
+
+### Changed
+- **BREAKING for scripted callers** — the six `deliver` actions above now
+  refuse an unreviewed file. Render it with `preview_render` first, or pass
+  `confirm_unreviewed=true`.
+- Tool groups: 13 (was 11), dispatching into 88 operations (was 79). The
+  group-count guard in `test_tool_groups.py` moves from 12 to 14.
+- `server.__version__` 0.19.0, and `test_version.py` still holds it to
+  `pyproject.toml`.
+
+### Known
+- Vision captions need Apple Silicon (`mlx-vlm`); there is no CPU/CUDA path.
+- Tier-3 similarity is lexical (Jaccard over caption words) until embeddings
+  land; captions are cached so a better ranker reads the same rows.
+- Marker `start` is still written in source time by `edit_markers`; the
+  timeline-time fix is on the deferred list.
+
 ## [0.18.0] - 2026-09-01
 
 ### Added — Speed and Sight (the second call is instant, and the cuts are visible)
