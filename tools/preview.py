@@ -9,7 +9,7 @@ import subprocess
 from fractions import Fraction
 from pathlib import Path
 
-from fcpxml import filtergraph, render, visual
+from fcpxml import filtergraph, journal, render, visual
 from tools._common import parse_project, text_result
 
 CMUX_PREVIEW = Path.home() / ".claude" / "hooks" / "cmux-image-preview.mjs"
@@ -93,6 +93,10 @@ async def handle_preview_render(args: dict):
         timeline, out_path=args.get("output_path"), height=height
     )
     if result.get("path"):
+        # The proxy lands in the private cache, never under the project's
+        # anchor, so it never passes _validate_output_path. This note is the
+        # only way the render reaches the ledger — and the review gate.
+        journal.note_output(result["path"])
         _open_beside_terminal([result["path"]])
     return text_result(_describe(result))
 

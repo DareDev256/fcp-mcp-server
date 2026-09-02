@@ -31,6 +31,7 @@ from mcp.types import (
 )
 
 from fcpxml import index as _index
+from fcpxml import journal as _journal
 from fcpxml import live
 from fcpxml import progress as _progress
 from fcpxml import transcript_pack as _tpack
@@ -387,6 +388,9 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
                 f"{resolved} is not under {anchor}"
             )
 
+    # The journal seam: every write passes through here, so noting the
+    # approved path is enough for the ledger to record it once it exists.
+    _journal.note_output(str(resolved))
     return str(resolved)
 
 
@@ -4743,7 +4747,7 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
             f"got {type(call_args).__name__}."
         )
 
-    return await handler(call_args)
+    return await _journaled(group, action, call_args, handler)
 
 
 def _group_tool(name: str) -> Tool:
@@ -4811,6 +4815,22 @@ def _action_param_help(action: str | None) -> str:
     return f"'{action}' accepts:\n" + "\n".join(lines)
 
 
+async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequence[TextContent]:
+    """Run *handler* inside a journal ledger.
+
+    Any path the handler validates as an output and then writes is recorded
+    against the input. Handlers change nothing for this: the seam is
+    _validate_output_path, which every write already passes through.
+    """
+    filepath = arguments.get("filepath")
+    input_path = filepath if isinstance(filepath, str) else None
+    token = _journal.begin(tool, action, arguments, input_path)
+    try:
+        return await handler(arguments)
+    finally:
+        _journal.finish(token)
+
+
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     handler = TOOL_HANDLERS.get(name)
     if not handler and name not in TOOL_GROUPS:
@@ -4818,7 +4838,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
     try:
         if name in TOOL_GROUPS:
             return await handle_group(name, arguments)
-        return await handler(arguments)
+        return await _journaled(name, name, arguments, handler)
     except _NoTimelineError:
         return _no_timeline()
     except FileNotFoundError as e:
