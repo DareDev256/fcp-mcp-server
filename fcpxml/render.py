@@ -122,16 +122,43 @@ def render_proxy(
     }
 
 
-def render_frame(source: str, at: Fraction, out_path: str) -> Optional[str]:
-    """Extract a single frame from *source* at *at* seconds."""
+def frame_scale_filter(max_short_side: int) -> str:
+    """An ffmpeg scale filter that caps the SHORT edge at *max_short_side*.
+
+    The "1080p" convention: 3840x2160 becomes 1920x1080 and a 2160x3840 phone
+    clip 1080x1920, aspect preserved either way. ``min`` keeps a source already
+    smaller than the cap at its own size — this never upscales — and ``-2``
+    keeps the long edge even for the encoder. Only the short edge is bounded:
+    an extreme panorama such as 7680x1080 passes through untouched.
+    """
+    cap = int(max_short_side)
+    return (
+        f"scale=w='if(gt(iw,ih),-2,min(iw,{cap}))'"
+        f":h='if(gt(iw,ih),min(ih,{cap}),-2)'"
+    )
+
+
+def render_frame(
+    source: str, at: Fraction, out_path: str, *, max_short_side: Optional[int] = None
+) -> Optional[str]:
+    """Extract a single frame from *source* at *at* seconds.
+
+    Full source resolution by default. ``max_short_side`` caps the frame's
+    shorter edge (see :func:`frame_scale_filter`) for consumers that only need
+    to look at the picture, not measure it — a vision model captions a 1080p
+    frame in a fraction of the time it takes on a 4K one, and says the same
+    thing.
+    """
     if shutil.which("ffmpeg") is None or not Path(source).is_file():
         return None
+    args = ["ffmpeg", "-hide_banner", "-nostdin", "-y",
+            "-ss", str(float(at)), "-i", str(source)]
+    if max_short_side is not None:
+        args += ["-vf", frame_scale_filter(max_short_side)]
+    args += ["-frames:v", "1", str(out_path)]
     try:
         result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-nostdin", "-y",
-             "-ss", str(float(at)), "-i", str(source),
-             "-frames:v", "1", str(out_path)],
-            capture_output=True, timeout=PROBE_TIMEOUT_SECONDS,
+            args, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
