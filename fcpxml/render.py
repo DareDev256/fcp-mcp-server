@@ -62,7 +62,8 @@ def probe_duration(path: str) -> Optional[Fraction]:
 def _failure(graph, skipped: list, error: str) -> dict:
     return {
         "path": None, "duration": None, "expected": graph.total, "drift": None,
-        "substitutions": graph.substitutions, "skipped": skipped, "error": error,
+        "substitutions": graph.substitutions, "transitions": graph.transitions,
+        "skipped": skipped, "error": error,
     }
 
 
@@ -115,6 +116,7 @@ def render_proxy(
         "expected": graph.total,
         "drift": None if duration is None else duration - graph.total,
         "substitutions": graph.substitutions,
+        "transitions": graph.transitions,
         "skipped": skipped,
         "error": None,
     }

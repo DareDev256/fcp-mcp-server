@@ -55,6 +55,18 @@ def _timeline_or_message(filepath: str):
     return timeline, None
 
 
+def _crossfade_line(transitions) -> list[str]:
+    """One line naming the transitions that actually made it into the render.
+
+    Reporting only the substitutions would leave a compiled dissolve looking
+    identical to one that was silently dropped.
+    """
+    if not transitions:
+        return []
+    kinds = ", ".join(sorted({t.kind for t in transitions}))
+    return [f"Crossfades compiled: {len(transitions)} ({kinds})"]
+
+
 def _describe(result: dict) -> str:
     lines = []
     if result.get("error"):
@@ -73,6 +85,7 @@ def _describe(result: dict) -> str:
             lines.append(
                 "Duration could NOT be read back — treat this render as UNVERIFIED."
             )
+    lines += _crossfade_line(result.get("transitions") or ())
     for note in result.get("substitutions") or ():
         lines.append(f"Substituted: {note}")
     if result.get("skipped"):
@@ -125,6 +138,7 @@ async def handle_preview_sheet(args: dict):
     lines = [f"Contact sheet: {len(written)} frames, one per spine cut."]
     if skipped:
         lines.append("No frame for: " + ", ".join(skipped))
+    lines += _crossfade_line(graph.transitions)
     for note in graph.substitutions:
         lines.append(f"Substituted: {note}")
     return text_result("\n".join(lines))
@@ -197,6 +211,7 @@ async def handle_preview_timeline(args: dict):
         bar = " " * left + "#" * span
         flag = "  [MEDIA MISSING]" if segment.missing else ""
         lines.append(f"{bar:<{TIMELINE_BAR_WIDTH}} {segment.label}{flag}")
+    lines += _crossfade_line(graph.transitions)
     for note in graph.substitutions:
         lines.append(f"Substituted: {note}")
     return text_result("\n".join(lines))

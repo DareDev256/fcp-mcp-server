@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-02
+
+### Added
+- **Crossfades are compiled, not flattened.** A transition on a spine cut now
+  becomes an ffmpeg `xfade` — dissolve, dip/fade to colour, wipe and slide map
+  onto their nearest xfade equivalents; anything unrecognised renders as a
+  dissolve and says so. A transition is only compiled onto a boundary it can
+  actually run on: within its own duration of a real cut, both neighbours
+  present, the cut not already taken, and its length trimmed to fit the
+  shorter neighbour. Everything else is reported with the render, naming the
+  reason, rather than being silently dropped. `FilterGraph.total` subtracts
+  the overlaps, so the artifact duration read-back still means something.
+- **Video lanes composite.** Connected clips are overlaid over the spine for
+  their own window, in lane order, each shifted by any crossfade that
+  shortened the timeline before them. They are drawn full-frame — this module
+  does not read transforms — and the render prints that, along with the fact
+  that audio lanes are never mixed. `preview_render` and `preview_timeline`
+  also now report the crossfades that WERE compiled, since reporting only the
+  substitutions leaves an honoured dissolve looking exactly like a dropped one.
+- Both chains are checked against the real binary, not just as argument lists:
+  `test_render.py` renders an xfade and asserts the artifact is shorter by the
+  overlap, and renders a lane twice — with and without — and asserts the frame
+  inside the lane's window actually differs. A graph that ffmpeg rejects, or
+  that composites nothing, fails there and nowhere else.
+
+### Still deferred
+- Splitting `server.py`'s flat handlers into `tools/`; an operation Protocol
+  shared by XML and Live; Timecode → TimeValue unification.
+
 ## [0.19.3] - 2026-09-02
 
 ### Fixed

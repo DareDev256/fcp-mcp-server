@@ -106,7 +106,9 @@ def test_a_file_url_is_resolved_to_a_filesystem_path(tmp_path):
     assert graph.segments[0].source == str(real)
 
 
-def test_every_transition_is_reported_as_a_substitution():
+def test_a_transition_on_absent_media_is_reported_rather_than_compiled():
+    """The fixture clips point at a path that does not exist, so there is
+    nothing to fade between and the operator has to be told."""
     tl = _timeline(
         [_clip("a", 0, 24), _clip("b", 24, 24)],
         transitions=[Transition(
@@ -116,6 +118,7 @@ def test_every_transition_is_reported_as_a_substitution():
         )],
     )
     graph = compile_timeline(tl)
+    assert graph.transitions == ()
     assert len(graph.substitutions) == 1
     assert "Cross Dissolve" in graph.substitutions[0]
     assert "hard cut" in graph.substitutions[0]
@@ -155,3 +158,244 @@ def test_empty_timeline_compiles_to_an_empty_graph():
     graph = compile_timeline(tl)
     assert graph.segments == ()
     assert graph.total == Fraction(0)
+
+
+# --- transition compilation (0.20.0) --------------------------------------
+
+
+def _transition(name, start_frames, duration_frames=4, kind="cross-dissolve"):
+    return Transition(
+        name=name,
+        duration=Timecode(frames=duration_frames, frame_rate=24.0),
+        start=Timecode(frames=start_frames, frame_rate=24.0),
+        transition_type=kind,
+    )
+
+
+def test_a_dissolve_on_a_cut_compiles_to_an_xfade(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))],
+        transitions=[_transition("Cross Dissolve", 22)],
+    )
+    graph = compile_timeline(tl)
+
+    assert len(graph.transitions) == 1
+    compiled = graph.transitions[0]
+    assert (compiled.boundary, compiled.kind) == (0, "fade")
+    assert compiled.duration == Fraction(4, 24)
+    assert graph.substitutions == ()
+    # The render is shorter than the sum of the cuts by the overlap.
+    assert graph.total == Fraction(48, 24) - Fraction(4, 24)
+
+    args = graph_to_args(graph, "/tmp/out.mp4", height=360)
+    chain = args[args.index("-filter_complex") + 1]
+    assert "xfade=transition=fade:duration=0.166667:offset=0.833333[vout]" in chain
+    assert "concat" not in chain
+
+
+def test_an_unrecognised_transition_still_renders_but_says_so(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))],
+        transitions=[_transition("Kaleidoscope", 24, kind="kaleidoscope")],
+    )
+    graph = compile_timeline(tl)
+    assert graph.transitions[0].kind == "fade"
+    assert "rendered as a dissolve" in graph.substitutions[0]
+
+
+def test_a_transition_nowhere_near_a_cut_is_reported_not_moved(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))],
+        transitions=[_transition("Cross Dissolve", 2)],
+    )
+    graph = compile_timeline(tl)
+    assert graph.transitions == ()
+    assert "hard cut" in graph.substitutions[0]
+    assert "no spine cut within" in graph.substitutions[0]
+
+
+def test_a_transition_beside_missing_media_is_reported_as_a_hard_cut(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path="/nope/gone.mov")],
+        transitions=[_transition("Cross Dissolve", 24)],
+    )
+    graph = compile_timeline(tl)
+    assert graph.transitions == ()
+    assert "missing its media" in graph.substitutions[0]
+
+
+def test_a_transition_longer_than_its_neighbours_is_shortened_to_fit(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 6, path=str(media))],
+        transitions=[_transition("Cross Dissolve", 24, duration_frames=12)],
+    )
+    graph = compile_timeline(tl)
+    assert graph.transitions[0].duration == Fraction(6, 24)
+    assert "shortened to 0.25s" in graph.substitutions[0]
+
+
+def test_two_transitions_cannot_share_one_cut(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))],
+        transitions=[_transition("Cross Dissolve", 24), _transition("Wipe", 24, kind="wipe")],
+    )
+    graph = compile_timeline(tl)
+    assert len(graph.transitions) == 1
+    assert "already occupies that cut" in graph.substitutions[0]
+
+
+def test_a_wipe_compiles_to_a_wipe_not_a_dissolve(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))],
+        transitions=[_transition("Wipe", 24, kind="wipe")],
+    )
+    graph = compile_timeline(tl)
+    assert graph.transitions[0].kind == "wipeleft"
+    assert graph.substitutions == ()
+
+
+def test_untransitioned_cuts_beside_an_xfade_stay_concats(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [
+            _clip("a", 0, 24, path=str(media)),
+            _clip("b", 24, 24, path=str(media)),
+            _clip("c", 48, 24, path=str(media)),
+        ],
+        transitions=[_transition("Cross Dissolve", 24)],
+    )
+    args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
+    chain = args[args.index("-filter_complex") + 1]
+    assert "[v0][v1]xfade=transition=fade:duration=0.166667:offset=0.833333[x1]" in chain
+    assert "[x1][v2]concat=n=2:v=1:a=0[vout]" in chain
+
+
+def test_a_timeline_without_transitions_still_uses_one_nway_concat(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))]
+    )
+    args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
+    chain = args[args.index("-filter_complex") + 1]
+    assert "[v0][v1]concat=n=2:v=1:a=0[vout]" in chain
+    assert "xfade" not in chain
+
+
+# --- lane compositing (0.20.0) ---------------------------------------------
+
+
+def _lane(name, lane, offset_frames, dur_frames, path):
+    return ConnectedClip(
+        name=name,
+        start=Timecode(frames=0, frame_rate=24.0),
+        duration=Timecode(frames=dur_frames, frame_rate=24.0),
+        lane=lane,
+        offset=Timecode(frames=offset_frames, frame_rate=24.0),
+        source_start=Timecode(frames=0, frame_rate=24.0),
+        media_path=path,
+    )
+
+
+def test_a_video_lane_is_overlaid_for_its_own_window_only(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 48, path=str(media))],
+        connected_clips=[_lane("broll", 1, 24, 24, str(media))],
+    )
+    args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4", height=360)
+    chain = args[args.index("-filter_complex") + 1]
+
+    assert "setpts=PTS-STARTPTS+1.000000/TB[l1]" in chain
+    assert "overlay=eof_action=pass:enable='between(t,1.000000,2.000000)'[vout]" in chain
+    # The lane's source is opened as its own input, after the spine's.
+    assert args.count("-i") == 2
+
+
+def test_a_crossfade_before_a_lane_shifts_the_overlay_back(tmp_path):
+    """The render is shorter than the timeline from the cut onwards, so an
+    overlay placed at its raw timeline time would sit late by the overlap."""
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 48, path=str(media))],
+        connected_clips=[_lane("broll", 1, 48, 12, str(media))],
+        transitions=[_transition("Cross Dissolve", 24, duration_frames=12)],
+    )
+    args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
+    chain = args[args.index("-filter_complex") + 1]
+    # Timeline 2.0s, minus the 0.5s the crossfade removed before it.
+    assert "setpts=PTS-STARTPTS+1.500000/TB" in chain
+    assert "enable='between(t,1.500000,2.000000)'" in chain
+
+
+def test_a_lane_whose_media_is_missing_is_not_drawn_but_is_reported(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 48, path=str(media))],
+        connected_clips=[_lane("gone", 1, 0, 24, "/nope/missing.mov")],
+    )
+    graph = compile_timeline(tl)
+    args = graph_to_args(graph, "/tmp/out.mp4")
+    assert "overlay" not in args[args.index("-filter_complex") + 1]
+    assert any("its media is missing" in note for note in graph.substitutions)
+
+
+def test_lane_compositing_says_what_it_cannot_read(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 48, path=str(media))],
+        connected_clips=[_lane("broll", 1, 0, 24, str(media))],
+    )
+    notes = compile_timeline(tl).substitutions
+    assert any("drawn full-frame" in note and "opacity" in note for note in notes)
+
+
+def test_an_audio_lane_is_reported_rather_than_silently_dropped(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 48, path=str(media))],
+        connected_clips=[_lane("music", -1, 0, 48, str(media))],
+    )
+    graph = compile_timeline(tl)
+    assert any("audio lanes are not mixed" in note for note in graph.substitutions)
+    assert "overlay" not in graph_to_args(graph, "/tmp/out.mp4")[
+        graph_to_args(graph, "/tmp/out.mp4").index("-filter_complex") + 1
+    ]
+
+
+def test_two_video_lanes_stack_in_lane_order(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 96, path=str(media))],
+        connected_clips=[
+            _lane("top", 2, 0, 24, str(media)),
+            _lane("under", 1, 0, 24, str(media)),
+        ],
+    )
+    chain = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")[
+        graph_to_args(compile_timeline(tl), "/tmp/out.mp4").index("-filter_complex") + 1
+    ]
+    # lane 1 composites onto the spine, lane 2 onto the result of lane 1.
+    assert "[base][l1]overlay" in chain
+    assert "[o1][l2]overlay" in chain and chain.endswith("[vout]")

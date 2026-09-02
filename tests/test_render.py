@@ -13,7 +13,7 @@ from fractions import Fraction
 import pytest
 
 from fcpxml import render
-from fcpxml.models import Clip, Timecode, Timeline
+from fcpxml.models import Clip, ConnectedClip, Timecode, Timeline, Transition
 
 FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
@@ -137,3 +137,86 @@ def test_a_failing_ffmpeg_reports_its_own_stderr(bars, tmp_path, monkeypatch):
     assert result["path"] is None
     assert "ffmpeg failed" in result["error"]
     assert filtergraph is not None
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
+def test_a_compiled_crossfade_renders_and_shortens_the_artifact(bars, tmp_path):
+    """The graph is only right if ffmpeg accepts it and the result overlaps.
+
+    Every other transition test asserts the argument list. A malformed
+    filter_complex passes all of them and fails only here, which is the whole
+    reason this one runs the real binary.
+    """
+    fps = 24.0
+    tl = Timeline(
+        name="X", duration=Timecode(frames=96, frame_rate=fps), frame_rate=fps,
+        clips=[
+            Clip(name="a", start=Timecode(frames=0, frame_rate=fps),
+                 duration=Timecode(frames=48, frame_rate=fps),
+                 source_start=Timecode(frames=0, frame_rate=fps),
+                 media_path=str(bars)),
+            Clip(name="b", start=Timecode(frames=48, frame_rate=fps),
+                 duration=Timecode(frames=48, frame_rate=fps),
+                 source_start=Timecode(frames=0, frame_rate=fps),
+                 media_path=str(bars)),
+        ],
+        transitions=[Transition(
+            name="Cross Dissolve",
+            duration=Timecode(frames=24, frame_rate=fps),
+            start=Timecode(frames=48, frame_rate=fps),
+        )],
+    )
+    out = tmp_path / "xfade.mp4"
+    result = render.render_proxy(tl, out_path=str(out), height=240)
+
+    assert result["error"] is None, result["error"]
+    assert len(result["transitions"]) == 1
+    # 2s + 2s overlapped by 1s.
+    assert result["expected"] == Fraction(3, 1)
+    assert result["duration"] is not None
+    assert abs(result["drift"]) < Fraction(1, 8), result["drift"]
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
+def test_a_lane_overlay_renders_and_changes_the_picture(bars, tmp_path):
+    """ffmpeg must accept the overlay chain, and the overlay must be visible.
+
+    A graph that runs but composites nothing looks identical to a correct one
+    on duration alone, so this compares a frame inside the lane's window
+    against the same frame of a spine-only render.
+    """
+    fps = 24.0
+
+    def timeline(with_lane):
+        return Timeline(
+            name="L", duration=Timecode(frames=96, frame_rate=fps), frame_rate=fps,
+            clips=[Clip(
+                name="a", start=Timecode(frames=0, frame_rate=fps),
+                duration=Timecode(frames=48, frame_rate=fps),
+                source_start=Timecode(frames=0, frame_rate=fps),
+                media_path=str(bars),
+            )],
+            connected_clips=[ConnectedClip(
+                name="broll", start=Timecode(frames=0, frame_rate=fps),
+                duration=Timecode(frames=24, frame_rate=fps), lane=1,
+                offset=Timecode(frames=24, frame_rate=fps),
+                source_start=Timecode(frames=72, frame_rate=fps),
+                media_path=str(bars),
+            )] if with_lane else [],
+        )
+
+    plain, composited = tmp_path / "plain.mp4", tmp_path / "lane.mp4"
+    assert render.render_proxy(
+        timeline(False), out_path=str(plain), height=240)["error"] is None
+    result = render.render_proxy(
+        timeline(True), out_path=str(composited), height=240)
+    assert result["error"] is None, result["error"]
+
+    # A lane adds no timeline length.
+    assert result["expected"] == Fraction(2, 1)
+    assert abs(result["drift"]) < Fraction(1, 8), result["drift"]
+
+    inside = tmp_path / "inside.png", tmp_path / "inside_plain.png"
+    assert render.render_frame(str(composited), Fraction(3, 2), str(inside[0]))
+    assert render.render_frame(str(plain), Fraction(3, 2), str(inside[1]))
+    assert inside[0].read_bytes() != inside[1].read_bytes()
