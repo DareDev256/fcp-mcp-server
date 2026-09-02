@@ -30,6 +30,7 @@ from mcp.types import (
     Tool,
 )
 
+from fcpxml import diversity as _diversity
 from fcpxml import index as _index
 from fcpxml import journal as _journal
 from fcpxml import live
@@ -1508,7 +1509,11 @@ def _legacy_tool_list() -> list[Tool]:
                     },
                     "priority": {"type": "string", "enum": ["best", "favorites", "longest", "shortest", "random"], "default": "best"},
                     "favorites_only": {"type": "boolean", "default": False},
-                    "add_transitions": {"type": "boolean", "default": False}
+                    "add_transitions": {"type": "boolean", "default": False},
+                    "min_source_separation": {
+                        "type": "integer", "minimum": 0, "maximum": 20, "default": 0,
+                        "description": "Minimum number of other shots between two uses of the same source; 0 = off"
+                    }
                 },
                 "required": ["filepath", "output_path", "target_duration"]
             }
@@ -2809,6 +2814,7 @@ async def handle_auto_rough_cut(arguments: dict) -> Sequence[TextContent]:
         priority=arguments.get("priority", "best"),
         favorites_only=arguments.get("favorites_only", False),
         add_transitions=arguments.get("add_transitions", False),
+        min_source_separation=int(arguments.get("min_source_separation", 0)),
     )
 
     return _text_result(f"""# Rough Cut Generated
@@ -2818,6 +2824,7 @@ async def handle_auto_rough_cut(arguments: dict) -> Sequence[TextContent]:
 - **Target Duration**: {format_duration(result.target_duration)}
 - **Actual Duration**: {format_duration(result.actual_duration)}
 - **Average Clip**: {format_duration(result.average_clip_duration)}
+- **{_diversity.describe(result.diversity_score)}**
 
 ## Output
 Saved to: `{result.output_path}`

@@ -848,6 +848,7 @@ class RoughCutResult:
     actual_duration: float
     segments: int
     average_clip_duration: float
+    diversity_score: float = 1.0  # 1.0 = no adjacent cut reuses a source
 
 
 # ============================================================================
