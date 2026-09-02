@@ -26,3 +26,9 @@ def index_is_off() -> bool:
 # Tests OF the cache need the cache. They are skipped on the index-off pass,
 # whose job is to prove every OTHER test does not.
 requires_index = pytest.mark.skipif(index_is_off(), reason="FCP_MCP_INDEX=off pass")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_journal(tmp_path, monkeypatch):
+    """The journal is a ledger under ``~/.fcp-mcp/``; tests never touch the real one."""
+    monkeypatch.setenv("FCP_MCP_JOURNAL", str(tmp_path / "journal"))
