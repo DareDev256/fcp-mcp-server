@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-02
+
 ### Changed
 - **Vision captions look at a 1080p frame, not a 4K one.** `caption_shots`
   now asks `render_frame` for a frame with its short edge capped at 1080 px
@@ -12,6 +14,13 @@
   itself is unchanged by default — the preview tools still get full
   resolution — and takes the cap only as an explicit `max_short_side`
   keyword. Checked against the real binary in `test_render.py`.
+  Contributed by @jardelapp in #21.
+- **`frame_scale_filter` bounds its cap** (1..8192) rather than handing
+  ffmpeg a value it will reject. Unbounded, a zero or negative cap exits
+  non-zero, `render_frame` returns None, and `caption_shots` reads that as a
+  shot with nothing to caption — a bad constant would have been
+  indistinguishable from uncaptionable footage. `graph_to_args` already
+  bounds its `height` for the same reason.
 
 ## [0.20.0] - 2026-09-02
 

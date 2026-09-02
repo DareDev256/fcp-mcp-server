@@ -294,3 +294,16 @@ def test_a_lane_overlay_renders_and_changes_the_picture(bars, tmp_path):
     assert render.render_frame(str(composited), Fraction(3, 2), str(inside[0]))
     assert render.render_frame(str(plain), Fraction(3, 2), str(inside[1]))
     assert inside[0].read_bytes() != inside[1].read_bytes()
+
+
+def test_a_nonsense_frame_cap_raises_rather_than_skipping_the_shot():
+    """A cap ffmpeg would reject must fail loudly here.
+
+    Left unbounded it exits non-zero, render_frame returns None, and
+    caption_shots reads that as a shot with nothing to caption — a bad
+    constant would look exactly like uncaptionable footage.
+    """
+    for bad in (0, -1080, 10000):
+        with pytest.raises(ValueError, match="max_short_side"):
+            render.frame_scale_filter(bad)
+    assert render.frame_scale_filter(1) and render.frame_scale_filter(8192)

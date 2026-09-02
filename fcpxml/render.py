@@ -132,6 +132,12 @@ def frame_scale_filter(max_short_side: int) -> str:
     an extreme panorama such as 7680x1080 passes through untouched.
     """
     cap = int(max_short_side)
+    # Bounded for the same reason graph_to_args bounds its height: a zero or
+    # negative cap makes ffmpeg exit non-zero, render_frame turns that into
+    # None, and caption_shots turns THAT into a silently skipped shot. A bad
+    # constant would read as "this clip had nothing to caption".
+    if not 1 <= cap <= 8192:
+        raise ValueError(f"max_short_side must be between 1 and 8192, got {cap}")
     return (
         f"scale=w='if(gt(iw,ih),-2,min(iw,{cap}))'"
         f":h='if(gt(iw,ih),min(ih,{cap}),-2)'"
