@@ -148,23 +148,33 @@ def note_output(path: str) -> None:
         ledger["candidates"].append(path)
 
 
-def finish(token) -> None:
+def finish(token) -> list[str]:
+    """Close the request's ledger and return the outputs it actually wrote.
+
+    An output counts when the candidate exists on disk and is no older than
+    the request. The list comes back whether or not the journal is enabled —
+    autopush reads it too — but only an enabled journal records the rows.
+    """
     ledger = _LEDGER.get()
     _LEDGER.reset(token)
-    if ledger is None or not enabled():
-        return
+    if ledger is None:
+        return []
+    written: list[str] = []
     for cand in ledger["candidates"]:
         p = Path(cand)
         target = p / "Info.fcpxml" if p.is_dir() else p
         if not target.is_file() or target.stat().st_mtime < ledger["started"] - 1:
             continue
-        record({
-            "tool": ledger["tool"],
-            "action": ledger["action"],
-            "args": ledger["args"],
-            "input": ledger["input"],
-            "output": {"path": cand, "sha256": file_hash(cand)},
-        })
+        written.append(cand)
+        if enabled():
+            record({
+                "tool": ledger["tool"],
+                "action": ledger["action"],
+                "args": ledger["args"],
+                "input": ledger["input"],
+                "output": {"path": cand, "sha256": file_hash(cand)},
+            })
+    return written
 
 
 def _json_safe(value: Any) -> Any:

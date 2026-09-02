@@ -154,7 +154,7 @@ async def handle_scenes_to_markers(args: dict):
     added = modifier.batch_add_markers(markers=markers) if markers else []
     modifier.save(output_path)
     out = _report_header("Scene Markers", found, skipped)
-    out += f"\nAdded {len(added)} markers.\n\nSaved to: {output_path}" + srv._maybe_autopush(output_path)
+    out += f"\nAdded {len(added)} markers.\n\nSaved to: {output_path}"
     return text_result(out)
 
 
@@ -179,7 +179,6 @@ async def handle_scenes_split(args: dict):
     modifier.save(output_path)
     out = _report_header("Scene Split", found, skipped)
     out += f"\nSplit {split_clips} clips into {pieces} pieces.\n\nSaved to: {output_path}"
-    out += srv._maybe_autopush(output_path)
     return text_result(out)
 
 

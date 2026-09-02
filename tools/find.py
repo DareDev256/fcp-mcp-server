@@ -370,7 +370,7 @@ async def handle_find_to_timeline(args: dict):
     out = r["mode"] + "\n\n# Selects Reel\n\n"
     out += f"- **Query**: {r['query']}\n- **Shots**: {len(kept)} of {len(r['hits'])} hits kept\n"
     out += f"- **Duration**: {total:.2f}s\n- **{diversity.describe(score, kept)}**\n\n"
-    out += f"Saved to: `{output_path}`" + srv._maybe_autopush(output_path)
+    out += f"Saved to: `{output_path}`"
     return text_result(out)
 
 
