@@ -58,3 +58,61 @@ jobs:
 
       - run: twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # A green publish job is not evidence that PyPI serves the version. The
+  # v0.16.0 failure looked done from the tag, the release page and the
+  # changelog while the index still served the previous version, so the only
+  # check that could have caught it is asking the index what it actually has.
+  verify:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: PyPI must serve this version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 30); do
+            if curl -sf "https://pypi.org/simple/fcp-mcp-server/" \
+                 | grep -q "fcp_mcp_server-${version}\.tar\.gz"; then
+              echo "PyPI is serving ${version}"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${version} not on the index yet"
+            sleep 20
+          done
+          echo "::error::PyPI does not serve ${version} ten minutes after upload"
+          exit 1
+
+  # Nothing watches the Actions tab between releases. A failed publish leaves a
+  # tag and a release page that both look finished, which is exactly how three
+  # releases shipped while PyPI served 0.16.0. An issue is the one surface that
+  # arrives without anyone remembering to look.
+  report:
+    needs: [test, publish, verify]
+    if: failure() && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = process.env.GITHUB_REF_NAME;
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Publish failed for ${tag} — PyPI may not have it`,
+              body: [
+                `The Publish run for **${tag}** did not finish green.`,
+                ``,
+                `The git tag and the GitHub release still exist and still look`,
+                `complete. Check the index before believing them:`,
+                ``,
+                '```',
+                `curl -s https://pypi.org/simple/fcp-mcp-server/ | grep ${tag#v}`,
+                '```',
+                ``,
+                `Run: ${url}`,
+              ].join("\n"),
+            });
