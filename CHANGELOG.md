@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-09-02
+
+### Fixed
+- **Markers on trimmed clips landed early by the in-point.** A marker's
+  `start` is in its host clip's local time, which begins at the host's
+  `start` (source in-point), not at zero. Every writer path except
+  `auto_at_cuts` dropped that term, so a marker written "at 12s" onto a clip
+  trimmed 2s into its source sat at 10s in Final Cut Pro — and because the
+  parser handed the raw value to `list_markers`, `snap_to_beats`, `diff` and
+  the HTML preview, the round trip through this server agreed with itself
+  and nothing noticed. `_find_spine_clip_at_seconds` now returns
+  `start + (target - offset)`; `Marker` gains `timeline_start` (resolved by
+  the parser for clip and connected-clip markers) and a `position`
+  property, which every reader uses. `scenes_to_markers` inherits the fix.
+  `tests/test_marker_time_frame.py` covers write, parse, round trip,
+  interval markers, and a mutation check that an old-convention marker now
+  reads 2s early.
+
+### Changed
+- **Autopush covers every write.** `FCP_MCP_AUTOPUSH=1` was documented as
+  "every write also imports into Final Cut Pro" and wired into four
+  handlers. It now lives on the journal seam: `journal.finish()` returns the
+  FCPXML outputs a request actually wrote, and each is pushed — through flat
+  and grouped calls alike, for all write handlers. `push_to_fcp` is never
+  pushed twice; CSV/JSON/mp4 outputs are recorded but not imported.
+
+### Deferred (next minor, planned — not patched in)
+- `xfade` crossfade compilation and lane compositing in `preview_render`
+  (both still reported as substitutions at runtime).
+- Splitting `server.py`'s flat handlers into `tools/`; an operation Protocol
+  shared by XML and Live; Timecode → TimeValue unification.
+
 ## [0.19.2] - 2026-09-02
 
 ### Fixed
@@ -176,6 +208,7 @@
   marker written here onto a clip with a non-zero `start` lands early by that
   amount in Final Cut Pro. `scenes_to_markers` inherits this. Slated for the
   refactor after 0.19.0 alongside the Timecode → TimeValue unification.
+  **Fixed in 0.19.3.**
 - **TransNetV2 was evaluated and not shipped.** PySceneDetect's content
   detector found every cut on the synthetic fixtures at 0.7.1, and a second
   model would have added a torch dependency for no measured gain on this
