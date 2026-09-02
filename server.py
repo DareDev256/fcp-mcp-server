@@ -2275,15 +2275,15 @@ async def handle_list_markers(arguments: dict) -> Sequence[TextContent]:
     marker_type = arguments.get("marker_type", "all")
     if marker_type != "all":
         markers = [m for m in markers if m.marker_type == MarkerType.from_string(marker_type)]
-    markers.sort(key=lambda m: m.start.frames)
+    markers.sort(key=lambda m: m.position.frames)
     fmt = arguments.get("format", "detailed")
     if fmt == "youtube":
         result = "# YouTube Chapters\n\n" + "\n".join(f"{m.to_youtube_timestamp()} {m.name}" for m in markers)
     elif fmt == "simple":
-        result = "\n".join(f"{format_timecode(m.start)} - {m.name}" for m in markers)
+        result = "\n".join(f"{format_timecode(m.position)} - {m.name}" for m in markers)
     else:
         result = f"# Markers ({len(markers)})\n\n| TC | Name | Type |\n|---|------|------|\n"
-        result += "\n".join(f"| {format_timecode(m.start)} | {m.name} | {m.marker_type.value} |" for m in markers)
+        result += "\n".join(f"| {format_timecode(m.position)} | {m.name} | {m.marker_type.value} |" for m in markers)
     return _text_result(result)
 
 
@@ -2532,7 +2532,7 @@ async def handle_add_marker(arguments: dict) -> Sequence[TextContent]:
     modifier.save(output_path)
     return _text_result(
         f"Added marker '{arguments['name']}' at {arguments['timecode']}\n\n"
-        f"Saved to: {output_path}" + _maybe_autopush(output_path)
+        f"Saved to: {output_path}"
     )
 
 
@@ -2999,7 +2999,7 @@ async def handle_snap_to_beats(arguments: dict) -> Sequence[TextContent]:
     if not markers and not connected_marker_times:
         return _text_result("No markers found. Use `import_beat_markers` first.")
 
-    marker_times = sorted([m.start.seconds for m in markers])
+    marker_times = sorted([m.position.seconds for m in markers])
 
     spine = modifier._get_spine()
     adjusted_count = 0
@@ -4896,7 +4896,16 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
     try:
         result = await handler(arguments)
     finally:
-        _journal.finish(token)
+        written = _journal.finish(token)
+    # Autopush lives HERE, on the same seam, so every write handler gets it
+    # without knowing: whatever this request wrote as FCPXML is pushed.
+    # push_to_fcp is the push; it is not pushed again.
+    if action != "push_to_fcp" and _autopush_enabled():
+        pushed = "".join(
+            _maybe_autopush(p) for p in written if p.endswith((".fcpxml", ".fcpxmld"))
+        )
+        if pushed:
+            result = _text_result(result[0].text + pushed)
     if action in GATED_ACTIONS and arguments.get("confirm_unreviewed") is True:
         result = _text_result(result[0].text + _UNREVIEWED_NOTE)
     return result

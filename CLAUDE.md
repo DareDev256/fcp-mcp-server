@@ -147,6 +147,7 @@ CI runs both on every push to main. If either fails, the commit gets an X on Git
 - `offset` in clips is the timeline position, `start` is the source media in-point
 - Library clips (`<asset-clip>`) are different from timeline clips (`<clip>`)
 - Markers are children of clips, not siblings
+- A marker's `start` is in its HOST's local time, which begins at the host's `start` (source in-point), not at 0. Timeline position = `host.offset + (marker.start - host.start)`. The parser resolves this into `Marker.timeline_start`; read `Marker.position` for anything shown or compared, and let `add_marker_at_timeline` do the arithmetic when writing. Until 0.19.3 the writer dropped the `host.start` term and every marker on a trimmed clip landed early by the in-point
 - The `<spine>` element is the primary storyline — clips go here
 - `.fcpxmld` bundles are DIRECTORIES wrapping `Info.fcpxml` + sidecar data files — sidecars must be copied on save or object-tracking/Cinematic data is destroyed
 - `examples/sample.fcpxml` is NOT DTD-conformant (pre-`media-rep` assets, sequence-level chapter markers) — don't use it as a DTD-validity fixture

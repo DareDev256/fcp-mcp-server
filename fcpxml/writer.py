@@ -863,11 +863,19 @@ class FCPXMLModifier:
         ]
 
     def _find_spine_clip_at_seconds(self, target_seconds: float) -> tuple[ET.Element, float]:
-        """Find the spine clip containing *target_seconds* and return it with the relative offset.
+        """Find the spine clip containing *target_seconds* and return it with the local time.
 
         Returns:
-            ``(clip_element, relative_seconds)`` — the clip and the time
-            within that clip corresponding to *target_seconds*.
+            ``(clip_element, local_seconds)`` — the clip and *target_seconds*
+            expressed in that clip's LOCAL time frame, which is what a child
+            marker's ``start`` must hold. Local time begins at the clip's
+            ``start`` attribute (its source in-point), so this is
+            ``start + (target - offset)``, not ``target - offset``. Until
+            0.19.3 the ``start`` term was dropped, and a marker placed "at
+            12s" on a clip trimmed 2s into its source landed at 10s in Final
+            Cut Pro. ``auto_at_cuts`` had always used ``start`` directly and
+            was right; this path now agrees with it and with
+            ``timeline_marker_seconds``.
 
         Raises:
             ValueError: If no clip spans the requested position.
@@ -879,7 +887,8 @@ class FCPXMLModifier:
             offset = self._parse_time(child.get('offset', '0s')).to_seconds()
             dur = self._parse_time(child.get('duration', '0s')).to_seconds()
             if offset <= target_seconds < offset + dur:
-                return child, target_seconds - offset
+                start = self._parse_time(child.get('start', '0s')).to_seconds()
+                return child, start + (target_seconds - offset)
         raise ValueError(f"No spine clip at position {target_seconds:.3f}s")
 
     # ------------------------------------------------------------------

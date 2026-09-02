@@ -581,17 +581,32 @@ class Keyword:
 
 @dataclass
 class Marker:
-    """Represents a marker in the timeline."""
+    """Represents a marker in the timeline.
+
+    ``start`` is the raw FCPXML value: the marker's position in its HOST
+    element's local time, which begins at the host's own ``start`` (the
+    source in-point), not at zero. ``timeline_start`` is where that lands on
+    the timeline — the parser fills it in as ``host.offset + (start -
+    host.start)`` — and ``position`` is the one to read for anything shown to
+    an operator or compared across timelines. A marker built without a host
+    (or one on the ``<sequence>`` itself) is already timeline-absolute.
+    """
     name: str
     start: Timecode
     duration: Optional[Timecode] = None
     marker_type: MarkerType = MarkerType.STANDARD
     note: str = ""
     color: Optional[MarkerColor] = None
+    timeline_start: Optional[Timecode] = None
+
+    @property
+    def position(self) -> Timecode:
+        """Timeline position: ``timeline_start`` when the parser resolved it."""
+        return self.timeline_start if self.timeline_start is not None else self.start
 
     def to_youtube_timestamp(self) -> str:
         """Format as YouTube chapter timestamp."""
-        total_seconds = int(self.start.seconds)
+        total_seconds = int(self.position.seconds)
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         secs = total_seconds % 60

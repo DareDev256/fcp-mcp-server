@@ -149,7 +149,7 @@ def render_timeline_html(timeline) -> str:
 
     marks = []
     for marker in getattr(timeline, "markers", []):
-        at = float(marker.start.seconds or 0)
+        at = float(marker.position.seconds or 0)
         left = max(min((at / total) * 100, 100.0), 0.0)
         marks.append(
             f'<div class="marker" style="left:{left:.3f}%" '

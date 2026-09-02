@@ -108,10 +108,13 @@ class TestMarkers:
         tl = FCPXMLParser().parse_file(out).primary_timeline
         names = {m.name: m for c in tl.clips for m in c.markers}
         assert set(names) == {"take cut 1", "take cut 2"}
-        # The writer stores marker start relative to the clip's timeline offset
-        # (timeline 12s and 14s inside a clip at offset 10s -> 2s and 4s).
+        # A marker's start is in the clip's LOCAL time, which begins at its
+        # source in-point: timeline 12s and 14s inside a clip at offset 10s
+        # with start 2s -> 4s and 6s. The parser resolves them back.
         starts = sorted(float(m.start.seconds) for m in names.values())
-        assert starts == [2.0, 4.0]
+        assert starts == [4.0, 6.0]
+        positions = sorted(float(m.position.seconds) for m in names.values())
+        assert positions == [12.0, 14.0]
 
 
 class TestSplit:

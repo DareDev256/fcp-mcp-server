@@ -249,17 +249,17 @@ def _compare_markers(tl_a, tl_b, diff: TimelineDiff):
     # Collect all markers including clip-level markers
     markers_a = {}
     for m in tl_a.markers:
-        markers_a[m.name] = m.start.seconds
+        markers_a[m.name] = m.position.seconds
     for clip in tl_a.clips:
         for m in clip.markers:
-            markers_a[m.name] = clip.start.seconds + m.start.seconds
+            markers_a[m.name] = m.position.seconds
 
     markers_b = {}
     for m in tl_b.markers:
-        markers_b[m.name] = m.start.seconds
+        markers_b[m.name] = m.position.seconds
     for clip in tl_b.clips:
         for m in clip.markers:
-            markers_b[m.name] = clip.start.seconds + m.start.seconds
+            markers_b[m.name] = m.position.seconds
 
     all_names = set(markers_a.keys()) | set(markers_b.keys())
 
