@@ -2604,12 +2604,22 @@ async def handle_change_speed(arguments: dict) -> Sequence[TextContent]:
 
 async def handle_delete_clips(arguments: dict) -> Sequence[TextContent]:
     filepath, output_path, modifier = _setup_modifier(arguments)
-    modifier.delete_clip(
-        clip_ids=arguments["clip_ids"],
+    requested = arguments["clip_ids"]
+    deleted = modifier.delete_clip(
+        clip_ids=requested,
         ripple=arguments.get("ripple", True),
     )
     modifier.save(output_path)
-    return _text_result(f"Deleted {len(arguments['clip_ids'])} clip(s)\n\nSaved to: {output_path}")
+    # Report what was deleted, never what was asked for. Counting the request
+    # made this answer "Deleted 2 clip(s)" to a request that matched nothing.
+    missed = [c for c in requested if c not in deleted]
+    text = f"Deleted {len(deleted)} clip(s)"
+    if missed:
+        text += (
+            f"\n\nNo clip matched: {', '.join(repr(m) for m in missed)} — "
+            f"an id here is a clip NAME, and names are matched exactly."
+        )
+    return _text_result(f"{text}\n\nSaved to: {output_path}")
 
 
 async def handle_split_clip(arguments: dict) -> Sequence[TextContent]:
@@ -3440,7 +3450,8 @@ async def handle_export_role_stems(arguments: dict) -> Sequence[TextContent]:
     result = f"# Audio Stem Plan for {tl.name}\n\n"
     for role, clips in sorted(stems.items()):
         total_dur = sum(c.duration_seconds for c in clips)
-        result += f"## {role.title()} ({len(clips)} clips, {format_duration(total_dur)})\n\n"
+        plural = "clip" if len(clips) == 1 else "clips"
+        result += f"## {role.title()} ({len(clips)} {plural}, {format_duration(total_dur)})\n\n"
         for c in clips:
             result += f"- {c.name} ({format_duration(c.duration_seconds)})\n"
         result += "\n"

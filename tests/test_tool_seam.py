@@ -121,3 +121,36 @@ def test_builtin_groups_are_all_still_advertised():
         assert name in advertised
     for name in tools.EXTRA_GROUPS:
         assert name in advertised
+
+
+def test_every_flat_handler_is_named_by_some_test():
+    """A handler with no test that names it is a handler nobody checks.
+
+    A sweep on 2026-09-02 found 22 of 64 in exactly that state — the code
+    underneath them was covered, the handlers were not, so a whole family
+    could stop resolving while the suite stayed green. Closing the list once
+    is worth little if the next handler lands the same way, so the floor is
+    asserted here rather than remembered.
+
+    This is a NAME check, not a coverage measurement: it proves a test
+    mentions the tool, not that it asserts anything useful. It is the cheap
+    guard that keeps the expensive one honest.
+    """
+    import pathlib
+    import re
+
+    source = pathlib.Path(server.__file__).read_text()
+    block = re.search(r'^TOOL_HANDLERS = \{(.*?)^\}', source, re.S | re.M)
+    assert block, "TOOL_HANDLERS is no longer a module-level literal"
+    names = re.findall(r'"([a-z0-9_]+)":', block.group(1))
+    assert len(names) > 50, f"only found {len(names)} handlers — the regex missed some"
+
+    tests_dir = pathlib.Path(__file__).parent
+    corpus = "\n".join(p.read_text() for p in tests_dir.glob("test_*.py"))
+    unnamed = [
+        n for n in names
+        if f'"{n}"' not in corpus and f"'{n}'" not in corpus and f"handle_{n}" not in corpus
+    ]
+    assert not unnamed, (
+        f"{len(unnamed)} handler(s) have no test naming them: {', '.join(unnamed)}"
+    )

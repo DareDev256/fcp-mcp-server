@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`delete_clips` reported the size of the request, not the number of
+  deletions.** Asked to delete two clip names that match nothing, the most
+  destructive tool on the surface answered "Deleted 2 clip(s)"; a batch of one
+  real name and one typo also answered "Deleted 2". The file was always
+  correct — only the report lied, which is worse on a destructive operation
+  because success and total failure read identically.
+  `FCPXMLModifier.delete_clip` now returns the ids it actually deleted, and
+  the handler reports that count and names every id that matched nothing.
+  Found by writing the first test that had ever named this handler.
+- The stem plan said "1 clips".
+
+### Added
+- **The 22 handlers with no test naming them now have one.** A sweep of
+  `TOOL_HANDLERS` found 22 of 64 flat handlers unnamed anywhere in the suite:
+  the code underneath them was covered, the handlers were not, so argument
+  parsing, clip resolution and the saved artifact went unasserted and a whole
+  family could stop resolving while the suite stayed green. Three new files —
+  `test_edit_handlers.py` (delete, split, insert, reorder, transition),
+  `test_roles_handlers.py` (roles, and the first exercise of the review gate
+  on `export_role_stems`, which is in `GATED_ACTIONS`), and
+  `test_uncovered_handlers.py` (inspection, batch fixes, generation,
+  subtitles, silence candidates). Each asserts the artifact or a specific
+  count rather than the prose, and several ship with their own control: a
+  diff that must NOT report identical, an A/B roll that must refuse a keyword
+  matching nothing, an `import_srt_markers` default that produces one marker
+  where `mode=all` produces two.
+- **A floor so it cannot happen again.** `test_tool_seam.py` asserts every
+  name in `TOOL_HANDLERS` is named by some test, and fails with the list when
+  one is not. Mutation-checked with a handler added and no test written.
+
 ### Changed
 - **server.py started shrinking.** The NLE export, effects, audio, compound
   clip, template and relink handlers moved to `tools/nle.py` (4,988 -> 4,811

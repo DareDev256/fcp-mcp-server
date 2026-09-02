@@ -2451,7 +2451,7 @@ class FCPXMLModifier:
         self,
         clip_ids: List[str],
         ripple: bool = True
-    ) -> None:
+    ) -> List[str]:
         """
         Delete clips from timeline.
 
@@ -2463,8 +2463,16 @@ class FCPXMLModifier:
         Args:
             clip_ids: Clips to delete
             ripple: If True, shift subsequent clips. If False, leave gaps.
+
+        Returns:
+            The ids that actually matched a clip and were deleted. An id that
+            matched nothing is skipped, and callers have to be able to tell
+            the difference: reporting the length of the REQUEST instead made
+            the most destructive tool on the surface answer "Deleted 2
+            clip(s)" to a request that deleted none.
         """
         spine = self._get_spine()
+        deleted: List[str] = []
 
         for clip_id in clip_ids:
             # Walk spine directly to find the first clip matching this name,
@@ -2479,6 +2487,7 @@ class FCPXMLModifier:
             if target is None:
                 continue
 
+            deleted.append(clip_id)
             _, clip_duration, clip_offset = self._get_clip_times(target)
             clip_index = list(spine).index(target)
 
@@ -2507,6 +2516,8 @@ class FCPXMLModifier:
                 self.clips[clip_id] = remaining[0]
             else:
                 self.clips.pop(clip_id, None)
+
+        return deleted
 
     # ========================================================================
     # SPEED CUTTING OPERATIONS (v0.3.0)
