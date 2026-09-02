@@ -3226,6 +3226,108 @@ class FCPXMLModifier:
         return clip
 
     # ========================================================================
+    # BULK LOGGING (v0.19.0) — keywords, ratings, roles across many clips
+    # ========================================================================
+
+    _CLIP_TAGS = ("asset-clip", "clip", "ref-clip", "sync-clip", "mc-clip")
+
+    def select_clips(
+        self,
+        clip_name: Optional[str] = None,
+        keyword: Optional[str] = None,
+        role: Optional[str] = None,
+    ) -> List[ET.Element]:
+        """Every clip element matching ALL the given filters.
+
+        ``clip_name`` is a glob, ``keyword`` matches any comma-separated
+        value of any ``<keyword>``, ``role`` matches audioRole/videoRole
+        case-insensitively. No filter selects every clip.
+        """
+        import fnmatch
+
+        out = []
+        for elem in self.root.iter():
+            if elem.tag not in self._CLIP_TAGS:
+                continue
+            if clip_name and not fnmatch.fnmatchcase(elem.get("name", ""), clip_name):
+                continue
+            if keyword and keyword not in self._keyword_values(elem):
+                continue
+            if role and role.lower() not in {
+                elem.get("audioRole", "").lower(), elem.get("videoRole", "").lower()
+            }:
+                continue
+            out.append(elem)
+        return out
+
+    @staticmethod
+    def _keyword_values(elem: ET.Element) -> set:
+        return {
+            v.strip()
+            for k in elem.findall("keyword")
+            for v in k.get("value", "").split(",")
+            if v.strip()
+        }
+
+    def bulk_keywords(self, clips: List[ET.Element], keywords: List[str], mode: str) -> int:
+        """add / remove / replace whole-clip keywords. Returns clips touched."""
+        if mode not in ("add", "remove", "replace"):
+            raise ValueError(f"mode must be add, remove or replace, got {mode!r}")
+        wanted = [_sanitize_xml_value(k, 256).strip() for k in keywords if k and str(k).strip()]
+        if not wanted:
+            raise ValueError("keywords must contain at least one non-empty value")
+        touched = 0
+        for clip in clips:
+            if mode == "remove":
+                changed = False
+                for k in clip.findall("keyword"):
+                    present = [v.strip() for v in k.get("value", "").split(",") if v.strip()]
+                    kept = [v for v in present if v not in wanted]
+                    if len(kept) != len(present):
+                        changed = True
+                        if kept:
+                            k.set("value", ", ".join(kept))
+                        else:
+                            clip.remove(k)
+                touched += changed
+                continue
+            if mode == "replace":
+                for k in clip.findall("keyword"):
+                    clip.remove(k)
+            new = [k for k in wanted if k not in self._keyword_values(clip)]
+            if new:
+                # A marker item: DTD order puts it after anchors, before filters.
+                _dtd_insert(clip, ET.Element("keyword", value=", ".join(new)))
+                touched += 1
+            elif mode == "replace":
+                touched += 1
+        return touched
+
+    def bulk_rating(self, clips: List[ET.Element], rating: str) -> int:
+        """favorite / rejected set a whole-clip <rating>; clear removes it."""
+        if rating not in ("favorite", "rejected", "clear"):
+            raise ValueError(f"rating must be favorite, rejected or clear, got {rating!r}")
+        for clip in clips:
+            for r in clip.findall("rating"):
+                clip.remove(r)
+            if rating != "clear":
+                _dtd_insert(clip, ET.Element("rating", name=rating.capitalize(), value=rating))
+        return len(clips)
+
+    def bulk_roles(
+        self,
+        clips: List[ET.Element],
+        audio_role: Optional[str] = None,
+        video_role: Optional[str] = None,
+    ) -> int:
+        for clip in clips:
+            if audio_role is not None:
+                clip.set("audioRole", _sanitize_xml_value(audio_role, 256))
+            if video_role is not None:
+                clip.set("videoRole", _sanitize_xml_value(video_role, 256))
+        return len(clips)
+
+    # ========================================================================
     # REFORMAT OPERATIONS (v0.5.0)
     # ========================================================================
 
