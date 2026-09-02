@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-09-02
+
+### Fixed
+- **Second publish gate.** With the test job green, PyPI rejected the
+  0.19.1 upload: `'summary' field must be 512 characters or less`. The
+  `pyproject.toml` description had grown to 557 characters over three
+  releases of feature lists. It is now 499 and re-measured with the current
+  surface (13 groups / 88 operations), and `test_version.py` asserts the
+  cap so this fails before a tag, not after — mutation-checked (a padded
+  description turns it red). Trusted publishing itself authenticated fine.
+
 ## [0.19.1] - 2026-09-02
 
 ### Fixed
