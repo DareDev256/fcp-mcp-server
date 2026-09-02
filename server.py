@@ -570,6 +570,16 @@ def _parse_project(filepath: str):
     return project, project.primary_timeline
 
 
+_CONFIRM_UNREVIEWED_SCHEMA = {
+    "type": "boolean",
+    "description": (
+        "Ship without a rendered preview of the file's current state. Off by "
+        "default: the gate refuses and names the preview_render call that "
+        "would satisfy it."
+    ),
+}
+
+
 def _text_result(text: str) -> list[TextContent]:
     """Wrap a string in the MCP TextContent list that every tool handler returns."""
     return [TextContent(type="text", text=text)]
@@ -1180,7 +1190,8 @@ def _legacy_tool_list() -> list[Tool]:
             description="Generate EDL (Edit Decision List) from timeline",
             inputSchema={
                 "type": "object",
-                "properties": {"filepath": {"type": "string"}},
+                "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,"filepath": {"type": "string"}},
                 "required": ["filepath"]
             }
         ),
@@ -1190,6 +1201,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string"},
                     "include": {"type": "array", "items": {"type": "string"}}
                 },
@@ -1693,6 +1705,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                 },
                 "required": ["filepath"]
@@ -1882,6 +1895,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                     "flatten_compounds": {"type": "boolean", "default": True, "description": "Flatten compound clips for compatibility"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _resolve suffix)"},
@@ -1895,6 +1909,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _fcp7.xml suffix)"},
                 },
@@ -2004,6 +2019,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file or .fcpxmld bundle to import"},
                     "library_location": {"type": "string", "description": "Target .fcpbundle library path (auto-created if it doesn't exist; the extension is normalized to .fcpbundle). Omit to import into the active library, but note FCP then shows a modal 'Open Library' picker that blocks until answered"},
                     "suppress_warnings": {"type": "boolean", "description": "Suppress non-fatal import warning dialogs", "default": True},
@@ -4650,7 +4666,9 @@ TOOL_GROUPS: dict[str, dict] = {
     "deliver": {
         "description": (
             "Get the edit out: export to other NLEs, CSV, EDL and stems, "
-            "reformat, relink media, or push straight into a running Final Cut Pro."
+            "reformat, relink media, or push straight into a running Final Cut Pro. "
+            "Exports and push refuse a cut with no rendered preview of its current "
+            "state (pass confirm_unreviewed=true to ship anyway)."
         ),
         "actions": [
             "export_csv", "export_edl", "export_fcp7_xml", "export_resolve_xml",
@@ -4815,20 +4833,66 @@ def _action_param_help(action: str | None) -> str:
     return f"'{action}' accepts:\n" + "\n".join(lines)
 
 
+GATED_ACTIONS = frozenset({
+    "export_csv", "export_edl", "export_fcp7_xml", "export_resolve_xml",
+    "export_role_stems", "push_to_fcp",
+})
+
+
+_UNREVIEWED_NOTE = (
+    "\n\n*Shipped UNREVIEWED (confirm_unreviewed=true): no rendered preview "
+    "matches this file's current state.*"
+)
+
+
+def _review_gate(action: str, arguments: dict) -> list[TextContent] | None:
+    """The editors' checkpoint: watch it in full before it leaves.
+
+    Refuses a gated action when the journal holds no preview_render whose
+    input hash equals the file as it is NOW. A render of an earlier state
+    proves nothing about this one. Returns the refusal, or None to proceed.
+    """
+    if action not in GATED_ACTIONS or arguments.get("confirm_unreviewed") is True:
+        return None
+    filepath = arguments.get("filepath")
+    if not isinstance(filepath, str):
+        return None  # the handler reports the missing argument itself
+    call = json.dumps({"action": "preview_render", "args": {"filepath": filepath}})
+    if not _journal.enabled():
+        return _text_result(
+            f"Refused: {action} cannot verify a review because the journal is off "
+            f"(FCP_MCP_JOURNAL). Turn it on and render first: preview {call} — "
+            "or pass confirm_unreviewed=true to ship without watching it."
+        )
+    if _journal.reviewed(filepath) is None:
+        return _text_result(
+            f"Refused: {filepath} has no rendered preview for its current state. "
+            f"Watch it first: preview {call} — then run {action} again. "
+            "To ship unreviewed anyway, pass confirm_unreviewed=true."
+        )
+    return None
+
+
 async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequence[TextContent]:
-    """Run *handler* inside a journal ledger.
+    """Run *handler* inside a journal ledger, behind the review gate.
 
     Any path the handler validates as an output and then writes is recorded
     against the input. Handlers change nothing for this: the seam is
     _validate_output_path, which every write already passes through.
     """
+    refusal = _review_gate(action, arguments)
+    if refusal is not None:
+        return refusal
     filepath = arguments.get("filepath")
     input_path = filepath if isinstance(filepath, str) else None
     token = _journal.begin(tool, action, arguments, input_path)
     try:
-        return await handler(arguments)
+        result = await handler(arguments)
     finally:
         _journal.finish(token)
+    if action in GATED_ACTIONS and arguments.get("confirm_unreviewed") is True:
+        result = _text_result(result[0].text + _UNREVIEWED_NOTE)
+    return result
 
 
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
