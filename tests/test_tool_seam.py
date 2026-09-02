@@ -1,7 +1,7 @@
 """The tools/ package is how new groups reach the MCP surface.
 
-New subsystems register here instead of growing server.py's 4,585-line
-dispatch. The existing surface is asserted unchanged: a group that fails to
+New subsystems register here instead of growing server.py's 4,811-line
+dispatch, and existing families migrate out of it a slice at a time. The existing surface is asserted unchanged: a group that fails to
 register must not silently shadow a working tool, and the seven builtin
 groups must advertise exactly as they did before.
 """

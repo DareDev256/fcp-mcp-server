@@ -602,7 +602,9 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── index.py           index group — status (with age), build, clear
 │   ├── scenes.py          scenes group — detect, to_markers, split
 │   ├── organize.py        organize group — keywords, rate, roles, auto, history, undo
-│   └── find.py            find group — shots (tiered router), index, to_timeline
+│   ├── find.py            find group — shots (tiered router), index, to_timeline
+│   └── nle.py             NLE export, effects, audio, compound clips, templates,
+│                           relink — moved out of server.py, re-exported by it
 │                          _resolve_io_paths() / _setup_modifier() / _setup_generator()
 │                          _format_clip_table() / _markdown_table() / _format_batch_result()
 │                          _raw_markers_to_batch()
@@ -646,7 +648,7 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1696 tests across 60 suites — see Testing below
+├── tests/                 1706 tests across 61 suites — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -794,7 +796,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1696 tests across 60 suites — 1689 pass and 7 skip on the declared `mcp` floor, 1690 pass and 6 skip on `mcp` 2.x, and 1665 pass / 31 skip with `FCP_MCP_INDEX=off` (CI runs all three; the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+1706 tests across 61 suites — 1699 pass and 7 skip on the declared `mcp` floor, 1700 pass and 6 skip on `mcp` 2.x, and 1675 pass / 31 skip with `FCP_MCP_INDEX=off` (CI runs all three; the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 

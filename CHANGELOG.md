@@ -2,7 +2,27 @@
 
 ## [Unreleased]
 
+### Changed
+- **server.py started shrinking.** The NLE export, effects, audio, compound
+  clip, template and relink handlers moved to `tools/nle.py` (4,988 -> 4,811
+  lines). server.py re-exports them under their original names, so
+  `TOOL_HANDLERS`, the flat tool list and every caller still resolve one
+  definition. Moved handlers reach server-owned names through the bound module
+  (`srv.X`) rather than importing them: tests monkeypatch those on the server
+  module, and an import would bind a copy no patch could reach — the guard
+  would keep passing while guarding nothing.
+
 ### Added
+- **Nine handlers that had never been tested now are.** Eight of the nine
+  moved handlers had no test of their own: the suite exercised the code they
+  called but never the handlers, so the family could have stopped resolving
+  and 1,689 green tests would have said nothing. `tests/test_nle_handlers.py`
+  drives all nine through `server.call_tool` and asserts the artifact, not the
+  prose. Every case is mutation-checked, which is how two of them were caught
+  passing on an ERROR path — `apply_template` with no slots filled returns a
+  validation error that still mentions the template, and `relink_media` was
+  being called with the wrong argument names and asserting on the message that
+  said so.
 - **The release pipeline now checks PyPI and reports its own failures.** Two
   jobs after `publish`: `verify` asks the index whether it actually serves the
   tagged version, retrying for ten minutes, because a green publish job is not

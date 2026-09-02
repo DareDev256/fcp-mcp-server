@@ -1,9 +1,11 @@
 """New MCP tool groups, defined outside server.py.
 
-server.py is 4,585 lines holding every tool definition, every handler, the
-seven builtin TOOL_GROUPS, the QC helpers and the resource/prompt wiring. New
-subsystems land here instead of growing it further; the existing handlers stay
-where they are until a dedicated migration.
+server.py is 4,811 lines holding every tool definition, most handlers, the
+builtin TOOL_GROUPS, the QC helpers and the resource/prompt wiring. New
+subsystems land here instead of growing it further, and existing families are
+migrating out one at a time — the NLE export / effects / templates / relink
+handlers moved to tools/nle.py in v0.21.0, re-exported from server.py under
+their original names so callers keep resolving one definition.
 
 This package is a REGISTRY ONLY. server.py merges EXTRA_GROUPS and
 EXTRA_HANDLERS into its own dicts at import time, so every existing code path
