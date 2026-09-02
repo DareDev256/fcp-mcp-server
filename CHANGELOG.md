@@ -1878,7 +1878,10 @@ Tests: 942 → 955.
 - FCPXMLWriter generator now emits `completed` attribute for TODO and COMPLETED markers
 - `list_markers` tool now supports filtering by "completed" marker type
 
-## [Unreleased]
+## [Unreleased at 0.4.2] — historical, shipped long ago
+
+<!-- Left in place rather than deleted: this block records real work. It was
+never renamed when it shipped, which made "[Unreleased]" ambiguous. -->
 
 ### Added
 
