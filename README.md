@@ -656,7 +656,7 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1747 tests across 65 suites — see Testing below
+├── tests/                 1749 tests across 65 suites — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -804,7 +804,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-1747 tests across 65 suites — 1740 pass and 7 skip on the declared `mcp` floor, 1741 pass and 6 skip on `mcp` 2.x, and 1716 pass / 31 skip with `FCP_MCP_INDEX=off` (CI runs all three; the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+1749 tests across 65 suites — 1742 pass and 7 skip on the declared `mcp` floor, 1743 pass and 6 skip on `mcp` 2.x, and 1718 pass / 31 skip with `FCP_MCP_INDEX=off` (CI runs all three; the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 
@@ -892,13 +892,31 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 | **Still images crash FCP** | PNG/JPEG assets referenced directly in FCPXML crash Final Cut Pro on import (`addAssetClip` null pointer). Confirmed across multiple format configurations, dimension matching, and element types. | Convert stills to short MOVs before referencing: `ffmpeg -loop 1 -i image.png -c:v libx264 -t 2 -pix_fmt yuv420p -r 24 output.mov`. This is an FCP limitation, not an FCPXML spec issue. |
 | **Non-standard timebases** | FCP rejects time values with denominators outside its standard set (e.g. `100800/57600s`). Cross-denominator arithmetic previously produced these. | Fixed in v0.5.29 — TimeValue arithmetic now uses LCM, and speed changes snap to frame boundaries in 2400-tick timebase. |
 | **Malformed frameDuration crash** | A `frameDuration` with zero or negative denominator (e.g. `"0/0s"`) in the writer's `_detect_fps` would silently produce 0.0 fps, causing downstream ZeroDivisionError in speed/trim operations. The parser already validated this correctly. | Fixed in v0.6.23 — writer now validates both numerator and denominator, falling back to 30.0 fps. |
+| **"Connection closed" on a PyPI install of 0.19.2–0.21.0** | `tools/` was missing from the published package, so the server raised `ModuleNotFoundError` at import, before it could answer `initialize`. The MCP client reports only "Connection closed". A git checkout never showed it. | Fixed in v0.21.1 — upgrade (`uvx` picks it up on the next run; `pip install -U fcp-mcp-server` otherwise). The publish workflow now installs the built wheel into a clean venv and runs `initialize` + `tools/list` before anything ships. |
 | **Duplicate clip names corrupt edits** | When multiple spine clips share the same name (e.g. `Interview_A` ×4), operations using the name-indexed dict silently target the wrong clip (last-indexed instead of first). Affected: `delete_clip`, `add_marker_at_timeline`, `trim_clip`, `change_speed`, `split_clip`, `add_transition`, `reorder_clips`. | Fixed in v0.6.37–0.6.39 — all methods now resolve clips via `_resolve_clip()` which walks the spine directly, returning the first match. |
 
 ---
 
+## Reporting a Problem
+
+You do not need a GitHub account, and you do not need to be a programmer.
+
+- **GitHub:** [open an issue](https://github.com/DareDev256/fcp-mcp-server/issues) — best for anything with a traceback or a sample FCPXML.
+- **Email:** [dev@jamesdare.com](mailto:dev@jamesdare.com) — read directly, answered directly. If Claude did the diagnosis for you, paste its findings as-is; that is exactly how the v0.21.1 packaging bug was reported and it was correct in every particular.
+
+**If the client only says "Connection closed"**, the server died before it could answer. Run it by hand to see the real error:
+
+```bash
+uvx fcp-mcp-server          # or: python server.py from a checkout
+```
+
+A Python traceback here (import error, missing dependency) is the whole story; send that.
+
+Want to try builds before they ship? Say so in the email — pre-release wheels go out to a small list of working editors.
+
 ## Status & Contributing
 
-**Actively maintained** — live-verified against FCP 12.2, with external contributions already merged and credited: [@mikegrant25](https://github.com/mikegrant25) (sandbox security fix, #6) and [@jardelapp](https://github.com/jardelapp) (audio duration probing, #7).
+**Actively maintained** — live-verified against FCP 12.2, with external contributions already merged and credited: [@mikegrant25](https://github.com/mikegrant25) (sandbox security fix, #6), [@jardelapp](https://github.com/jardelapp) (audio duration probing, #7), and Marty Hou, documentary editor, who reported the v0.19.2–0.21.0 packaging failure by email with a diagnosis that held on every point.
 
 PRs welcome. If you're a video editor who codes (or a coder who edits), let's build this together.
 

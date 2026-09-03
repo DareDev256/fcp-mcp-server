@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-03
+
 ### Fixed
 - **The registry verification step read the wrong entry and called a working
   publish a failure.** The registry's search endpoint returns every version of
@@ -31,7 +33,26 @@
   replacing a hand-made GIF of v0.13.0 that predated everything from v0.17.0
   onward. A demo that regenerates from the code cannot drift from it.
 
+- **README "Reporting a Problem" section.** An issues link, the author
+  address (the fixed one), what to do when the client says only "Connection
+  closed" (run the server by hand; the traceback is the report), and an open
+  invitation to editors without GitHub accounts — the v0.21.1 bug arrived by
+  email from exactly that person. Known Issues gains the 0.19.2–0.21.0 row so
+  anyone searching the symptom lands on the fix.
+
 ### Changed
+- **Media intelligence and transcript editing moved out of `server.py` into
+  `tools/media.py`** — silence detection and removal, beat detection,
+  transcribe_media, edit_by_transcript, transcript_pack, remove_filler_words
+  and the silence-candidate heuristics (690 lines). Re-exported from
+  `server.py` under the original names, same as the v0.21.0 NLE move, so
+  `TOOL_HANDLERS` and every caller resolve one definition. `detect_silence`,
+  `detect_beats` and `transcribe` are reached through the bound server module
+  because the tests monkeypatch them there; `test_tool_seam.py` now asserts
+  neither moved module binds those names directly, and that each
+  `server.handle_*` *is* the `tools.media` function. Mutation-checked: a
+  direct import in `tools/media.py` turns the guard red. `server.py` is
+  4,139 lines, from 4,832.
 - The "Not Ideal For" table said "creative editing decisions (no visual
   feedback)" and "anything visual" — written before proxy renders, contact
   sheets, filmstrips and the ASCII timeline existed.

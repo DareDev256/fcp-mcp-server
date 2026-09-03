@@ -22,6 +22,7 @@ from fcpxml import progress as _progress
 from fcpxml.media_intel import media_src_to_path
 from fcpxml.models import TimeValue
 from fcpxml.rough_cut import RoughCutGenerator
+from tools import media as _media
 from tools import scenes as _scenes
 from tools._common import parse_project, text_result
 
@@ -57,14 +58,13 @@ class _Ctx:
 
 def _transcript_for(media_path: str):
     """index → sidecar → None. Never transcribes."""
-    srv = tools.server_module()
     ix = _index.Index.open()
     if ix is not None:
         with ix:
             data = ix.get_transcript(media_path)
         if data is not None:
             return data
-    sidecar = srv._transcript_json_path(media_path)
+    sidecar = _media._transcript_json_path(media_path)
     if sidecar.is_file():
         try:
             with open(sidecar) as f:

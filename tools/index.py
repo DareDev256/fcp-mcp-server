@@ -13,6 +13,7 @@ from fcpxml import progress as _progress
 from fcpxml.media_intel import media_src_to_path
 from fcpxml.render import probe_duration
 from tools import _common
+from tools import media as _media
 from tools._common import parse_project, text_result
 
 # Same ceiling detect_media_silence applies — an index build is a warm-up,
@@ -82,10 +83,10 @@ async def handle_index_build(args: dict):
             missing.append(name)
             continue
         duration = probe_duration(media_path)
-        silences = srv._silence_cached(media_path, -30.0, 0.5)
+        silences = _media._silence_cached(media_path, -30.0, 0.5)
         transcript = None
         if with_transcript:
-            transcript, _ = srv._load_or_transcribe(media_path, "base", None)
+            transcript, _ = _media._load_or_transcribe(media_path, "base", None)
         rows.append([
             name,
             f"{float(duration):.2f}s" if duration is not None else "unprobed",

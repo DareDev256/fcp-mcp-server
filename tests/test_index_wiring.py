@@ -16,6 +16,7 @@ import server
 from fcpxml import mcp_compat
 from tests.conftest import requires_index
 from tests.test_media_intel import PROJECT_XML
+from tools import media as media_tools
 
 
 @pytest.fixture
@@ -111,11 +112,11 @@ class TestTranscriptsThroughTheIndex:
             "words": [{"word": "hello", "start": 0.0, "end": 0.5}, {"word": "world", "start": 0.5, "end": 1.0}],
         }
         monkeypatch.setattr(server, "transcribe", lambda p, model_size, language, backend="local": calls.append(p) or data)
-        first, _ = server._load_or_transcribe(media, "base", None)
+        first, _ = media_tools._load_or_transcribe(media, "base", None)
         sidecar = Path(media).with_name("interview_transcript.json")
         assert sidecar.is_file()
         sidecar.unlink()
-        second, _ = server._load_or_transcribe(media, "base", None)
+        second, _ = media_tools._load_or_transcribe(media, "base", None)
         assert len(calls) == 1
         assert [w["word"] for w in second["words"]] == ["hello", "world"]
 
@@ -124,7 +125,7 @@ class TestTranscriptsThroughTheIndex:
         sidecar = Path(media).with_name("interview_transcript.json")
         sidecar.write_text(json.dumps({"text": "from sidecar", "words": [], "segments": []}))
         monkeypatch.setattr(server, "transcribe", lambda *a, **k: pytest.fail("should not transcribe"))
-        data, _ = server._load_or_transcribe(media, "base", None)
+        data, _ = media_tools._load_or_transcribe(media, "base", None)
         assert data["text"] == "from sidecar"
 
 

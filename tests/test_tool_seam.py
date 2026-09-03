@@ -186,3 +186,37 @@ def test_nested_args_still_win_over_flat_keys():
                                      "filepath": "/nonexistent/should-be-ignored.fcpxml"})
     )
     assert "should-be-ignored" not in result[0].text
+
+
+def test_moved_handlers_do_not_bind_the_patched_names():
+    """tools/media.py and tools/nle.py must reach detect_silence, detect_beats
+    and transcribe through the bound server module, never by import.
+
+    The suite keeps ffmpeg and Whisper out by monkeypatching those three on
+    `server`. A module-level import in tools/ would bind its own copy at
+    import time, the patch would miss it, and every "second call skips
+    ffmpeg" test would keep passing while measuring the wrong thing.
+    """
+    from tools import media, nle
+
+    for mod in (media, nle):
+        for name in ("detect_silence", "detect_beats", "transcribe"):
+            assert not hasattr(mod, name), f"{mod.__name__} binds {name} directly"
+    # And the seam itself: the server still exposes them for patching.
+    for name in ("detect_silence", "detect_beats", "transcribe"):
+        assert hasattr(server, name)
+
+
+def test_moved_handlers_resolve_to_one_definition():
+    """server.handle_X IS tools.media.handle_X — not a second copy."""
+    from tools import media
+
+    for name in (
+        "handle_detect_media_silence", "handle_remove_media_silence",
+        "handle_detect_beats", "handle_transcribe_media",
+        "handle_edit_by_transcript", "handle_transcript_pack",
+        "handle_remove_filler_words", "handle_detect_silence_candidates",
+        "handle_remove_silence_candidates",
+    ):
+        assert getattr(server, name) is getattr(media, name)
+        assert server.TOOL_HANDLERS[name.removeprefix("handle_")] is getattr(media, name)

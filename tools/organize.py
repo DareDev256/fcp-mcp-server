@@ -17,6 +17,7 @@ from fcpxml import index as _index
 from fcpxml import journal
 from fcpxml.media_intel import media_src_to_path
 from fcpxml.writer import FCPXMLModifier
+from tools import media as _media
 from tools._common import parse_project, text_result
 
 _JOURNAL_OFF = (
@@ -159,7 +160,7 @@ def _derivable_text(media_path: str):
         if data is not None:
             transcript = data.get("text", "")
     if not transcript:
-        sidecar = tools.server_module()._transcript_json_path(media_path)
+        sidecar = _media._transcript_json_path(media_path)
         if sidecar.is_file():
             try:
                 with open(sidecar) as f:
