@@ -161,6 +161,35 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Every inline python -c block must compile
+        # v0.22.0's registry check died of an IndentationError: a python -c
+        # body indented to match the surrounding YAML is handed to Python
+        # with that indentation intact. The logic had been verified by hand;
+        # the step that wrapped it had never run.
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys, yaml
+
+          BLOCK = re.compile(r'python3? -c "((?:[^"\\]|\\.)*)"', re.S)
+          failed, seen = [], 0
+          for wf in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              doc = yaml.safe_load(wf.read_text())
+              for job, spec in (doc.get("jobs") or {}).items():
+                  for i, step in enumerate(spec.get("steps") or []):
+                      for body in BLOCK.findall(step.get("run") or ""):
+                          seen += 1
+                          try:
+                              compile(body, f"{wf.name}:{job}:{i}", "exec")
+                              print(f"{wf.name} {job} step {i}: ok")
+                          except SyntaxError as exc:
+                              print(f"{wf.name} {job} step {i}: FAILED — {exc}")
+                              failed.append(f"{wf.name}:{job}")
+          print(f"{seen} inline python block(s) checked")
+          if failed:
+              print("::error::inline python -c does not compile: " + ", ".join(failed))
+              sys.exit(1)
+          PY
+
   # The declared floor has to be tested, not just declared. Every job above
   # installs whatever mcp is latest, which is structurally why a
   # `mcp.server.lowlevel.helper_types` import that needs >=1.3.0 sat under a

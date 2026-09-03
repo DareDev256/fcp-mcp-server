@@ -144,23 +144,9 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           for attempt in $(seq 1 10); do
-            # The search endpoint returns EVERY version of a server, oldest
-            # first, so taking the first match reads whichever version was
-            # published first — 0.13.1 here — and reports failure for a
-            # publish that worked. The registry marks exactly one entry
-            # isLatest; that is the only one that answers "what does the
-            # registry serve".
+            # Why isLatest and not the first match: see the script's docstring.
             served=$(curl -sf "https://registry.modelcontextprotocol.io/v0.1/servers?search=fcpxml-mcp-server" \
-              | python3 -c "
-            import json, sys
-            NAME = 'io.github.DareDev256/fcpxml-mcp-server'
-            KEY = 'io.modelcontextprotocol.registry/official'
-            entries = json.load(sys.stdin).get('servers', [])
-            latest = [e for e in entries
-                      if e['server']['name'] == NAME
-                      and e.get('_meta', {}).get(KEY, {}).get('isLatest')]
-            print(latest[0]['server']['version'] if latest else '')
-            ")
+              | python3 .github/scripts/registry_latest.py)
             if [ "$served" = "$version" ]; then
               echo "registry is serving ${version}"
               exit 0

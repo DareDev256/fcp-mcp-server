@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-09-03
+
+### Fixed
+- **The registry check died of an `IndentationError` on the first tag after
+  it was "fixed".** 0.21.2's fix corrected the logic (read the `isLatest`
+  entry) and verified it by hand; the inline `python3 -c` body that wrapped
+  it was indented to match the surrounding YAML, Python received that
+  indentation intact, and the step had never executed once. The `report` job
+  did its job and opened #22 — the first time that surface has ever fired
+  for real. The check now lives in `.github/scripts/registry_latest.py`
+  (linted, unit-tested in `tests/test_registry_latest.py`, and the step body
+  was run end to end locally against the live registry before tagging), and
+  a new `workflow-scripts` step compiles every inline `python -c` block in
+  every workflow — control-tested red against the broken form.
+
 ## [0.22.0] - 2026-09-03
 
 ### Fixed
