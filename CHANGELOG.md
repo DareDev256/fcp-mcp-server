@@ -65,6 +65,43 @@
   and the prefix `0.2` — which must NOT match `0.21.0`, and does not, because
   it anchors on the sdist filename.
 
+## [0.21.1] - 2026-09-03
+
+### Fixed
+- **Every install from PyPI since 0.19.2 was dead on arrival.**
+  `pyproject.toml` declared `include = ["fcpxml*"]`, so setuptools silently
+  omitted `tools/` — which `server.py` imports at module scope. The published
+  wheel's `top_level.txt` listed only `fcpxml` and `server`, and the sdist
+  held 106 files with none under `tools/`, so importing the server raised
+  `ModuleNotFoundError: No module named 'tools'` before it could answer
+  `initialize`. The MCP client showed only "Connection closed". 0.19.2,
+  0.19.3, 0.20.0 and 0.21.0 all shipped this way; 0.16.0 works because its
+  server.py predates the import. The fix is one entry:
+  `include = ["fcpxml*", "tools*"]`.
+
+  It was invisible from a git checkout, where Python finds `tools/` in the
+  working directory — which is why 1,738 green tests, a green publish job and
+  a `verify` job that confirmed PyPI was *serving* the version all said
+  nothing. Serving a file is not the same as the file working.
+
+  Reported by Marty Hou, a documentary editor with no GitHub account, who
+  had to find an address in the commit history because the one published with
+  the package bounces. Diagnosed against the real artifacts rather than from
+  memory, and correct in every particular.
+- **The author address published with the package bounced.**
+  `dare@jamesdare.com` does not exist. Now `dev@jamesdare.com`.
+
+### Added
+- **Two instruments, because the old ones could not see this.**
+  `tests/test_packaging.py` parses the include list and asserts every
+  first-party package `server.py` (and each `tools/` module) imports is
+  matched by it — the static check that fails the moment a new top-level
+  package is added without being packaged. And the publish workflow now
+  installs the built wheel into a clean venv, `cd`s out of the source tree
+  and starts the server, asserting 13 groups and 88 handlers BEFORE upload.
+  Control-tested: the identical script exits 1 against the published 0.21.0
+  wheel and 0 against this one.
+
 ## [0.21.0] - 2026-09-02
 
 ### Changed

@@ -57,6 +57,27 @@ jobs:
           test "$tag" = "$built"
 
       - run: twine check dist/*
+
+      # Build artifacts that import cleanly from the repo are not evidence.
+      # 0.19.2 through 0.21.0 all built, passed twine check and uploaded, and
+      # every one raised ModuleNotFoundError on install because tools/ was
+      # missing from the include list — invisible from a checkout, where
+      # Python finds tools/ in the working directory. So: install the built
+      # wheel into a clean venv, cd OUT of the source tree, and start it.
+      - name: The built wheel must actually start
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          cd /tmp
+          /tmp/smoke/bin/python - <<'PY'
+          import server, tools
+          groups, handlers = len(server.TOOL_GROUPS), len(server.TOOL_HANDLERS)
+          print(f"started {server.__version__}: {groups} groups, {handlers} handlers")
+          assert groups == 13, f"expected 13 groups from an install, got {groups}"
+          assert handlers == 88, f"expected 88 handlers, got {handlers}"
+          assert tools.EXTRA_GROUPS, "tools/ registered nothing"
+          PY
+
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   # A green publish job is not evidence that PyPI serves the version. The

@@ -7,13 +7,13 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.21.0"
+version = "0.21.1"
 
 description = "MCP server for Final Cut Pro XML. 13 grouped tools (88 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, real media analysis (silence, beats, shot boundaries, local Whisper or ElevenLabs transcripts), a SQLite cache, ffmpeg proxy preview with source-media verification, export watch-folder round-trip, EDL import, an operation journal with undo, a review gate on delivery, bulk organize, tiered shot search with offline captions."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "DareDev256", email = "dare@jamesdare.com"}
+    {name = "DareDev256", email = "dev@jamesdare.com"}
 ]
 keywords = ["final-cut-pro", "mcp", "video-editing", "fcpxml", "ai"]
 classifiers = [
@@ -84,7 +84,15 @@ py-modules = ["server"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fcpxml*"]
+# tools* is NOT optional. server.py imports it at module scope, so a wheel
+# built without it raises ModuleNotFoundError before the server can answer
+# initialize — and the MCP client reports only "Connection closed". Four
+# releases (0.19.2 through 0.21.0) shipped that way because the failure is
+# invisible from a git checkout, where tools/ is found in the working
+# directory. tests/test_packaging.py builds a wheel and imports it out of a
+# clean directory; the publish workflow installs the built wheel into a fresh
+# venv and starts the server before uploading.
+include = ["fcpxml*", "tools*"]
 
 [tool.black]
 line-length = 100
