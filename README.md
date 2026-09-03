@@ -25,6 +25,65 @@ run time, so there is no fixture to keep.*
 
 ---
 
+## Quick Start
+
+### Claude Code (fastest)
+
+```bash
+claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server
+```
+
+Or project-scoped — commit a `.mcp.json` so your whole team gets it:
+
+```json
+{
+  "mcpServers": {
+    "fcpxml": {
+      "command": "uvx",
+      "args": ["fcp-mcp-server"],
+      "env": { "FCP_PROJECTS_DIR": "/Users/you/Movies" }
+    }
+  }
+}
+```
+
+With media intelligence (beat detection) and transcript editing (local Whisper):
+
+```bash
+claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx --from "fcp-mcp-server[intelligence,transcribe]" fcp-mcp-server
+```
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "fcpxml": {
+      "command": "uvx",
+      "args": ["fcp-mcp-server"],
+      "env": { "FCP_PROJECTS_DIR": "/Users/you/Movies" }
+    }
+  }
+}
+```
+
+### From source (contributors)
+
+```bash
+git clone https://github.com/DareDev256/fcp-mcp-server.git
+cd fcp-mcp-server
+pip install -e .
+# then point your MCP client at: python /path/to/fcp-mcp-server/server.py
+```
+
+### Use It
+
+Export XML from Final Cut Pro (`File → Export XML…`), open your MCP client, and ask it to work with your timeline.
+
+---
+
 ## Why This Exists
 
 After a decade directing music videos (Chief Keef, Migos, Masicka), I noticed the same editing bottlenecks on every project: counting cuts manually, extracting chapter markers one by one, hunting flash frames by scrubbing, building rough cuts clip by clip.
@@ -179,65 +238,6 @@ If you have SpliceKit or CommandPost installed, `watch_start` says so. This
 server **does not call either one** — their RPC signatures have not been verified
 against a live install, and it never patches or injects anything. That is why it
 runs on a managed Mac and survives an FCP update.
-
----
-
-## Quick Start
-
-### Claude Code (fastest)
-
-```bash
-claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server
-```
-
-Or project-scoped — commit a `.mcp.json` so your whole team gets it:
-
-```json
-{
-  "mcpServers": {
-    "fcpxml": {
-      "command": "uvx",
-      "args": ["fcp-mcp-server"],
-      "env": { "FCP_PROJECTS_DIR": "/Users/you/Movies" }
-    }
-  }
-}
-```
-
-With media intelligence (beat detection) and transcript editing (local Whisper):
-
-```bash
-claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx --from "fcp-mcp-server[intelligence,transcribe]" fcp-mcp-server
-```
-
-### Claude Desktop
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "fcpxml": {
-      "command": "uvx",
-      "args": ["fcp-mcp-server"],
-      "env": { "FCP_PROJECTS_DIR": "/Users/you/Movies" }
-    }
-  }
-}
-```
-
-### From source (contributors)
-
-```bash
-git clone https://github.com/DareDev256/fcp-mcp-server.git
-cd fcp-mcp-server
-pip install -e .
-# then point your MCP client at: python /path/to/fcp-mcp-server/server.py
-```
-
-### Use It
-
-Export XML from Final Cut Pro (`File → Export XML…`), open your MCP client, and ask it to work with your timeline.
 
 ---
 
@@ -866,7 +866,7 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] Silence detection & cleanup
 - [x] Cross-NLE export (DaVinci Resolve, Premiere Pro, Avid)
 - [x] **Live mode v1** — zero-click push-to-FCP via Apple events, AppleScript library inspection — *v0.9.0*
-- [ ] Watch-folder round-trip + backend Protocol refactor (operation layer shared by XML and Live)
+- [ ] Backend Protocol refactor (one operation layer shared by XML and Live)
 - [x] **Media intelligence v1** — real silence detection from source audio (`detect_media_silence`) — *v0.10.0*
 - [x] **Silence auto-removal** — `remove_media_silence` cuts real silence with ripple — *v0.11.0*
 - [x] **Beat detection** — `detect_beats` (librosa) chains into beat markers + snap-to-beats — *v0.12.0*
@@ -878,8 +878,11 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **The Loop** — `preview` (see the edit from the source media), `watch` (notice the Cmd-E export), `import_edl_json`, bridge detection, autopush — *v0.17.0*
 - [x] **Speed and sight** — SQLite analysis index with per-clip progress, `scenes` shot-boundary detection, `transcript_pack`, opt-in ElevenLabs Scribe diarization — *v0.18.0*
 - [x] **The moat and the ledger** — operation journal + `history`/`undo`, review gate on `deliver`, `organize` bulk edits + `organize_auto`, `find` tiered shot search with offline MLX captions, diversity constraint — *v0.19.0*
+- [x] **Crossfades and lanes in preview** — transitions compile to ffmpeg `xfade`, connected video lanes composite over the spine — *v0.20.0*
+- [x] **Captions look at a 1080p frame** — `find` vision tier caps the frame it sends the VLM, so a 4K library no longer pays 4× the tokens (#21, @jardelapp) — *v0.21.0*
+- [x] **A wheel that starts** — the publish workflow installs the built wheel into a clean venv and runs `initialize` + `tools/list` before a release ships; the MCP registry check reads `isLatest` and is compiled in CI — *v0.21.1–0.22.1*
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
-- [ ] **Live bridges** — optional SpliceKit / CommandPost adapters for in-app control when installed
+- [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written
 - [ ] Audio sync detection
 - [ ] Premiere Pro native XML support
 
@@ -890,10 +893,18 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 | Issue | Impact | Workaround |
 |-------|--------|------------|
 | **Still images crash FCP** | PNG/JPEG assets referenced directly in FCPXML crash Final Cut Pro on import (`addAssetClip` null pointer). Confirmed across multiple format configurations, dimension matching, and element types. | Convert stills to short MOVs before referencing: `ffmpeg -loop 1 -i image.png -c:v libx264 -t 2 -pix_fmt yuv420p -r 24 output.mov`. This is an FCP limitation, not an FCPXML spec issue. |
+| **"Connection closed" on a PyPI install of 0.19.2–0.21.0** | `tools/` was missing from the published package, so the server raised `ModuleNotFoundError` at import, before it could answer `initialize`. The MCP client reports only "Connection closed". A git checkout never showed it. | Fixed in v0.21.1 — upgrade (`uvx` picks it up on the next run; `pip install -U fcp-mcp-server` otherwise). The publish workflow now installs the built wheel into a clean venv and runs `initialize` + `tools/list` before anything ships. |
+
+<details>
+<summary><strong>Fixed in earlier releases</strong> — kept because the symptom still turns up on old installs</summary>
+
+| Issue | Impact | Workaround |
+|-------|--------|------------|
 | **Non-standard timebases** | FCP rejects time values with denominators outside its standard set (e.g. `100800/57600s`). Cross-denominator arithmetic previously produced these. | Fixed in v0.5.29 — TimeValue arithmetic now uses LCM, and speed changes snap to frame boundaries in 2400-tick timebase. |
 | **Malformed frameDuration crash** | A `frameDuration` with zero or negative denominator (e.g. `"0/0s"`) in the writer's `_detect_fps` would silently produce 0.0 fps, causing downstream ZeroDivisionError in speed/trim operations. The parser already validated this correctly. | Fixed in v0.6.23 — writer now validates both numerator and denominator, falling back to 30.0 fps. |
-| **"Connection closed" on a PyPI install of 0.19.2–0.21.0** | `tools/` was missing from the published package, so the server raised `ModuleNotFoundError` at import, before it could answer `initialize`. The MCP client reports only "Connection closed". A git checkout never showed it. | Fixed in v0.21.1 — upgrade (`uvx` picks it up on the next run; `pip install -U fcp-mcp-server` otherwise). The publish workflow now installs the built wheel into a clean venv and runs `initialize` + `tools/list` before anything ships. |
 | **Duplicate clip names corrupt edits** | When multiple spine clips share the same name (e.g. `Interview_A` ×4), operations using the name-indexed dict silently target the wrong clip (last-indexed instead of first). Affected: `delete_clip`, `add_marker_at_timeline`, `trim_clip`, `change_speed`, `split_clip`, `add_transition`, `reorder_clips`. | Fixed in v0.6.37–0.6.39 — all methods now resolve clips via `_resolve_clip()` which walks the spine directly, returning the first match. |
+
+</details>
 
 ---
 

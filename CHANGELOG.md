@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Changed
+- README: Quick Start moved directly under the demo, above the essay sections, so an install command is on the first screen. Roadmap catches up through 0.22.1 (the watch-folder round-trip shipped in 0.17.0 but was still unchecked; 0.20/0.21/0.22 were missing). Known Issues keeps the two rows that still bite and folds the three long-fixed ones into a disclosure.
+
 ## [0.22.1] - 2026-09-03
 
 ### Fixed
