@@ -104,12 +104,64 @@ jobs:
           echo "::error::PyPI does not serve ${version} ten minutes after upload"
           exit 1
 
+  # PyPI is not the only index people install from. The MCP registry sat at
+  # 0.13.1 for eight releases because publishing to it was a laptop command
+  # nobody remembered — and `mcp-publisher validate` had been failing the
+  # whole time on a description that grew past the registry's 100-char cap,
+  # silently, because nothing ran it. Both are now on the tag.
+  registry:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      # github-oidc proves this workflow runs in DareDev256's repo, which is
+      # what the io.github.DareDev256/* namespace requires. No stored token.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+          ./mcp-publisher --help >/dev/null
+        env:
+          PUBLISHER_VERSION: 1.8.1
+
+      # The registry rejects the whole publish on a schema violation. Failing
+      # here names the field; failing on publish just says 422.
+      - run: ./mcp-publisher validate
+
+      - name: Publish to the MCP registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      # A green publish call is not evidence the registry serves it, the same
+      # way a green twine upload was not evidence for PyPI.
+      - name: The registry must serve this version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 10); do
+            served=$(curl -sf "https://registry.modelcontextprotocol.io/v0.1/servers?search=fcpxml-mcp-server" \
+              | python3 -c "import json,sys; print(next((s['server']['version'] for s in json.load(sys.stdin).get('servers',[]) if s['server']['name']=='io.github.DareDev256/fcpxml-mcp-server'), ''))")
+            if [ "$served" = "$version" ]; then
+              echo "registry is serving ${version}"
+              exit 0
+            fi
+            echo "attempt ${attempt}: registry serves '${served}', want ${version}"
+            sleep 15
+          done
+          echo "::error::MCP registry does not serve ${version}"
+          exit 1
+
   # Nothing watches the Actions tab between releases. A failed publish leaves a
   # tag and a release page that both look finished, which is exactly how three
   # releases shipped while PyPI served 0.16.0. An issue is the one surface that
   # arrives without anyone remembering to look.
   report:
-    needs: [test, publish, verify]
+    needs: [test, publish, verify, registry]
     if: failure() && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

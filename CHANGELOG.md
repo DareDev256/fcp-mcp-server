@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-09-03
+
+### Fixed
+- **The MCP registry had served 0.13.1 since 2026-07-25 — eight releases
+  behind.** Publishing there was a laptop command nobody remembered, and
+  `mcp-publisher validate` had been failing that whole time with a 422: the
+  registry caps `description` at 100 characters and `server.json` had grown to
+  208, still advertising "11 grouped tools (79 underlying operations)" for a
+  server that has 13 and 88. Nothing in the repo read that file, so no test,
+  no CI job and no release step could see any of it. The description is now
+  96 characters and states the measured counts, and a `registry` job on the
+  tag validates, publishes with GitHub OIDC (no stored token), then asks the
+  registry which version it actually serves — the same "a green publish is not
+  evidence" rule the PyPI `verify` job exists for.
+- **`pyproject` asked for a PySceneDetect extra that does not exist.** The
+  `scenes` extra said `scenedetect[opencv]`; PySceneDetect 0.7 ships `pyav`
+  and `moviepy` and depends on opencv-python outright. pip only WARNS on an
+  unknown extra and installs anyway, so it worked by accident from 0.18.0 on.
+  Now `scenedetect>=0.7.0`.
+
+### Added
+- **Three tests read `server.json`.** Its version fields must match
+  `server.__version__` (both of them — the top level and every package
+  entry), its description must fit the registry's 100-character cap, and it
+  must name the counts measured from `TOOL_GROUPS`/`TOOL_HANDLERS` rather than
+  a number typed by hand. The stale counts in it had survived every existing
+  count test because those all read the README.
+- **A CI job that installs the optional extras.** No job did, which is the
+  structural reason a bad extra spec lived for four releases. It fails on the
+  resolver warning, then imports what it installed, because an extra that
+  resolves and leaves the feature unimportable reads identically from pip. It
+  greps for both pip's wording and uv's: the first draft grepped only uv's,
+  which under pip is a check that could never have gone red. Verified in both
+  directions against the old spec and the new one before landing. `find` is
+  deliberately excluded — mlx-vlm is Apple Silicon only, and a job that fails
+  for a true reason on every run is a job people learn to ignore.
+
+## [0.21.1] - 2026-09-03
+
 ### Fixed
 - **`delete_clips` reported the size of the request, not the number of
   deletions.** Asked to delete two clip names that match nothing, the most
@@ -64,8 +103,6 @@
   The index check was control-tested against a served version, an absent one,
   and the prefix `0.2` — which must NOT match `0.21.0`, and does not, because
   it anchors on the sdist filename.
-
-## [0.21.1] - 2026-09-03
 
 ### Fixed
 - **Every install from PyPI since 0.19.2 was dead on arrival.**

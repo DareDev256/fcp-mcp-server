@@ -68,6 +68,48 @@ jobs:
           FCP_MCP_INDEX: "off"
         run: pytest tests/ -v
 
+  # No job above installs the optional extras, so `scenedetect[opencv]` sat in
+  # pyproject from 0.18.0 onward naming an extra PySceneDetect does not have.
+  # pip prints a warning and installs anyway, so every surface stayed green.
+  # This job reads the warning.
+  extras:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `find` is deliberately absent: mlx-vlm is Apple Silicon only and has
+      # no Linux wheel, so requiring it here would fail for a true reason and
+      # teach everyone to ignore this job.
+      - name: Optional extras must install without a resolver warning
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,intelligence,transcribe,scenes]" 2>&1 | tee /tmp/pip.log
+          # Both wordings on purpose. pip says "does not provide the extra",
+          # uv says "does not have an extra named"; the first draft of this
+          # step grepped only uv's string, which is a check that could never
+          # have gone red under the installer it actually runs.
+          if grep -Ei "does not provide the extra|does not have an extra named" /tmp/pip.log; then
+            echo "::error::pyproject asks for an extra that does not exist"
+            exit 1
+          fi
+
+      # Installing is not importing. An extra that resolves but leaves the
+      # feature unusable reads identically from pip.
+      - name: The extras must actually be importable
+        run: |
+          python -c "
+          import scenedetect, faster_whisper, librosa
+          print('scenedetect', scenedetect.__version__)
+          "
+
+      - name: Run tests with every installable extra present
+        run: pytest tests/ -q
+
   # The declared floor has to be tested, not just declared. Every job above
   # installs whatever mcp is latest, which is structurally why a
   # `mcp.server.lowlevel.helper_types` import that needs >=1.3.0 sat under a

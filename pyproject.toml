@@ -7,7 +7,7 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.21.1"
+version = "0.21.2"
 
 description = "MCP server for Final Cut Pro XML. 13 grouped tools (88 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, real media analysis (silence, beats, shot boundaries, local Whisper or ElevenLabs transcripts), a SQLite cache, ffmpeg proxy preview with source-media verification, export watch-folder round-trip, EDL import, an operation journal with undo, a review gate on delivery, bulk organize, tiered shot search with offline captions."
 readme = "README.md"
@@ -57,7 +57,12 @@ transcribe = [
     "faster-whisper>=1.0.0",
 ]
 scenes = [
-    "scenedetect[opencv]>=0.7.0",
+    # NOT scenedetect[opencv]: PySceneDetect 0.7 has no `opencv` extra (it
+    # ships `pyav` and `moviepy`, and depends on opencv-python outright).
+    # pip only WARNS on a nonexistent extra, so `.[scenes]` installed fine
+    # and the typo survived from 0.18.0 until the extras CI job below read
+    # the warning it had been printing the whole time.
+    "scenedetect>=0.7.0",
 ]
 find = [
     "mlx-vlm>=0.1.0",
