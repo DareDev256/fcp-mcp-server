@@ -683,3 +683,42 @@ def test_generate_segmented_rough_cut_convenience(temp_fcpxml, temp_output):
     assert isinstance(result, RoughCutResult)
     assert result.segments == 2
     assert Path(temp_output).exists()
+
+
+# ============================================================
+# diversity constraint (v0.19.0)
+# ============================================================
+
+
+def test_generate_min_source_separation_filters_repeats(temp_output, monkeypatch):
+    """Selection that reuses one source back-to-back is thinned; the score reports it."""
+    gen = RoughCutGenerator("examples/music-video.fcpxml")
+    pool = gen._filter_clips(keywords=None, exclude_rejected=True, favorites_only=False)
+    a, b = (
+        {**c, "use_duration": TimeValue.from_seconds(2, gen.fps), "in_point": c["start"],
+         "out_point": c["start"] + TimeValue.from_seconds(2, gen.fps)}
+        for c in pool[:2]
+    )
+    monkeypatch.setattr(gen, "_select_clips_simple", lambda *args, **kw: [a, a, b, a])
+
+    loose = gen.generate(output_path=temp_output, target_duration="60s")
+    assert loose.clips_used == 4 and loose.diversity_score == pytest.approx(2 / 3)
+
+    tight = gen.generate(output_path=temp_output, target_duration="60s", min_source_separation=1)
+    assert tight.clips_used == 3 and tight.diversity_score == 1.0
+    refs = [c.get("ref") for c in ET.parse(temp_output).getroot().iter("asset-clip")]
+    assert refs == [a["ref"], b["ref"], a["ref"]]
+
+
+async def test_auto_rough_cut_reports_diversity(tmp_path):
+    import shutil
+
+    import server
+
+    src = tmp_path / "mv.fcpxml"
+    shutil.copy("examples/music-video.fcpxml", src)
+    text = (await server.handle_auto_rough_cut({
+        "filepath": str(src), "output_path": str(tmp_path / "cut.fcpxml"),
+        "target_duration": "30s", "min_source_separation": 1,
+    }))[0].text
+    assert "Diversity: " in text

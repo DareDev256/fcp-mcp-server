@@ -26,9 +26,15 @@ expensive to undo.
 | `diagnose` | Find problems: gaps, flash frames, dead air, duplicates, beats. |
 | `edit` | Change clips: insert, delete, trim, split, reorder, retime, remove silence. |
 | `mark` | Markers and chapters, including SRT/VTT and beat import. |
-| `generate` | Build new structure: rough cuts, montages, A/B roll, templates. |
-| `transcript` | Transcribe locally, then edit or clean up by what was SAID. |
+| `generate` | Build new structure: rough cuts, montages, A/B roll, templates, and `import_edl_json` from a video-use cut list. |
+| `transcript` | Transcribe locally, then edit or clean up by what was SAID. `transcript_pack` puts the whole shoot on one page — read it before planning a dialogue edit. Every action takes `backend: "elevenlabs"` for speaker labels and audio events; that uploads the media to ElevenLabs and needs `ELEVENLABS_API_KEY` — the default `local` never leaves the machine. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
+| `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
+| `watch` | Close the round-trip: notice the operator's Cmd-E export and diff it against the last one. |
+| `index` | The analysis cache. `index_status` says how old it is; `index_build` warms every source in a timeline; `index_clear` drops it. Nothing depends on it. |
+| `scenes` | Shot boundaries from the pixels. `detect_scenes` lists cuts per clip in source and timeline time (PySceneDetect when installed via `[scenes]`, else ffmpeg's coarser scene filter); `scenes_to_markers` drops a marker on each; `scenes_split` cuts the clips there. Results are cached in the index. |
+| `organize` | Bulk library logging and the ledger. `organize_auto` proposes keywords per clip from cached captions and the transcript (`apply=true` writes them). Select clips by `clip_name` glob, `keyword` and/or `role`, then `organize_keywords` (add/remove/replace), `organize_rate` (favorite/rejected/clear) or `organize_roles` — each writes a `_organized` copy. `history` lists every recorded operation for the file's folder; `undo` moves the last n outputs into the journal's `undone/` folder (never deletes, refuses if a file changed since). |
+| `find` | "Where is the bit where…" as a router. `find_shots` ranks moments by what was said (transcript), what was logged (names, keywords, notes, markers, audio events) and, with the `[find]` extra and a downloaded local model, what the frames look like — the first line names which tiers answered and why one could not. `find_index` warms scenes and captions and reports which clips have no transcript (never transcribes, never online). `find_to_timeline` assembles the hits into a `_found` selects reel with a diversity score. |
 
 Every call takes `{"action": "...", "args": {...}}`. If you pass an action the
 group does not own, the error lists the valid ones — read it rather than
@@ -68,18 +74,30 @@ Use the media versions when correctness matters. Say which one you used.
 ## Working order that tends to hold
 
 1. `inspect` → `diagnose` → read the `preview://` resource.
-2. `transcript` with action `transcribe_media` if the edit is dialogue-driven.
+2. `transcript` with action `transcript_pack` if the edit is dialogue-driven — one page of everything said, so the plan is made from the words rather than the clip names.
 3. `generate` for the assembly, `edit` for the refinement, `mark` for chapters.
-4. Read `preview://` again and compare against the first render before
-   offering the edit as done. This is what makes the edit non-blind — do not
-   skip it just because the tool call reported success.
+4. `preview` with action `preview_check` over the range you changed, before
+   offering the edit as done. This is what makes the edit non-blind. The
+   `preview://` resource and `preview_timeline` both draw from the XML — they
+   show what was WRITTEN, so they cannot tell a fixed cut from a broken one.
+   `preview_check` reads the media. Do not substitute one for the other, and
+   do not skip it because the tool call reported success.
 5. `deliver`, either exporting or `push_to_fcp` into the running app.
+6. `watch` with action `watch_start` once per session, then `watch_pull` after
+   the operator exports. Final Cut Pro has NO programmatic export — Apple never
+   shipped one — so the loop only closes when they press Cmd-E. Say so plainly
+   rather than waiting in silence.
 
 ## Do not
 
 - Do not edit without a diagnose pass. Flash frames and gaps compound.
 - Do not assume ffmpeg or Whisper are installed. Both degrade gracefully and
   return nothing rather than erroring, so check the response.
+- Do not read a `preview_render` summary past the word UNVERIFIED. It means the
+  rendered file's duration could not be read back, so nothing about that render
+  has been confirmed.
+- Do not ignore a `Substituted:` line. The proxy renders transitions as hard
+  cuts, so a dissolve in the timeline is NOT what you are looking at.
 - Do not claim an edit landed in Final Cut Pro unless `push_to_fcp` was called
   and reported success. Writing an .fcpxml file is not the same as importing it.
 - Do not trust a tool's own success message as proof the timeline looks

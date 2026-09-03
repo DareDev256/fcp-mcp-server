@@ -1,6 +1,6 @@
 # FCPXML MCP
 
-**The bridge between Final Cut Pro and AI. 7 grouped tools (62 underlying operations) that turn timeline XML into structured data Claude can read, edit, and generate.**
+**The bridge between Final Cut Pro and AI. 13 grouped tools (88 underlying operations) that turn timeline XML into structured data Claude can read, edit, generate, SEE, find — and undo.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -12,9 +12,16 @@
 
 **Hardened for real libraries:** 182 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
 
-![FCPXML MCP demo — transcript-based editing](docs/assets/demo.gif)
+![FCPXML MCP demo: an edl.json cut into a Final Cut timeline, dead air detected in the source audio and trimmed, then rendered to a proxy](docs/assets/demo.gif)
 
-*Real v0.13.0 output: local Whisper transcription, filler-word removal, and phrase-based cutting on a podcast timeline.*
+*Real v0.21.2 output, start to finish: three shots cut into a timeline from an
+`edl.json`, analysed, drawn as an ASCII timeline, probed for dead air in the
+source audio, trimmed, redrawn, and rendered to a proxy whose duration is read
+back off the artifact. Recorded from [`demo/demo.py`](demo/demo.py) with
+[`vhs`](https://github.com/charmbracelet/vhs) — every line is output from the
+same handlers an MCP client calls, so the GIF cannot drift from the code.
+Re-record it with `vhs demo/demo.tape`; the media is synthesised by ffmpeg at
+run time, so there is no fixture to keep.*
 
 ---
 
@@ -142,6 +149,39 @@ the optional SpliceKit/CommandPost bridges planned for v1.0.
 
 ---
 
+## The Round Trip
+
+Final Cut Pro has a fully scriptable **import** and **no programmatic export** —
+verified unchanged across FCP 11.0 → 12.2. So the loop closes on exactly one
+keystroke, and everything either side of it is automated:
+
+```
+watch_start                    ← once per session (or set FCP_WATCH_DIR)
+   ↓
+edit / generate / mark         ← the change
+   ↓
+preview_check                  ← SEE it. Reads the media, not the XML
+   ↓
+deliver.push_to_fcp            ← zero-click import (or FCP_MCP_AUTOPUSH=1)
+   ↓
+Cmd-E in Final Cut Pro         ← the one manual step Apple leaves you
+   ↓
+watch_pull                     ← detected and diffed against the last export
+```
+
+**`preview_check` is the part that matters.** The `preview://` resource and
+`preview_timeline` both draw from the XML — they show what was *written*, so a
+fixed flash frame and a broken one read identically through them. `preview_check`
+samples the source media into a filmstrip over an audio waveform. It is the
+difference between a tool reporting success and you knowing the cut is right.
+
+If you have SpliceKit or CommandPost installed, `watch_start` says so. This
+server **does not call either one** — their RPC signatures have not been verified
+against a live install, and it never patches or injects anything. That is why it
+runs on a managed Mac and survives an FCP update.
+
+---
+
 ## Quick Start
 
 ### Claude Code (fastest)
@@ -205,12 +245,13 @@ Export XML from Final Cut Pro (`File → Export XML…`), open your MCP client, 
 
 | Good For | Not Ideal For |
 |----------|---------------|
-| Batch marker insertion (100 chapters from a transcript) | Creative editing decisions (no visual feedback) |
-| QC before delivery (flash frames, gaps, duplicates) | Real-time adjustments (export/import cycle) |
-| Data extraction (EDL, CSV, chapter markers) | Fine-tuning cuts (faster directly in FCP) |
-| Template generation (rough cuts from tagged clips) | Anything visual (color, framing, motion) |
+| Batch marker insertion (100 chapters from a transcript) | Fine-tuning cuts (faster directly in FCP) |
+| QC before delivery (flash frames, gaps, duplicates) | Colour, framing and motion (nothing here grades) |
+| Data extraction (EDL, CSV, chapter markers) | Sound mixing beyond stems and role splits |
+| Template generation (rough cuts from tagged clips) | Anything needing a scrub through the actual cut |
 | Automated assembly (montages from keywords + pacing) | |
 | Timeline health checks (validation, stats, scoring) | |
+| Logging and search before the edit (scenes, transcript, shot search) | |
 
 ---
 
@@ -325,8 +366,8 @@ operation goes in `action`:
 
 ## Tools
 
-As of v0.14.0, the MCP tool list Claude sees by default is **7 grouped
-verbs**, not 62 flat tool names:
+As of v0.19.0, the MCP tool list Claude sees by default is **13 grouped
+verbs**, not 88 flat tool names:
 
 | Group | Covers |
 |-------|--------|
@@ -335,28 +376,38 @@ verbs**, not 62 flat tool names:
 | `edit` | Changing clips — markers, trim, reorder, transitions, speed, split, silence removal |
 | `mark` | Markers and chapters — batch add, SRT/VTT import, beat import |
 | `generate` | Building new structure — rough cuts, montages, A/B roll, templates |
-| `transcript` | Local Whisper transcription and transcript-driven cuts |
+| `transcript` | Local Whisper transcription and transcript-driven cuts; `transcript_pack` puts the whole shoot on one page; `backend: elevenlabs` opts into speaker labels and audio events (audio leaves the machine) |
 | `deliver` | Getting the timeline out — NLE export, reformat, relink, push-to-FCP |
+| `preview` | **Seeing** the edit — ffmpeg proxy render, contact sheet, and a filmstrip+waveform check read from the SOURCE MEDIA |
+| `watch` | Closing the round-trip — notice the operator's Cmd-E export and diff it against the last one |
+| `index` | The analysis cache — status with its age, warm every source in a timeline, clear. Nothing depends on it; `FCP_MCP_INDEX=off` and every tool still answers, only slower |
+| `scenes` | Shot boundaries from the pixels — list cuts per clip in source and timeline time, drop a marker on each, or split the clips there. PySceneDetect when installed, ffmpeg otherwise |
+| `organize` | Library housekeeping — bulk keywords, ratings and roles over a clip selection; `organize_auto` proposes keywords from captions and transcripts; `history` reads the operation ledger and `undo` moves the last outputs aside (never deletes) |
+| `find` | "Find the shot where…" — a router over transcript words, metadata and offline vision captions that names the tier on every hit; `find_index` warms every source; `find_to_timeline` assembles the hits into a selects reel |
 
 Each call has the same shape: `{"action": "trim_clip", "args": {...}}`. The
-`action` is one of the 62 original tool names below; `args` is whatever that
+`action` is one of the 88 operation names below; `args` is whatever that
 tool always took. The group dispatches straight into the same handler — the
 behavior is identical, only the schema Claude sees up front is smaller. An
 unknown or cross-group action returns an error listing the valid actions for
 that group, so a wrong guess is recoverable in one turn.
 
 **Grouping is what's advertised, not what's callable.** `call_tool` resolves
-every one of the 62 flat names from a handler registry that doesn't care what
-`list_tools` chose to show — an existing MCP config that calls `trim_clip`
-directly keeps working with no changes. If you'd rather see all 62 flat tools
-(e.g. for debugging, or a client that doesn't like the grouped shape), set:
+every one of the 88 operation names from a handler registry that doesn't care
+what `list_tools` chose to show — an existing MCP config that calls `trim_clip`
+directly keeps working with no changes. If you'd rather also see the flat tool
+schemas (e.g. for debugging, or a client that doesn't like the grouped shape),
+set:
 
 ```bash
 FCP_MCP_LEGACY_TOOLS=1
 ```
 
-This advertises the original 62 alongside the 7 groups. They will not be
-removed before a 1.0 release.
+This advertises the 63 flat schemas alongside the 13 groups — 76 tools in
+total. The 25 operations that were born as group actions (`preview`, `watch`,
+`index`, `scenes`, `organize`, `find`, plus `import_edl_json`) have no flat
+schema and are reached through their group.
+The flat tools will not be removed before a 1.0 release.
 
 ### See the timeline before you touch it
 
@@ -386,10 +437,10 @@ ln -s "$PWD/fcp-mcp-server/skill" ~/.claude/skills/final-cut-pro
 
 ---
 
-## All 62 Tools
+## All 88 Operations
 
-The 62 tools below are the operations behind the 7 groups in
-[Tools](#tools) — every `action` value the groups accept, unchanged from
+The 88 operations below are what the 13 groups in [Tools](#tools) dispatch
+to — every `action` value the groups accept. The first 63 are unchanged from
 prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 
 | Category | Tools | What It Does |
@@ -407,15 +458,21 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 | **NLE Export** | 2 | DaVinci Resolve v1.9, FCP7 XMEML v5 |
 | **Generation** | 3 | Rough cuts, montages, A/B roll |
 | **Beat Sync** | 2 | Import beat markers, snap cuts to beats |
-| **Import** | 2 | SRT/VTT subtitles, YouTube chapters → markers |
+| **Import** | 3 | SRT/VTT subtitles, YouTube chapters → markers; video-use `edl.json` → FCPXML |
 | **Audio** | 1 | Add audio clips, music beds at any lane |
 | **Compound** | 2 | Create/flatten compound clips |
 | **Templates** | 2 | Pre-built timeline structures (intro/outro, lower thirds, music video) |
 | **Effects** | 1 | List FCP transition effects with UUIDs |
 | **Media** | 1 | Bulk relink moved/renamed media (rewrite `media-rep` src paths) |
-| **Transcript Intelligence** | 3 | Local Whisper transcription, transcript-driven cuts, filler-word removal |
+| **Transcript Intelligence** | 4 | Local Whisper transcription, transcript-driven cuts, filler-word removal, the one-page transcript pack |
 | **Live (macOS)** | 2 | Push FCPXML into the running FCP (zero-click Apple-event import); list open libraries |
-| | **62** | |
+| **Preview** | 5 | Proxy render, contact sheet, single frame, filmstrip+waveform check from the source media, HTML timeline |
+| **Watch** | 4 | Start/status/stop an export watch folder; pull the latest export and diff it |
+| **Index** | 3 | Analysis cache status (with age), build, clear |
+| **Scenes** | 3 | Detect shot boundaries, mark them, split on them |
+| **Organize** | 6 | Bulk keywords/ratings/roles, auto-proposed keywords, operation history, hash-checked undo |
+| **Find** | 3 | Shot search across transcript, metadata and vision tiers; warm the index; assemble a selects reel |
+| | **88** | |
 
 <details>
 <summary><strong>Full tool reference (click to expand)</strong></summary>
@@ -450,8 +507,8 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 #### Beat Sync — 2 tools
 `import_beat_markers` · `snap_to_beats`
 
-#### Import — 2 tools
-`import_srt_markers` · `import_transcript_markers` (supports SMPTE `HH:MM:SS:FF` with frame-accurate placement)
+#### Import — 3 tools
+`import_srt_markers` · `import_transcript_markers` (supports SMPTE `HH:MM:SS:FF` with frame-accurate placement) · `import_edl_json` (video-use `{sources, ranges, grade?}` → FCPXML; `ranges[].source` is a key into `sources`, not a path — *v0.17.0*)
 
 #### v0.6.0 — Audio, Compound, Templates, Effects — 6 tools
 `list_effects` · `add_audio` · `create_compound_clip` · `flatten_compound_clip` · `list_templates` · `apply_template`
@@ -462,11 +519,39 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 #### v0.10–0.12 — Media Intelligence — 3 tools
 `detect_media_silence` (analyzes each clip's real source audio with ffmpeg silencedetect and maps silence spans into timeline time) · `remove_media_silence` (cuts detected silence out of the timeline with ripple — clips split around silence, padding keeps edits breathing, non-destructive output) — both require ffmpeg, degrade gracefully without it · `detect_beats` (musical beat + tempo detection via librosa, writes a beats JSON that chains into `import_beat_markers` + `snap_to_beats`; needs the optional `[intelligence]` extra)
 
-#### v0.13.0 — Transcript Intelligence — 3 tools
-`transcribe_media` · `edit_by_transcript` · `remove_filler_words`
+#### v0.13.0 / v0.18.0 — Transcript Intelligence — 4 tools
+`transcribe_media` · `edit_by_transcript` · `remove_filler_words` · `transcript_pack` (v0.18.0 — one page of everything said; every one of the four takes `backend: "elevenlabs"` for speakers and audio events)
 
 #### v0.9.0 — Live Mode (macOS + Final Cut Pro) — 2 tools
 `push_to_fcp` (zero-click FCPXML import into the running FCP via Apple event) · `list_fcp_libraries` (enumerate open libraries/events/projects)
+
+#### v0.17.0 — Preview — 5 group actions
+`preview_render` · `preview_sheet` · `preview_frame` · `preview_check` · `preview_timeline`
+
+Since v0.20.0 `preview_render` compiles crossfades and video lanes rather than
+flattening them: a transition on a cut becomes an ffmpeg `xfade` (dissolve, dip
+to colour, wipe, slide), and a connected clip is overlaid for its own window,
+shifted by any crossfade that shortened the timeline before it. What the
+renderer cannot honour is printed with the render — a transition with no cut
+within its own duration, one whose neighbour is missing its media, a lane
+drawn full-frame because transforms and opacity are not read, and audio lanes,
+which are never mixed. The reported duration accounts for the overlaps, and
+`preview_render` reads the artifact's own duration back against it.
+
+#### v0.17.0 — Watch — 4 group actions
+`watch_start` · `watch_status` · `watch_stop` · `watch_pull`
+
+#### v0.18.0 — Index — 3 group actions
+`index_status` · `index_build` · `index_clear`
+
+#### v0.18.0 — Scenes — 3 group actions
+`detect_scenes` · `scenes_to_markers` · `scenes_split`
+
+#### v0.19.0 — Organize — 6 group actions
+`organize_keywords` (add / remove / replace over a selection by glob name, keyword or role) · `organize_rate` (favorite / rejected / clear) · `organize_roles` · `organize_auto` (proposes keywords from cached captions and transcripts; never transcribes; `apply=true` writes) · `history` (the operation ledger as a table with ages) · `undo` (moves the last N recorded outputs to `<journal>/undone/` — never deletes, refuses on hash mismatch)
+
+#### v0.19.0 — Find — 3 group actions
+`find_shots` (tiered router — transcript, metadata, vision — with the tier and a `why` on every hit; at most 20 live captions per call) · `find_index` (warm transcripts, scenes and opt-in captions for every source, reporting each as done / skipped / unavailable) · `find_to_timeline` (assemble the hits into a `_found` selects reel under the diversity constraint)
 
 </details>
 
@@ -482,7 +567,13 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 | `FCP_MAX_BATCH_MARKERS` | No | `10000` | Cap on markers written by one batch or import operation. Excess markers are reported as dropped, never silently skipped |
 | `FCP_MAX_TRANSCRIPT_CHARS` | No | `1048576` | Cap on inline transcript text passed to `import_transcript_markers` |
 | `FCPXML_DTD_DIR` | No | FCP app bundle | Directory of Apple `FCPXMLv*_*.dtd` files for DTD validation (auto-detected from the installed Final Cut Pro) |
-| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the original 62 flat tools alongside the 7 grouped tools |
+| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the 63 flat tool schemas alongside the 13 grouped tools |
+| `FCP_WATCH_DIR` | No | unset | Default folder `watch_start` observes for Final Cut Pro XML exports |
+| `FCP_MCP_AUTOPUSH` | No | unset | Set to `1` so every write also imports into the running Final Cut Pro. Off by default — repeated imports accumulate library churn, which is your call to make |
+| `FCP_MCP_INDEX` | No | `~/.fcp-mcp/index.db` | Where the analysis cache lives. `off` disables it entirely; every tool still works, it just recomputes. Any other value is a path |
+| `ELEVENLABS_API_KEY` | No | unset | Enables `backend: "elevenlabs"` on the transcript tools. Sent as the `xi-api-key` header and nowhere else; never read unless that backend is requested |
+| `FCP_MCP_JOURNAL` | No | `~/.fcp-mcp/journal/` | Where the operation ledger lives (paths and hashes, never content). `off` disables it — `history`/`undo` then say so and the `deliver` review gate refuses to certify anything |
+| `FCP_MCP_VLM_MODEL` | No | `mlx-community/Qwen2-VL-2B-Instruct-4bit` | Hub id of the MLX vision model `find` captions shots with. Loaded offline only; a missing model is reported with its `hf download` command, never fetched |
 
 ---
 
@@ -504,17 +595,52 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 ## Architecture
 
 ```
-fcp-mcp-server/           ~9.4k lines Python
-├── server.py              MCP entry point — 7 grouped tools advertised by default
-│                          (TOOL_GROUPS), dispatching into 62 flat handlers
+fcp-mcp-server/           ~15.7k lines Python
+├── server.py              MCP entry point — 13 grouped tools advertised by default
+│                          (TOOL_GROUPS), dispatching into 88 handlers
 │                          (TOOL_HANDLERS); 5 prompts, resource discovery.
-│                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the 62 flat tools.
+│                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the flat tools.
+│                          Binds itself to tools/ via bind_server() — group modules
+│                          must never `import server` (it runs as __main__).
+├── tools/                 New tool groups, registered without growing server.py
+│   ├── __init__.py        EXTRA_GROUPS/EXTRA_HANDLERS registry + bind_server()
+│   ├── _common.py         text_result / parse_project through the bound module
+│   ├── preview.py         preview group — render, sheet, frame, check, timeline
+│   ├── watch.py           watch group — start, status, stop, pull
+│   ├── index.py           index group — status (with age), build, clear
+│   ├── scenes.py          scenes group — detect, to_markers, split
+│   ├── organize.py        organize group — keywords, rate, roles, auto, history, undo
+│   ├── find.py            find group — shots (tiered router), index, to_timeline
+│   └── nle.py             NLE export, effects, audio, compound clips, templates,
+│                           relink — moved out of server.py, re-exported by it
 │                          _resolve_io_paths() / _setup_modifier() / _setup_generator()
 │                          _format_clip_table() / _markdown_table() / _format_batch_result()
 │                          _raw_markers_to_batch()
 │                          _detect_flash_frames() / _detect_gaps() / _detect_duplicate_groups()
 │                          consolidate path validation, QC detection, rendering, handler boilerplate
 ├── fcpxml/
+│   ├── journal.py         Append-only operation ledger — paths + hashes, never content;
+│   │                       undo is a pointer move into undone/, refused on hash mismatch
+│   ├── find.py            Pure ranking over transcript words and metadata ranges, tier named
+│   ├── vlm.py             Offline MLX shot captions — HF offline flags set BEFORE import.
+│   │                       Captions a 1080p frame: vision tokens scale with pixel area
+│   ├── diversity.py       Source-separation constraint + diversity score for assemblies
+│   ├── index.py           SQLite analysis cache — keyed (path, mtime, size), num/den time,
+│   │                       rebuilt on corruption; NEVER a source of truth (CI runs it off)
+│   ├── progress.py        Per-clip MCP progress notifications on either SDK
+│   ├── scenes.py          Shot boundaries — PySceneDetect or ffmpeg's coarser scene filter
+│   ├── transcript_pack.py Every transcript on one page; byte-measured 60KB cap
+│   ├── transcribe.py      Local faster-whisper, or ElevenLabs Scribe opt-in (speakers, events)
+│   ├── filtergraph.py     Timeline → ffmpeg graph. PURE — Fraction end to end,
+│   │                       so compilation is asserted without ffmpeg installed.
+│   │                       xfade crossfades + full-frame lane overlays; what it
+│   │                       cannot honour is reported, never silently dropped
+│   ├── render.py          Executes the graph; probes the artifact's OWN duration
+│   │                       back and reports drift against the timeline rational
+│   ├── visual.py          Filmstrip + waveform from SOURCE MEDIA (preview_check)
+│   ├── watchfolder.py     Export detection. Digests CONTENT, not (mtime, size)
+│   ├── bridges.py         SpliceKit :9876 / CommandPost :27480 — DETECTION ONLY
+│   ├── edl.py             video-use edl.json → FCPXML
 │   ├── models.py          TimeValue, Timecode, Clip, ConnectedClip, MarkerType, Timeline
 │   ├── parser.py          FCPXML → Python (spine, connected clips, roles, markers)
 │   ├── writer.py          Modify & write (markers, trim, gaps, transitions, silence)
@@ -530,7 +656,7 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1,343 tests across 30 files (a few skip without ffmpeg/FCP)
+├── tests/                 1753 tests across 66 suites — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -554,7 +680,11 @@ fcp-mcp-server/           ~9.4k lines Python
 │   ├── test_transcribe.py Phrase/filler span matching, range merge/invert algebra, Whisper handlers
 │   ├── test_validation.py Pydantic input validation models
 │   ├── test_live.py       push_to_fcp / list_fcp_libraries (Apple events, mocked + live-gated)
-│   ├── test_tool_groups.py  7 TOOL_GROUPS dispatch to the 62 TOOL_HANDLERS, legacy flag, schema size
+│   ├── test_tool_groups.py  TOOL_GROUPS dispatch to the TOOL_HANDLERS, legacy flag, schema size
+│   ├── test_index*.py     The cache: invalidation, rebuild, wiring, and the index group
+│   ├── test_scenes*.py    Shot boundaries on synthesised colour bars; the scenes group
+│   ├── test_transcript_pack*.py  The one-page pack and its handler
+│   ├── test_transcribe_scribe.py  Scribe backend with urlopen patched; key-leak mutation check
 │   ├── test_preview.py    preview:// HTML timeline render
 │   ├── test_skill.py      final-cut-pro skill structure
 │   └── test_dtd_validation.py  Output validated against Apple's shipped DTDs (skips without FCP)
@@ -674,7 +804,16 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-`pytest --collect-only -q` collects 1,343 tests across the 30 files in `tests/` (a handful skip without ffmpeg or Final Cut Pro present), covering models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection (parser, timeline mapping, real-WAV ffmpeg integration), transcript-driven editing, the 7 grouped tools dispatching to the 62 flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs (auto-skipped on machines without Final Cut Pro).
+1753 tests across 66 suites — 1746 pass and 7 skip on the declared `mcp` floor, 1747 pass and 6 skip on `mcp` 2.x, and 1722 pass / 31 skip with `FCP_MCP_INDEX=off` (CI runs all three; the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+
+Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
+
+- `test_the_instrument_can_see_a_wrong_duration` renders a one-second timeline and asserts the probe reads something other than two seconds.
+- `test_the_waveform_is_actually_drawn` renders the same video against loud and near-silent audio, so the filmstrips are identical by construction and any byte difference must come from the waveform. This one caught a real shipped defect: `showwavespic` draws on a transparent background that flattens to white, so a white trace was invisible while every ordinary check still passed.
+- `test_the_edit_still_reports_success_when_the_push_fails` proves an autopush failure never costs you a file that is already on disk.
+- `test_a_touched_source_drops_its_rows` re-exports a source and asserts the cache forgets it; with the (mtime, size) check removed the stale rows survive and the test goes red.
+- `test_key_goes_in_the_header_and_nowhere_else` — moving the ElevenLabs key into the URL makes it fail.
+- `test_version.py` asserts `server.__version__` matches `pyproject.toml`; the two had disagreed since v0.17.0 without anything noticing.
 
 ---
 
@@ -683,6 +822,8 @@ ruff check . --exclude docs/           # lint — must pass before committing
 - **Python 3.10+** · **Final Cut Pro 10.4+** (FCPXML 1.8+) · **Claude Desktop** or any MCP client
 - **Dependencies** (auto-installed): `mcp` (1.3.0+, including 2.x), `defusedxml`
 - **ffmpeg** (optional) — needed for silence analysis (`detect_media_silence`, `remove_media_silence`)
+- **`[scenes]` extra** (optional) — adds PySceneDetect for `scenes` detection that can see a cut between similar colours; without it the group falls back to ffmpeg's coarser scene filter and says so.
+- **`[find]` extra** (optional, Apple Silicon) — adds `mlx-vlm` + `numpy` so `find` can caption shots offline; without it `find` answers from transcript and metadata and says vision is unavailable.
 - **`[intelligence]` extra** (optional) — adds librosa for `detect_beats`; everything else works without it. Install via `uvx --from "fcp-mcp-server[intelligence]" fcp-mcp-server` or `pip install "fcp-mcp-server[intelligence]"` (from source: `pip install -e '.[intelligence]'`).
 - See [Compatibility](#compatibility) for full version matrix
 
@@ -734,7 +875,10 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **`preview://` HTML timeline render** — see a cut without opening Final Cut Pro — *v0.14.0*
 - [x] **`final-cut-pro` Claude Code skill** — workflow order + FCPXML gotchas — *v0.14.0*
 - [x] **Daily scheduled CI** — catches upstream dependency breaks within 24h — *v0.14.0*
-- [ ] **Media intelligence** — scene detection, shot understanding
+- [x] **The Loop** — `preview` (see the edit from the source media), `watch` (notice the Cmd-E export), `import_edl_json`, bridge detection, autopush — *v0.17.0*
+- [x] **Speed and sight** — SQLite analysis index with per-clip progress, `scenes` shot-boundary detection, `transcript_pack`, opt-in ElevenLabs Scribe diarization — *v0.18.0*
+- [x] **The moat and the ledger** — operation journal + `history`/`undo`, review gate on `deliver`, `organize` bulk edits + `organize_auto`, `find` tiered shot search with offline MLX captions, diversity constraint — *v0.19.0*
+- [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — optional SpliceKit / CommandPost adapters for in-app control when installed
 - [ ] Audio sync detection
 - [ ] Premiere Pro native XML support
@@ -748,13 +892,31 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 | **Still images crash FCP** | PNG/JPEG assets referenced directly in FCPXML crash Final Cut Pro on import (`addAssetClip` null pointer). Confirmed across multiple format configurations, dimension matching, and element types. | Convert stills to short MOVs before referencing: `ffmpeg -loop 1 -i image.png -c:v libx264 -t 2 -pix_fmt yuv420p -r 24 output.mov`. This is an FCP limitation, not an FCPXML spec issue. |
 | **Non-standard timebases** | FCP rejects time values with denominators outside its standard set (e.g. `100800/57600s`). Cross-denominator arithmetic previously produced these. | Fixed in v0.5.29 — TimeValue arithmetic now uses LCM, and speed changes snap to frame boundaries in 2400-tick timebase. |
 | **Malformed frameDuration crash** | A `frameDuration` with zero or negative denominator (e.g. `"0/0s"`) in the writer's `_detect_fps` would silently produce 0.0 fps, causing downstream ZeroDivisionError in speed/trim operations. The parser already validated this correctly. | Fixed in v0.6.23 — writer now validates both numerator and denominator, falling back to 30.0 fps. |
+| **"Connection closed" on a PyPI install of 0.19.2–0.21.0** | `tools/` was missing from the published package, so the server raised `ModuleNotFoundError` at import, before it could answer `initialize`. The MCP client reports only "Connection closed". A git checkout never showed it. | Fixed in v0.21.1 — upgrade (`uvx` picks it up on the next run; `pip install -U fcp-mcp-server` otherwise). The publish workflow now installs the built wheel into a clean venv and runs `initialize` + `tools/list` before anything ships. |
 | **Duplicate clip names corrupt edits** | When multiple spine clips share the same name (e.g. `Interview_A` ×4), operations using the name-indexed dict silently target the wrong clip (last-indexed instead of first). Affected: `delete_clip`, `add_marker_at_timeline`, `trim_clip`, `change_speed`, `split_clip`, `add_transition`, `reorder_clips`. | Fixed in v0.6.37–0.6.39 — all methods now resolve clips via `_resolve_clip()` which walks the spine directly, returning the first match. |
 
 ---
 
+## Reporting a Problem
+
+You do not need a GitHub account, and you do not need to be a programmer.
+
+- **GitHub:** [open an issue](https://github.com/DareDev256/fcp-mcp-server/issues) — best for anything with a traceback or a sample FCPXML.
+- **Email:** [dev@jamesdare.com](mailto:dev@jamesdare.com) — read directly, answered directly. If Claude did the diagnosis for you, paste its findings as-is; that is exactly how the v0.21.1 packaging bug was reported and it was correct in every particular.
+
+**If the client only says "Connection closed"**, the server died before it could answer. Run it by hand to see the real error:
+
+```bash
+uvx fcp-mcp-server          # or: python server.py from a checkout
+```
+
+A Python traceback here (import error, missing dependency) is the whole story; send that.
+
+Want to try builds before they ship? Say so in the email — pre-release wheels go out to a small list of working editors.
+
 ## Status & Contributing
 
-**Actively maintained** — live-verified against FCP 12.2, with external contributions already merged and credited: [@mikegrant25](https://github.com/mikegrant25) (sandbox security fix, #6) and [@jardelapp](https://github.com/jardelapp) (audio duration probing, #7).
+**Actively maintained** — live-verified against FCP 12.2, with external contributions already merged and credited: [@mikegrant25](https://github.com/mikegrant25) (sandbox security fix, #6), [@jardelapp](https://github.com/jardelapp) (audio duration probing, #7), and Marty Hou, documentary editor, who reported the v0.19.2–0.21.0 packaging failure by email with a diagnosis that held on every point.
 
 PRs welcome. If you're a video editor who codes (or a coder who edits), let's build this together.
 

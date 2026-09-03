@@ -12,8 +12,14 @@ pre-computed transcripts (from a previous ``transcribe_media`` run) instead
 of re-transcribing.
 """
 
+import json
 import logging
+import mimetypes
+import os
 import re
+import urllib.error
+import urllib.request
+import uuid
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -29,6 +35,16 @@ ALLOWED_MODELS = (
 # Conservative by default: interjections that are near-universally filler.
 # "like" / "so" / "actually" are speech, not noise, unless the user opts in.
 DEFAULT_FILLERS = ("um", "uh", "uhh", "umm", "erm", "ehm", "mmm", "hmm", "mhm")
+
+# Backends. "local" never leaves the machine. "elevenlabs" uploads the whole
+# media file to api.elevenlabs.io (Scribe) and returns speakers and audio
+# events in exchange; it is opt-in per call and needs ELEVENLABS_API_KEY.
+BACKENDS = ("local", "elevenlabs")
+SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+SCRIBE_MODEL = "scribe_v2"
+SCRIBE_TIMEOUT_SECONDS = 600
+SCRIBE_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+SCRIBE_KEY_ENV = "ELEVENLABS_API_KEY"
 
 _NORM_RE = re.compile(r"[^\w']+")
 
@@ -116,19 +132,135 @@ def invert_ranges(
     return out
 
 
-def transcribe(
-    path: str, model_size: str = "base", language: Optional[str] = None
-) -> Optional[dict]:
-    """Transcribe an audio/video file locally with word-level timestamps.
+def is_diarized(data: dict) -> bool:
+    """True when a transcript carries speaker tags — i.e. came from a
+    diarizing backend. A cached local transcript cannot satisfy a request
+    for speakers, and this is how the loaders tell the two apart."""
+    return any(w.get("speaker") for w in data.get("words", []))
 
-    Requires the optional ``[transcribe]`` extra (faster-whisper). Returns
-    ``None`` when the model is unavailable or the file is missing/unreadable.
+
+def _multipart(fields: dict, file_field: str, file_path: Path) -> tuple[bytes, str]:
+    boundary = "----fcpmcp" + uuid.uuid4().hex
+    ctype = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    out = bytearray()
+    for name, value in fields.items():
+        out += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
+    out += (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; "
+        f"filename=\"{file_path.name}\"\r\nContent-Type: {ctype}\r\n\r\n"
+    ).encode()
+    out += file_path.read_bytes()
+    out += f"\r\n--{boundary}--\r\n".encode()
+    return bytes(out), f"multipart/form-data; boundary={boundary}"
+
+
+def _transcribe_scribe(file_path: Path, language: Optional[str]) -> Optional[dict]:
+    """Upload *file_path* to ElevenLabs Scribe; map its reply to our shape.
+
+    The key travels in the ``xi-api-key`` header only. It is never placed in
+    the URL, the body, a log line, or the returned dict.
+    """
+    key = os.environ.get(SCRIBE_KEY_ENV, "").strip()
+    if not key:
+        logger.info("%s not set; elevenlabs backend unavailable", SCRIBE_KEY_ENV)
+        return None
+    fields = {
+        "model_id": SCRIBE_MODEL,
+        "diarize": "true",
+        "tag_audio_events": "true",
+        "timestamps_granularity": "word",
+    }
+    if language:
+        fields["language_code"] = language
+    try:
+        body, ctype = _multipart(fields, "file", file_path)
+    except OSError:
+        return None
+    req = urllib.request.Request(
+        SCRIBE_URL, data=body, method="POST",
+        headers={"Content-Type": ctype, "xi-api-key": key, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=SCRIBE_TIMEOUT_SECONDS) as resp:
+            raw = resp.read(SCRIBE_MAX_RESPONSE_BYTES + 1)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        logger.warning("scribe request failed for %s: %s", file_path.name, type(exc).__name__)
+        return None
+    if len(raw) > SCRIBE_MAX_RESPONSE_BYTES:
+        logger.warning("scribe response for %s exceeded %d bytes", file_path.name, SCRIBE_MAX_RESPONSE_BYTES)
+        return None
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("words"), list):
+        return None
+    return _map_scribe(payload, file_path)
+
+
+def _map_scribe(payload: dict, file_path: Path) -> dict:
+    speakers: dict = {}
+    words: List[dict] = []
+    events: List[dict] = []
+    for item in payload["words"]:
+        kind = item.get("type")
+        start, end = item.get("start"), item.get("end")
+        if start is None or end is None:
+            continue
+        if kind == "audio_event":
+            events.append({"start": float(start), "end": float(end),
+                           "label": str(item.get("text", "")).strip("()[] ").lower() or "event"})
+        elif kind == "word":
+            sid = item.get("speaker_id")
+            speaker = None
+            if sid is not None:
+                speaker = speakers.setdefault(sid, f"S{len(speakers)}")
+            words.append({"word": str(item.get("text", "")).strip(), "start": float(start),
+                          "end": float(end), "speaker": speaker})
+    # Segments: one per run of the same speaker, so SRT export still works.
+    segments: List[dict] = []
+    for w in words:
+        if segments and segments[-1]["_spk"] == w["speaker"]:
+            segments[-1]["text"] += " " + w["word"]
+            segments[-1]["end"] = w["end"]
+        else:
+            segments.append({"text": w["word"], "start": w["start"], "end": w["end"], "_spk": w["speaker"]})
+    for seg in segments:
+        seg.pop("_spk")
+    duration = payload.get("audio_duration_secs")
+    if duration is None:
+        duration = max((w["end"] for w in words), default=0.0)
+    return {
+        "backend": "elevenlabs",
+        "language": payload.get("language_code"),
+        "duration": float(duration),
+        "text": payload.get("text", ""),
+        "segments": segments,
+        "words": words,
+        "events": events,
+    }
+
+
+def transcribe(
+    path: str, model_size: str = "base", language: Optional[str] = None,
+    backend: str = "local",
+) -> Optional[dict]:
+    """Transcribe an audio/video file with word-level timestamps.
+
+    ``backend="local"`` runs faster-whisper (optional ``[transcribe]`` extra)
+    and nothing leaves the machine. ``backend="elevenlabs"`` uploads the file
+    to Scribe and adds ``speaker`` on each word plus an ``events`` list.
+    Returns ``None`` when the backend is unavailable or the file is
+    missing/unreadable.
 
     Returns:
         ``{"language": str, "duration": float, "text": str,
            "segments": [{"text", "start", "end"}, ...],
-           "words": [{"word", "start", "end"}, ...]}``
+           "words": [{"word", "start", "end", "speaker"?}, ...],
+           "events"?: [{"start", "end", "label"}, ...], "backend"?: str}``
     """
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {', '.join(BACKENDS)}, got {backend!r}")
     if model_size not in ALLOWED_MODELS:
         raise ValueError(
             f"model_size must be one of {', '.join(ALLOWED_MODELS)}, got {model_size!r}"
@@ -136,6 +268,8 @@ def transcribe(
     file_path = Path(path)
     if not file_path.is_file():
         return None
+    if backend == "elevenlabs":
+        return _transcribe_scribe(file_path, language)
     try:
         from faster_whisper import WhisperModel
     except ImportError:

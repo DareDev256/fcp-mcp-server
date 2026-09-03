@@ -57,4 +57,142 @@ jobs:
           test "$tag" = "$built"
 
       - run: twine check dist/*
+
+      # Build artifacts that import cleanly from the repo are not evidence.
+      # 0.19.2 through 0.21.0 all built, passed twine check and uploaded, and
+      # every one raised ModuleNotFoundError on install because tools/ was
+      # missing from the include list — invisible from a checkout, where
+      # Python finds tools/ in the working directory. So: install the built
+      # wheel into a clean venv, cd OUT of the source tree, and start it.
+      - name: The built wheel must actually start
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          cd /tmp
+          /tmp/smoke/bin/python - <<'PY'
+          import server, tools
+          groups, handlers = len(server.TOOL_GROUPS), len(server.TOOL_HANDLERS)
+          print(f"started {server.__version__}: {groups} groups, {handlers} handlers")
+          assert groups == 13, f"expected 13 groups from an install, got {groups}"
+          assert handlers == 88, f"expected 88 handlers, got {handlers}"
+          assert tools.EXTRA_GROUPS, "tools/ registered nothing"
+          PY
+
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # A green publish job is not evidence that PyPI serves the version. The
+  # v0.16.0 failure looked done from the tag, the release page and the
+  # changelog while the index still served the previous version, so the only
+  # check that could have caught it is asking the index what it actually has.
+  verify:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: PyPI must serve this version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 30); do
+            if curl -sf "https://pypi.org/simple/fcp-mcp-server/" \
+                 | grep -q "fcp_mcp_server-${version}\.tar\.gz"; then
+              echo "PyPI is serving ${version}"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${version} not on the index yet"
+            sleep 20
+          done
+          echo "::error::PyPI does not serve ${version} ten minutes after upload"
+          exit 1
+
+  # PyPI is not the only index people install from. The MCP registry sat at
+  # 0.13.1 for eight releases because publishing to it was a laptop command
+  # nobody remembered — and `mcp-publisher validate` had been failing the
+  # whole time on a description that grew past the registry's 100-char cap,
+  # silently, because nothing ran it. Both are now on the tag.
+  registry:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      # github-oidc proves this workflow runs in DareDev256's repo, which is
+      # what the io.github.DareDev256/* namespace requires. No stored token.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+          ./mcp-publisher --help >/dev/null
+        env:
+          PUBLISHER_VERSION: 1.8.1
+
+      # The registry rejects the whole publish on a schema violation. Failing
+      # here names the field; failing on publish just says 422.
+      - run: ./mcp-publisher validate
+
+      - name: Publish to the MCP registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      # A green publish call is not evidence the registry serves it, the same
+      # way a green twine upload was not evidence for PyPI.
+      - name: The registry must serve this version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 10); do
+            # Why isLatest and not the first match: see the script's docstring.
+            served=$(curl -sf "https://registry.modelcontextprotocol.io/v0.1/servers?search=fcpxml-mcp-server" \
+              | python3 .github/scripts/registry_latest.py)
+            if [ "$served" = "$version" ]; then
+              echo "registry is serving ${version}"
+              exit 0
+            fi
+            echo "attempt ${attempt}: registry serves '${served}', want ${version}"
+            sleep 15
+          done
+          echo "::error::MCP registry does not serve ${version}"
+          exit 1
+
+  # Nothing watches the Actions tab between releases. A failed publish leaves a
+  # tag and a release page that both look finished, which is exactly how three
+  # releases shipped while PyPI served 0.16.0. An issue is the one surface that
+  # arrives without anyone remembering to look.
+  report:
+    needs: [test, publish, verify, registry]
+    if: failure() && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = process.env.GITHUB_REF_NAME;
+            // Computed in JS, never interpolated into the template literal
+            // below. `${tag#v}` is valid bash and a syntax error inside a JS
+            // template string, and it took the whole job down the first time
+            // this job ever ran for real — the one job whose entire purpose is
+            // to be the surface that survives a failed release.
+            const version = tag.replace(/^v/, "");
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Publish failed for ${tag} — PyPI may not have it`,
+              body: [
+                `The Publish run for **${tag}** did not finish green.`,
+                ``,
+                `The git tag and the GitHub release still exist and still look`,
+                `complete. Check the index before believing them:`,
+                ``,
+                '```',
+                `curl -s https://pypi.org/simple/fcp-mcp-server/ | grep ${version}`,
+                '```',
+                ``,
+                `Run: ${url}`,
+              ].join("\n"),
+            });

@@ -38,7 +38,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import (
-    _FCPXML_STANDARD_TIMEBASES,
     MARKER_XML_TAGS,
     Marker,
     MarkerColor,
@@ -561,8 +560,16 @@ def _check_timebases(root: ET.Element) -> List[ValidationIssue]:
             if val and val.endswith('s') and '/' in val:
                 try:
                     tv = TimeValue.from_timecode(val)
+                    # Ask the model, do not re-derive. This check used to
+                    # inline `tv.simplify().denominator not in
+                    # _FCPXML_STANDARD_TIMEBASES`, which is a second copy of a
+                    # rule that already lives on TimeValue — and the copy was
+                    # the one that drifted. It warned on "36/24s", the
+                    # canonical form Final Cut Pro itself writes, because 36/24
+                    # reduces to 3/2. Every generated timeline logged a warning
+                    # for every clip that was not a whole number of seconds.
                     denom = tv.simplify().denominator
-                    if denom not in _FCPXML_STANDARD_TIMEBASES:
+                    if not tv.is_standard_timebase():
                         key = (elem.tag, attr, val)
                         if key not in seen:
                             seen.add(key)
@@ -856,11 +863,19 @@ class FCPXMLModifier:
         ]
 
     def _find_spine_clip_at_seconds(self, target_seconds: float) -> tuple[ET.Element, float]:
-        """Find the spine clip containing *target_seconds* and return it with the relative offset.
+        """Find the spine clip containing *target_seconds* and return it with the local time.
 
         Returns:
-            ``(clip_element, relative_seconds)`` — the clip and the time
-            within that clip corresponding to *target_seconds*.
+            ``(clip_element, local_seconds)`` — the clip and *target_seconds*
+            expressed in that clip's LOCAL time frame, which is what a child
+            marker's ``start`` must hold. Local time begins at the clip's
+            ``start`` attribute (its source in-point), so this is
+            ``start + (target - offset)``, not ``target - offset``. Until
+            0.19.3 the ``start`` term was dropped, and a marker placed "at
+            12s" on a clip trimmed 2s into its source landed at 10s in Final
+            Cut Pro. ``auto_at_cuts`` had always used ``start`` directly and
+            was right; this path now agrees with it and with
+            ``timeline_marker_seconds``.
 
         Raises:
             ValueError: If no clip spans the requested position.
@@ -872,7 +887,8 @@ class FCPXMLModifier:
             offset = self._parse_time(child.get('offset', '0s')).to_seconds()
             dur = self._parse_time(child.get('duration', '0s')).to_seconds()
             if offset <= target_seconds < offset + dur:
-                return child, target_seconds - offset
+                start = self._parse_time(child.get('start', '0s')).to_seconds()
+                return child, start + (target_seconds - offset)
         raise ValueError(f"No spine clip at position {target_seconds:.3f}s")
 
     # ------------------------------------------------------------------
@@ -2435,7 +2451,7 @@ class FCPXMLModifier:
         self,
         clip_ids: List[str],
         ripple: bool = True
-    ) -> None:
+    ) -> List[str]:
         """
         Delete clips from timeline.
 
@@ -2447,8 +2463,16 @@ class FCPXMLModifier:
         Args:
             clip_ids: Clips to delete
             ripple: If True, shift subsequent clips. If False, leave gaps.
+
+        Returns:
+            The ids that actually matched a clip and were deleted. An id that
+            matched nothing is skipped, and callers have to be able to tell
+            the difference: reporting the length of the REQUEST instead made
+            the most destructive tool on the surface answer "Deleted 2
+            clip(s)" to a request that deleted none.
         """
         spine = self._get_spine()
+        deleted: List[str] = []
 
         for clip_id in clip_ids:
             # Walk spine directly to find the first clip matching this name,
@@ -2463,6 +2487,7 @@ class FCPXMLModifier:
             if target is None:
                 continue
 
+            deleted.append(clip_id)
             _, clip_duration, clip_offset = self._get_clip_times(target)
             clip_index = list(spine).index(target)
 
@@ -2491,6 +2516,8 @@ class FCPXMLModifier:
                 self.clips[clip_id] = remaining[0]
             else:
                 self.clips.pop(clip_id, None)
+
+        return deleted
 
     # ========================================================================
     # SPEED CUTTING OPERATIONS (v0.3.0)
@@ -3217,6 +3244,108 @@ class FCPXMLModifier:
             clip.set('videoRole', _sanitize_xml_value(video_role, 256))
 
         return clip
+
+    # ========================================================================
+    # BULK LOGGING (v0.19.0) — keywords, ratings, roles across many clips
+    # ========================================================================
+
+    _CLIP_TAGS = ("asset-clip", "clip", "ref-clip", "sync-clip", "mc-clip")
+
+    def select_clips(
+        self,
+        clip_name: Optional[str] = None,
+        keyword: Optional[str] = None,
+        role: Optional[str] = None,
+    ) -> List[ET.Element]:
+        """Every clip element matching ALL the given filters.
+
+        ``clip_name`` is a glob, ``keyword`` matches any comma-separated
+        value of any ``<keyword>``, ``role`` matches audioRole/videoRole
+        case-insensitively. No filter selects every clip.
+        """
+        import fnmatch
+
+        out = []
+        for elem in self.root.iter():
+            if elem.tag not in self._CLIP_TAGS:
+                continue
+            if clip_name and not fnmatch.fnmatchcase(elem.get("name", ""), clip_name):
+                continue
+            if keyword and keyword not in self._keyword_values(elem):
+                continue
+            if role and role.lower() not in {
+                elem.get("audioRole", "").lower(), elem.get("videoRole", "").lower()
+            }:
+                continue
+            out.append(elem)
+        return out
+
+    @staticmethod
+    def _keyword_values(elem: ET.Element) -> set:
+        return {
+            v.strip()
+            for k in elem.findall("keyword")
+            for v in k.get("value", "").split(",")
+            if v.strip()
+        }
+
+    def bulk_keywords(self, clips: List[ET.Element], keywords: List[str], mode: str) -> int:
+        """add / remove / replace whole-clip keywords. Returns clips touched."""
+        if mode not in ("add", "remove", "replace"):
+            raise ValueError(f"mode must be add, remove or replace, got {mode!r}")
+        wanted = [_sanitize_xml_value(k, 256).strip() for k in keywords if k and str(k).strip()]
+        if not wanted:
+            raise ValueError("keywords must contain at least one non-empty value")
+        touched = 0
+        for clip in clips:
+            if mode == "remove":
+                changed = False
+                for k in clip.findall("keyword"):
+                    present = [v.strip() for v in k.get("value", "").split(",") if v.strip()]
+                    kept = [v for v in present if v not in wanted]
+                    if len(kept) != len(present):
+                        changed = True
+                        if kept:
+                            k.set("value", ", ".join(kept))
+                        else:
+                            clip.remove(k)
+                touched += changed
+                continue
+            if mode == "replace":
+                for k in clip.findall("keyword"):
+                    clip.remove(k)
+            new = [k for k in wanted if k not in self._keyword_values(clip)]
+            if new:
+                # A marker item: DTD order puts it after anchors, before filters.
+                _dtd_insert(clip, ET.Element("keyword", value=", ".join(new)))
+                touched += 1
+            elif mode == "replace":
+                touched += 1
+        return touched
+
+    def bulk_rating(self, clips: List[ET.Element], rating: str) -> int:
+        """favorite / rejected set a whole-clip <rating>; clear removes it."""
+        if rating not in ("favorite", "rejected", "clear"):
+            raise ValueError(f"rating must be favorite, rejected or clear, got {rating!r}")
+        for clip in clips:
+            for r in clip.findall("rating"):
+                clip.remove(r)
+            if rating != "clear":
+                _dtd_insert(clip, ET.Element("rating", name=rating.capitalize(), value=rating))
+        return len(clips)
+
+    def bulk_roles(
+        self,
+        clips: List[ET.Element],
+        audio_role: Optional[str] = None,
+        video_role: Optional[str] = None,
+    ) -> int:
+        for clip in clips:
+            if audio_role is not None:
+                clip.set("audioRole", _sanitize_xml_value(audio_role, 256))
+            if video_role is not None:
+                clip.set("videoRole", _sanitize_xml_value(video_role, 256))
+        return len(clips)
 
     # ========================================================================
     # REFORMAT OPERATIONS (v0.5.0)

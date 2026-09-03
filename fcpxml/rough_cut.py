@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import diversity
 from .models import (
     MontageConfig,
     PacingConfig,
@@ -136,7 +137,8 @@ class RoughCutGenerator:
         exclude_rejected: bool = True,
         favorites_only: bool = False,
         add_transitions: bool = False,
-        transition_duration: str = "00:00:00:15"
+        transition_duration: str = "00:00:00:15",
+        min_source_separation: int = 0,
     ) -> RoughCutResult:
         """
         Generate a rough cut.
@@ -152,6 +154,8 @@ class RoughCutGenerator:
             favorites_only: Only use favorited clips
             add_transitions: Add cross-dissolves between clips
             transition_duration: Length of transitions
+            min_source_separation: Other shots required between two uses of
+                the same source clip; 0 = no constraint
 
         Returns:
             RoughCutResult with output details
@@ -179,6 +183,13 @@ class RoughCutGenerator:
                 available_clips, target_time, pacing_config, priority
             )
 
+        if min_source_separation > 0:
+            selected_clips = diversity.apply(
+                [{**c, "source": c.get("ref")} for c in selected_clips],
+                min_separation=min_source_separation,
+            )
+        diversity_score = diversity.score([{"source": c.get("ref")} for c in selected_clips])
+
         # Generate output FCPXML
         actual_duration = self._build_output(
             selected_clips, output_path, add_transitions, transition_duration
@@ -191,7 +202,8 @@ class RoughCutGenerator:
             target_duration=target_time.to_seconds(),
             actual_duration=actual_duration,
             segments=len(segments) if segments else 1,
-            average_clip_duration=actual_duration / len(selected_clips) if selected_clips else 0
+            average_clip_duration=actual_duration / len(selected_clips) if selected_clips else 0,
+            diversity_score=diversity_score,
         )
 
     def _parse_duration(self, duration: str) -> TimeValue:

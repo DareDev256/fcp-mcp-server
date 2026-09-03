@@ -44,12 +44,14 @@ is untouched.
 
 from __future__ import annotations
 
+import contextvars
 from typing import Any, Awaitable, Callable
 
 from mcp.server import Server
 
 __all__ = [
     "MCP_API_VERSION",
+    "current_request",
     "is_legacy_api",
     "register_handlers",
     "resource_mime_type",
@@ -68,6 +70,32 @@ def is_legacy_api() -> bool:
 
 
 MCP_API_VERSION = "1.x" if is_legacy_api() else "2.x"
+
+# 2.x hands the per-request context to the handler as an argument and has no
+# ``Server.request_context`` property; 1.x has the property and no argument.
+# The 2.x adapter parks the context here so callers deeper in the stack
+# (progress reporting) can find it the same way on both.
+_REQUEST_CTX: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "fcp_mcp_request_ctx", default=None
+)
+
+
+def current_request(server: Server | None = None) -> Any | None:
+    """The in-flight request context, or ``None`` outside a request.
+
+    Returns an object carrying ``.session`` and ``.meta`` on either SDK.
+    Never raises: a handler asking for progress outside a request (a unit
+    test, a direct call) must simply get nothing to report to.
+    """
+    ctx = _REQUEST_CTX.get()
+    if ctx is not None:
+        return ctx
+    if server is None:
+        return None
+    try:
+        return server.request_context
+    except (LookupError, AttributeError):
+        return None
 
 
 def tool_input_schema(tool: Any) -> dict:
@@ -178,8 +206,12 @@ def register_handlers(
     async def _on_list_tools(_ctx, _params):
         return types.ListToolsResult(tools=await list_tools())
 
-    async def _on_call_tool(_ctx, params):
-        content = await call_tool(params.name, params.arguments or {})
+    async def _on_call_tool(ctx, params):
+        token = _REQUEST_CTX.set(ctx)
+        try:
+            content = await call_tool(params.name, params.arguments or {})
+        finally:
+            _REQUEST_CTX.reset(token)
         return types.CallToolResult(content=list(content))
 
     server.add_request_handler(

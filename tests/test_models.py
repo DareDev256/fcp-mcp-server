@@ -5,6 +5,7 @@ Covers the core time math and model properties that underpin all 34 tools.
 
 import pytest
 
+from fcpxml import models
 from fcpxml.models import (
     Clip,
     FlashFrame,
@@ -826,3 +827,56 @@ class TestPacingConfig:
         assert PacingConfig(pacing="slow").get_duration_range() == (5.0, 10.0)
         assert PacingConfig(pacing="fast").get_duration_range() == (0.5, 2.0)
         assert PacingConfig(pacing="unknown").get_duration_range() == (2.0, 5.0)
+
+
+class TestStandardTimebaseMatchesTheEmitter:
+    """is_standard_timebase must describe what to_fcpxml actually writes.
+
+    Regression: the predicate simplified first, so TimeValue(36, 24) — 36
+    frames at 24fps, the canonical form FCP itself emits — reported
+    non-standard because 36/24 reduces to 3/2. to_fcpxml wrote "36/24s"
+    correctly the whole time. The disagreement meant every generated timeline
+    logged a validation warning for every clip that was not a whole number of
+    seconds long.
+    """
+
+    FRAME_COUNTS = [1, 5, 18, 30, 36, 42, 47, 71, 108]
+
+    def test_frame_aligned_values_at_24fps_are_standard(self):
+        for frames in self.FRAME_COUNTS:
+            tv = TimeValue(frames, 24)
+            assert tv.is_standard_timebase(), f"{frames}/24s reported non-standard"
+
+    def test_frame_aligned_values_at_30fps_are_standard(self):
+        for frames in self.FRAME_COUNTS:
+            assert TimeValue(frames, 30).is_standard_timebase()
+
+    def test_the_ntsc_family_is_standard(self):
+        assert TimeValue(1001, 24000).is_standard_timebase()
+        assert TimeValue(48048, 24000).is_standard_timebase()
+
+    def test_a_genuinely_non_standard_denominator_is_still_rejected(self):
+        """The guard must still fire on the values it exists for."""
+        assert TimeValue(3, 7).is_standard_timebase() is False
+        assert TimeValue(15, 7).is_standard_timebase() is False
+        assert TimeValue(5, 13).is_standard_timebase() is False
+
+    def test_the_predicate_agrees_with_the_emitter(self):
+        """Anything to_fcpxml writes on a standard denominator must pass.
+
+        This is the invariant the regression broke. Checking it directly means
+        the two cannot drift apart again.
+        """
+        candidates = (
+            [TimeValue(n, 24) for n in range(1, 60)]
+            + [TimeValue(n, 30) for n in range(1, 60)]
+            + [TimeValue(n, 2400) for n in range(1, 60)]
+            + [TimeValue(n * 1001, 24000) for n in range(1, 30)]
+        )
+        for tv in candidates:
+            written_denominator = tv.to_fcpxml().rstrip("s").split("/")
+            denominator = int(written_denominator[1]) if len(written_denominator) == 2 else 1
+            emitted_is_standard = denominator in models._FCPXML_STANDARD_TIMEBASES
+            assert tv.is_standard_timebase() == emitted_is_standard, (
+                f"{tv!r} writes {tv.to_fcpxml()} but the predicate disagrees"
+            )

@@ -2,6 +2,545 @@
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-09-03
+
+### Fixed
+- **The registry check died of an `IndentationError` on the first tag after
+  it was "fixed".** 0.21.2's fix corrected the logic (read the `isLatest`
+  entry) and verified it by hand; the inline `python3 -c` body that wrapped
+  it was indented to match the surrounding YAML, Python received that
+  indentation intact, and the step had never executed once. The `report` job
+  did its job and opened #22 — the first time that surface has ever fired
+  for real. The check now lives in `.github/scripts/registry_latest.py`
+  (linted, unit-tested in `tests/test_registry_latest.py`, and the step body
+  was run end to end locally against the live registry before tagging), and
+  a new `workflow-scripts` step compiles every inline `python -c` block in
+  every workflow — control-tested red against the broken form.
+
+## [0.22.0] - 2026-09-03
+
+### Fixed
+- **The registry verification step read the wrong entry and called a working
+  publish a failure.** The registry's search endpoint returns every version of
+  a server, oldest first, so taking the first match read 0.13.1 forever. It
+  now reads the one entry the registry marks `isLatest`. 0.21.2 published
+  correctly; only the check was wrong.
+- **The `report` job had never worked.** Its inline `actions/github-script`
+  body contained `${tag#v}` — valid bash, a JavaScript syntax error inside a
+  template literal — so the one job whose entire purpose is to be the surface
+  that survives a failed release died of a SyntaxError the first time a
+  release ever needed it. A `workflow-scripts` CI job now parses every inline
+  `github-script` block with `node --check`, wrapped in an async function
+  because github-script allows top-level await and a bare parse would reject
+  it for the wrong reason. Control-tested against the broken form.
+- **Grouped tools now accept their arguments sent flat.** The schema puts them
+  under `args`; a caller that sent `{"action": "analyze_timeline", "filepath":
+  ...}` got back "Missing required argument: filepath" for a call that plainly
+  passed filepath — an error that points at the argument instead of at the
+  nesting. Both forms work now, with a test that nested `args` still wins.
+
+### Added
+- **The README demo is a script that runs.** `demo/demo.py` synthesises three
+  shots with ffmpeg, cuts them into a timeline from an `edl.json`, analyses
+  it, draws the ASCII timeline, finds the dead air in the source audio, trims
+  it, redraws, and renders a proxy — every line real output from
+  `server.call_tool`. `vhs demo/demo.tape` records it to `docs/assets/demo.gif`,
+  replacing a hand-made GIF of v0.13.0 that predated everything from v0.17.0
+  onward. A demo that regenerates from the code cannot drift from it.
+
+- **README "Reporting a Problem" section.** An issues link, the author
+  address (the fixed one), what to do when the client says only "Connection
+  closed" (run the server by hand; the traceback is the report), and an open
+  invitation to editors without GitHub accounts — the v0.21.1 bug arrived by
+  email from exactly that person. Known Issues gains the 0.19.2–0.21.0 row so
+  anyone searching the symptom lands on the fix.
+
+### Changed
+- **Media intelligence and transcript editing moved out of `server.py` into
+  `tools/media.py`** — silence detection and removal, beat detection,
+  transcribe_media, edit_by_transcript, transcript_pack, remove_filler_words
+  and the silence-candidate heuristics (690 lines). Re-exported from
+  `server.py` under the original names, same as the v0.21.0 NLE move, so
+  `TOOL_HANDLERS` and every caller resolve one definition. `detect_silence`,
+  `detect_beats` and `transcribe` are reached through the bound server module
+  because the tests monkeypatch them there; `test_tool_seam.py` now asserts
+  neither moved module binds those names directly, and that each
+  `server.handle_*` *is* the `tools.media` function. Mutation-checked: a
+  direct import in `tools/media.py` turns the guard red. `server.py` is
+  4,139 lines, from 4,832.
+- The "Not Ideal For" table said "creative editing decisions (no visual
+  feedback)" and "anything visual" — written before proxy renders, contact
+  sheets, filmstrips and the ASCII timeline existed.
+
+## [0.21.2] - 2026-09-03
+
+### Fixed
+- **The MCP registry had served 0.13.1 since 2026-07-25 — eight releases
+  behind.** Publishing there was a laptop command nobody remembered, and
+  `mcp-publisher validate` had been failing that whole time with a 422: the
+  registry caps `description` at 100 characters and `server.json` had grown to
+  208, still advertising "11 grouped tools (79 underlying operations)" for a
+  server that has 13 and 88. Nothing in the repo read that file, so no test,
+  no CI job and no release step could see any of it. The description is now
+  96 characters and states the measured counts, and a `registry` job on the
+  tag validates, publishes with GitHub OIDC (no stored token), then asks the
+  registry which version it actually serves — the same "a green publish is not
+  evidence" rule the PyPI `verify` job exists for.
+- **`pyproject` asked for a PySceneDetect extra that does not exist.** The
+  `scenes` extra said `scenedetect[opencv]`; PySceneDetect 0.7 ships `pyav`
+  and `moviepy` and depends on opencv-python outright. pip only WARNS on an
+  unknown extra and installs anyway, so it worked by accident from 0.18.0 on.
+  Now `scenedetect>=0.7.0`.
+
+### Added
+- **Three tests read `server.json`.** Its version fields must match
+  `server.__version__` (both of them — the top level and every package
+  entry), its description must fit the registry's 100-character cap, and it
+  must name the counts measured from `TOOL_GROUPS`/`TOOL_HANDLERS` rather than
+  a number typed by hand. The stale counts in it had survived every existing
+  count test because those all read the README.
+- **A CI job that installs the optional extras.** No job did, which is the
+  structural reason a bad extra spec lived for four releases. It fails on the
+  resolver warning, then imports what it installed, because an extra that
+  resolves and leaves the feature unimportable reads identically from pip. It
+  greps for both pip's wording and uv's: the first draft grepped only uv's,
+  which under pip is a check that could never have gone red. Verified in both
+  directions against the old spec and the new one before landing. `find` is
+  deliberately excluded — mlx-vlm is Apple Silicon only, and a job that fails
+  for a true reason on every run is a job people learn to ignore.
+
+## [0.21.1] - 2026-09-03
+
+### Fixed
+- **`delete_clips` reported the size of the request, not the number of
+  deletions.** Asked to delete two clip names that match nothing, the most
+  destructive tool on the surface answered "Deleted 2 clip(s)"; a batch of one
+  real name and one typo also answered "Deleted 2". The file was always
+  correct — only the report lied, which is worse on a destructive operation
+  because success and total failure read identically.
+  `FCPXMLModifier.delete_clip` now returns the ids it actually deleted, and
+  the handler reports that count and names every id that matched nothing.
+  Found by writing the first test that had ever named this handler.
+- The stem plan said "1 clips".
+
+### Added
+- **The 22 handlers with no test naming them now have one.** A sweep of
+  `TOOL_HANDLERS` found 22 of 64 flat handlers unnamed anywhere in the suite:
+  the code underneath them was covered, the handlers were not, so argument
+  parsing, clip resolution and the saved artifact went unasserted and a whole
+  family could stop resolving while the suite stayed green. Three new files —
+  `test_edit_handlers.py` (delete, split, insert, reorder, transition),
+  `test_roles_handlers.py` (roles, and the first exercise of the review gate
+  on `export_role_stems`, which is in `GATED_ACTIONS`), and
+  `test_uncovered_handlers.py` (inspection, batch fixes, generation,
+  subtitles, silence candidates). Each asserts the artifact or a specific
+  count rather than the prose, and several ship with their own control: a
+  diff that must NOT report identical, an A/B roll that must refuse a keyword
+  matching nothing, an `import_srt_markers` default that produces one marker
+  where `mode=all` produces two.
+- **A floor so it cannot happen again.** `test_tool_seam.py` asserts every
+  name in `TOOL_HANDLERS` is named by some test, and fails with the list when
+  one is not. Mutation-checked with a handler added and no test written.
+
+### Changed
+- **server.py started shrinking.** The NLE export, effects, audio, compound
+  clip, template and relink handlers moved to `tools/nle.py` (4,988 -> 4,811
+  lines). server.py re-exports them under their original names, so
+  `TOOL_HANDLERS`, the flat tool list and every caller still resolve one
+  definition. Moved handlers reach server-owned names through the bound module
+  (`srv.X`) rather than importing them: tests monkeypatch those on the server
+  module, and an import would bind a copy no patch could reach — the guard
+  would keep passing while guarding nothing.
+
+### Added
+- **Nine handlers that had never been tested now are.** Eight of the nine
+  moved handlers had no test of their own: the suite exercised the code they
+  called but never the handlers, so the family could have stopped resolving
+  and 1,689 green tests would have said nothing. `tests/test_nle_handlers.py`
+  drives all nine through `server.call_tool` and asserts the artifact, not the
+  prose. Every case is mutation-checked, which is how two of them were caught
+  passing on an ERROR path — `apply_template` with no slots filled returns a
+  validation error that still mentions the template, and `relink_media` was
+  being called with the wrong argument names and asserting on the message that
+  said so.
+- **The release pipeline now checks PyPI and reports its own failures.** Two
+  jobs after `publish`: `verify` asks the index whether it actually serves the
+  tagged version, retrying for ten minutes, because a green publish job is not
+  evidence — v0.16.0 had a tag, a release page and a changelog entry while the
+  index served the previous version. `report` opens an issue when any job in a
+  tag run fails, since nothing watches the Actions tab between releases and a
+  failed publish leaves a tag and a release that both still look finished.
+  The index check was control-tested against a served version, an absent one,
+  and the prefix `0.2` — which must NOT match `0.21.0`, and does not, because
+  it anchors on the sdist filename.
+
+### Fixed
+- **Every install from PyPI since 0.19.2 was dead on arrival.**
+  `pyproject.toml` declared `include = ["fcpxml*"]`, so setuptools silently
+  omitted `tools/` — which `server.py` imports at module scope. The published
+  wheel's `top_level.txt` listed only `fcpxml` and `server`, and the sdist
+  held 106 files with none under `tools/`, so importing the server raised
+  `ModuleNotFoundError: No module named 'tools'` before it could answer
+  `initialize`. The MCP client showed only "Connection closed". 0.19.2,
+  0.19.3, 0.20.0 and 0.21.0 all shipped this way; 0.16.0 works because its
+  server.py predates the import. The fix is one entry:
+  `include = ["fcpxml*", "tools*"]`.
+
+  It was invisible from a git checkout, where Python finds `tools/` in the
+  working directory — which is why 1,738 green tests, a green publish job and
+  a `verify` job that confirmed PyPI was *serving* the version all said
+  nothing. Serving a file is not the same as the file working.
+
+  Reported by Marty Hou, a documentary editor with no GitHub account, who
+  had to find an address in the commit history because the one published with
+  the package bounces. Diagnosed against the real artifacts rather than from
+  memory, and correct in every particular.
+- **The author address published with the package bounced.**
+  `dare@jamesdare.com` does not exist. Now `dev@jamesdare.com`.
+
+### Added
+- **Two instruments, because the old ones could not see this.**
+  `tests/test_packaging.py` parses the include list and asserts every
+  first-party package `server.py` (and each `tools/` module) imports is
+  matched by it — the static check that fails the moment a new top-level
+  package is added without being packaged. And the publish workflow now
+  installs the built wheel into a clean venv, `cd`s out of the source tree
+  and starts the server, asserting 13 groups and 88 handlers BEFORE upload.
+  Control-tested: the identical script exits 1 against the published 0.21.0
+  wheel and 0 against this one.
+
+## [0.21.0] - 2026-09-02
+
+### Changed
+- **Vision captions look at a 1080p frame, not a 4K one.** `caption_shots`
+  now asks `render_frame` for a frame with its short edge capped at 1080 px
+  (`vlm.CAPTION_SHORT_SIDE`), aspect preserved: 3840x2160 becomes 1920x1080,
+  a 2160x3840 phone clip 1080x1920, and a source already smaller than the cap
+  keeps its size. Measured on a 2160x3840 HEVC frame with Qwen3-VL-4B: 32 s
+  per caption at full size, 4.8 s at 1080p, same sentence. `render_frame`
+  itself is unchanged by default — the preview tools still get full
+  resolution — and takes the cap only as an explicit `max_short_side`
+  keyword. Checked against the real binary in `test_render.py`.
+  Contributed by @jardelapp in #21.
+- **`frame_scale_filter` bounds its cap** (1..8192) rather than handing
+  ffmpeg a value it will reject. Unbounded, a zero or negative cap exits
+  non-zero, `render_frame` returns None, and `caption_shots` reads that as a
+  shot with nothing to caption — a bad constant would have been
+  indistinguishable from uncaptionable footage. `graph_to_args` already
+  bounds its `height` for the same reason.
+
+## [0.20.0] - 2026-09-02
+
+### Added
+- **Crossfades are compiled, not flattened.** A transition on a spine cut now
+  becomes an ffmpeg `xfade` — dissolve, dip/fade to colour, wipe and slide map
+  onto their nearest xfade equivalents; anything unrecognised renders as a
+  dissolve and says so. A transition is only compiled onto a boundary it can
+  actually run on: within its own duration of a real cut, both neighbours
+  present, the cut not already taken, and its length trimmed to fit the
+  shorter neighbour. Everything else is reported with the render, naming the
+  reason, rather than being silently dropped. `FilterGraph.total` subtracts
+  the overlaps, so the artifact duration read-back still means something.
+- **Video lanes composite.** Connected clips are overlaid over the spine for
+  their own window, in lane order, each shifted by any crossfade that
+  shortened the timeline before them. They are drawn full-frame — this module
+  does not read transforms — and the render prints that, along with the fact
+  that audio lanes are never mixed. `preview_render` and `preview_timeline`
+  also now report the crossfades that WERE compiled, since reporting only the
+  substitutions leaves an honoured dissolve looking exactly like a dropped one.
+- Both chains are checked against the real binary, not just as argument lists:
+  `test_render.py` renders an xfade and asserts the artifact is shorter by the
+  overlap, and renders a lane twice — with and without — and asserts the frame
+  inside the lane's window actually differs. A graph that ffmpeg rejects, or
+  that composites nothing, fails there and nowhere else.
+
+### Still deferred
+- Splitting `server.py`'s flat handlers into `tools/`; an operation Protocol
+  shared by XML and Live; Timecode → TimeValue unification.
+
+## [0.19.3] - 2026-09-02
+
+### Fixed
+- **Markers on trimmed clips landed early by the in-point.** A marker's
+  `start` is in its host clip's local time, which begins at the host's
+  `start` (source in-point), not at zero. Every writer path except
+  `auto_at_cuts` dropped that term, so a marker written "at 12s" onto a clip
+  trimmed 2s into its source sat at 10s in Final Cut Pro — and because the
+  parser handed the raw value to `list_markers`, `snap_to_beats`, `diff` and
+  the HTML preview, the round trip through this server agreed with itself
+  and nothing noticed. `_find_spine_clip_at_seconds` now returns
+  `start + (target - offset)`; `Marker` gains `timeline_start` (resolved by
+  the parser for clip and connected-clip markers) and a `position`
+  property, which every reader uses. `scenes_to_markers` inherits the fix.
+  `tests/test_marker_time_frame.py` covers write, parse, round trip,
+  interval markers, and a mutation check that an old-convention marker now
+  reads 2s early.
+
+### Changed
+- **Autopush covers every write.** `FCP_MCP_AUTOPUSH=1` was documented as
+  "every write also imports into Final Cut Pro" and wired into four
+  handlers. It now lives on the journal seam: `journal.finish()` returns the
+  FCPXML outputs a request actually wrote, and each is pushed — through flat
+  and grouped calls alike, for all write handlers. `push_to_fcp` is never
+  pushed twice; CSV/JSON/mp4 outputs are recorded but not imported.
+
+### Deferred (next minor, planned — not patched in)
+- `xfade` crossfade compilation and lane compositing in `preview_render`
+  (both still reported as substitutions at runtime).
+- Splitting `server.py`'s flat handlers into `tools/`; an operation Protocol
+  shared by XML and Live; Timecode → TimeValue unification.
+
+## [0.19.2] - 2026-09-02
+
+### Fixed
+- **Second publish gate.** With the test job green, PyPI rejected the
+  0.19.1 upload: `'summary' field must be 512 characters or less`. The
+  `pyproject.toml` description had grown to 557 characters over three
+  releases of feature lists. It is now 499 and re-measured with the current
+  surface (13 groups / 88 operations), and `test_version.py` asserts the
+  cap so this fails before a tag, not after — mutation-checked (a padded
+  description turns it red). Trusted publishing itself authenticated fine.
+
+## [0.19.1] - 2026-09-02
+
+### Fixed
+- **PyPI had been serving 0.16.0 through three releases.** The `Publish`
+  workflow re-runs the suite on a runner with no ffmpeg, and
+  `test_render_with_all_media_missing_reports_rather_than_raises` read
+  "ffmpeg is not on PATH" there instead of the media error it asserts — so
+  the v0.18.0 and v0.19.0 uploads both failed at the test gate while the git
+  tag and the GitHub release looked done. The test now stubs `shutil.which`
+  so the check under test is the MEDIA one (`graph_to_args` refuses before
+  any subprocess, so nothing runs). The whole suite is green with ffmpeg
+  hidden from PATH (`1640 passed, 25 skipped`), which is the condition the
+  publish runner actually has. 0.17.0–0.19.0 ship to PyPI as this version.
+
+## [0.19.0] - 2026-09-02
+
+### Added — The Moat and the Ledger (every write is recorded, every ship is reviewed, and the shots can be found)
+- **Operation journal** — `fcpxml/journal.py`, an append-only JSON-lines
+  ledger under `~/.fcp-mcp/journal/` (dir mode 700). Every write and every
+  preview render passes through one seam in `server.py` and appends
+  `ts, tool, action, args, input{path,sha256}, output{path,sha256}`. Records
+  hold paths and hashes, never content. The project is the FOLDER: one ledger
+  per input directory follows the suffix chain wherever it goes.
+  `FCP_MCP_JOURNAL` relocates it, or `off` disables it.
+- **`organize` group** — `organize_keywords` (add / remove / replace),
+  `organize_rate` (favorite / rejected / clear), `organize_roles`, all over a
+  clip selection by glob name, keyword or role, written as an `_organized`
+  copy. `history` reads the ledger as a table with ages; `undo` moves the
+  last N recorded outputs to `<journal>/undone/` — it **never deletes**, and
+  refuses when the file's hash no longer matches the record.
+- **`organize_auto`** — proposes keywords per clip from what the index
+  already holds (shot captions, transcript text) and from transcript
+  sidecars. It never transcribes and never captions; with nothing derivable
+  it says so and names the `find_index` call that would fix that. Proposals
+  print the exact `apply=true` call; nothing is written until it is passed.
+- **Review gate on `deliver`** — `export_csv`, `export_edl`,
+  `export_fcp7_xml`, `export_resolve_xml`, `export_role_stems` and
+  `push_to_fcp` now refuse when the journal holds no `preview_render` whose
+  input hash matches the file's current state, and name the exact
+  `preview_render` call that satisfies it. `confirm_unreviewed=true` ships
+  anyway and stamps the result *Shipped UNREVIEWED*. With the journal off the
+  gate refuses to certify anything and says why.
+- **`find` group** — `find_shots` answers "find the shot where…" as a router
+  with the tier named on every hit: tier 1 transcript words, tier 2 metadata
+  (clip names, keywords, marker names and notes, event labels), tier 3
+  vision captions. Hits carry source in/out, timeline position, score and a
+  `why`. Vision is consulted when `visual=true`, when the query reads as
+  visual, or when the cheaper tiers came up short — never more than
+  `MAX_LIVE_FRAMES` (20) live captions per call, the rest from the cache.
+  `find_index` warms transcripts, scenes and (opt-in) captions for every
+  source and reports each as done / skipped / unavailable with the reason.
+  `find_to_timeline` assembles the hits into a `_found` selects reel.
+- **Offline shot captions** — `fcpxml/vlm.py` runs an MLX vision model
+  (`mlx-community/Qwen2-VL-2B-Instruct-4bit` by default, `FCP_MCP_VLM_MODEL`
+  to change it) over the frames `scenes` found. `HF_HUB_OFFLINE=1` and
+  `TRANSFORMERS_OFFLINE=1` are set BEFORE `mlx_vlm` is imported; a model
+  that is not in the local Hub cache is reported with the exact
+  `hf download <id>` command, never fetched. Captions are stored once in the
+  index (`get_shots` / `put_shots`) and invalidated with the source.
+- **`[find]` extra** — `pip install "fcp-mcp-server[find]"` pulls `mlx-vlm`
+  and `numpy`. Apple Silicon only; everywhere else `find` still answers from
+  transcript and metadata and says vision is unavailable.
+- **Diversity constraint** — `fcpxml/diversity.py`. `auto_rough_cut` takes
+  `min_source_separation` (0–20, default 0): no source may recur within that
+  many cuts, and every assembly now reports `Diversity: 0.50 (1 of 2 cuts
+  change source)`. `find_to_timeline` defaults to 1 and also drops hits whose
+  captions are near-duplicates of the previous pick.
+- **Writer bulk edits** — `select_clips`, `bulk_keywords`, `bulk_rating`,
+  `bulk_roles` on `FCPXMLModifier`; new `<keyword>` / `<rating>` children go
+  in through `_dtd_insert`, so the DTD element order survives.
+- **Env** — `FCP_MCP_JOURNAL`, `FCP_MCP_VLM_MODEL`.
+- **Tests** — `test_journal.py`, `test_journal_wiring.py`, `test_review_gate.py`,
+  `test_organize.py`, `test_organize_group.py`, `test_diversity_constraint.py`,
+  `test_find.py`, `test_vlm.py`, `test_find_group.py` (the never-transcribes /
+  never-downloads guards, the undo hash refusal, the diversity mutation check).
+
+### Changed
+- **BREAKING for scripted callers** — the six `deliver` actions above now
+  refuse an unreviewed file. Render it with `preview_render` first, or pass
+  `confirm_unreviewed=true`.
+- Tool groups: 13 (was 11), dispatching into 88 operations (was 79). The
+  group-count guard in `test_tool_groups.py` moves from 12 to 14.
+- `server.__version__` 0.19.0, and `test_version.py` still holds it to
+  `pyproject.toml`.
+
+### Known
+- Vision captions need Apple Silicon (`mlx-vlm`); there is no CPU/CUDA path.
+- Tier-3 similarity is lexical (Jaccard over caption words) until embeddings
+  land; captions are cached so a better ranker reads the same rows.
+- Marker `start` is still written in source time by `edit_markers`; the
+  timeline-time fix is on the deferred list.
+
+## [0.18.0] - 2026-09-01
+
+### Added — Speed and Sight (the second call is instant, and the cuts are visible)
+- **Analysis index** — `fcpxml/index.py`, a SQLite cache at
+  `~/.fcp-mcp/index.db` (dir mode 700) holding silence spans, beats, scene
+  cuts and transcripts keyed to `(path, mtime, size)`. Time is stored as
+  integer `num/den`, converted once at the boundary with the same
+  `limit_denominator` rule the rest of the codebase applies. A re-exported
+  source drops its rows on the next touch; a corrupt or foreign file is
+  rebuilt. **It is a cache and never a source of truth**: `FCP_MCP_INDEX=off`
+  disables it and every tool still answers, only slower — the suite runs
+  under both conditions and CI now has an `index-off` job to keep that honest.
+  Measured on a 10s clip: scene detection 0.6s cold, 1ms warm.
+- **`index` tool group** — `index_status` (counts and the age of the oldest
+  row — a correct number with an expired timestamp is the failure nobody
+  catches), `index_build` (warm every source in a timeline, optional
+  transcripts, capped at 100 files), `index_clear`.
+- **Streaming progress** — `fcpxml/progress.py` sends one MCP progress
+  notification per clip from `detect_media_silence`, `transcribe_media`,
+  `transcript_pack`, every `scenes` action and `index_build`, on both the
+  1.x and 2.x SDKs (2.x has no `request_context` property; `mcp_compat` now
+  parks the request context in a contextvar around each `call_tool`). A send
+  failure mutes progress for that call rather than failing the tool.
+- **`scenes` tool group** — `detect_scenes` reports every shot boundary per
+  clip in source AND timeline time, filtered to the window of the source the
+  clip actually uses; `scenes_to_markers` drops a marker on each;
+  `scenes_split` cuts the clips there. Backends: PySceneDetect (`[scenes]`
+  extra — content or adaptive) when installed, else ffmpeg's
+  `select=gt(scene,T)`. The fallback is coarse and the report says so:
+  measured on synthetic bars, red→blue scores exactly 0.4 and red→green
+  0.0, so ffmpeg cannot see a cut between similar hues that PySceneDetect
+  finds without effort.
+- **`transcript_pack`** — the whole shoot on one page: a header per source,
+  one line per utterance in `[S-E]` form with a speaker tag when known,
+  broken on 0.5s of silence (`gap`) or a speaker change, audio events
+  inline. Chat copy is cut at 60KB on a whole-line boundary (measured in
+  bytes, not characters) with the full size stated; `write=true` saves the
+  untruncated pack as `<project>_pack.md`.
+- **ElevenLabs Scribe backend, opt-in** — `backend: "elevenlabs"` on
+  `transcribe_media`, `transcript_pack`, `edit_by_transcript` and
+  `remove_filler_words` uploads the media to `api.elevenlabs.io` (scribe_v2,
+  diarize + audio events) and adds `speaker` (S0, S1… in order of first
+  appearance) on every word plus an `events` list. The key travels in the
+  `xi-api-key` header only and a test asserts it is absent from the URL,
+  body and result — moving it into the URL makes that test red. Every result
+  built on Scribe states **"Audio left this machine"**. The default `local`
+  backend is unchanged and never makes a network call. A cached local
+  transcript never satisfies a diarize request (`is_diarized()`), so asking
+  for speakers on an already-transcribed file re-transcribes rather than
+  returning a transcript without them.
+- `[scenes]` optional extra: `scenedetect[opencv]>=0.7.0`.
+
+### Fixed
+- `server.__version__` still said 0.16.0 after the 0.17.0 cut and the MCP
+  `initialize` handshake reported it. `tests/test_version.py` now asserts it
+  matches `pyproject.toml`.
+- README's architecture block had the "mutation checks" paragraph spliced
+  into the middle of the tree; the legacy-tools count (81) was hand-typed
+  and never true (9 groups + 62 flat = 71 then, 11 + 63 = 74 now). All
+  counts in the docs are measured for this release.
+
+### Known
+- **Marker start semantics.** `FCPXMLModifier.add_marker_at_timeline` and
+  `_find_spine_clip_at_seconds` place a marker's `start` relative to the
+  clip's `offset` and ignore the clip's `start` (source in-point). Apple's
+  semantics put a marker's `start` in the clip's local time. Parser, writer,
+  preview and `examples/sample.fcpxml` all share the clip-relative
+  convention, so the round trip through this server is self-consistent, but a
+  marker written here onto a clip with a non-zero `start` lands early by that
+  amount in Final Cut Pro. `scenes_to_markers` inherits this. Slated for the
+  refactor after 0.19.0 alongside the Timecode → TimeValue unification.
+  **Fixed in 0.19.3.**
+- **TransNetV2 was evaluated and not shipped.** PySceneDetect's content
+  detector found every cut on the synthetic fixtures at 0.7.1, and a second
+  model would have added a torch dependency for no measured gain on this
+  release's fixtures. Shot understanding (captions, embeddings — the `shot`
+  table already exists in the index schema) is the next layer.
+
+## [0.17.0] - 2026-09-01
+
+### Added — The Loop (the round-trip closes, and it has eyes)
+- **`watch` tool group** — `watch_start`, `watch_status`, `watch_stop`,
+  `watch_pull`. Detects an FCPXML export the moment it lands in the watched
+  folder and diffs it against the last one seen. Apple ships a fully scriptable
+  import (`odoc` + `<import-options>`) and NO programmatic export, unchanged
+  across FCP 11.0 → 12.2; this is how one Cmd-E closes the loop without
+  touching an unofficial surface. `FCP_WATCH_DIR` sets the default folder.
+- **`preview` tool group** — `preview_render` (ffmpeg proxy of the timeline),
+  `preview_sheet` (one frame per cut), `preview_frame`, **`preview_check`**
+  (filmstrip + waveform read from the SOURCE MEDIA), `preview_timeline`.
+  Artifacts open in a pane beside the terminal via `cmux-image-preview`.
+- **`generate.import_edl_json`** — author FCPXML from a `browser-use/video-use`
+  style cut list (`{sources, ranges, grade?}`), so an agentic editing pipeline
+  can finish in Final Cut Pro instead of dead-ending at a flat mp4.
+- **Bridge detection** for SpliceKit (`:9876`) and CommandPost (`:27480`),
+  loopback only. Detection and reporting ONLY — this server does not call
+  either, and `describe()` says so, because their RPC signatures have not been
+  verified against a live install and writing one without that is inventing an
+  API rather than integrating with one.
+- **`FCP_MCP_AUTOPUSH=1`** — writes also land in the running Final Cut Pro. Off
+  by default; a failed push never fails the edit.
+- **`tools/` package** — new groups register here instead of growing
+  `server.py`'s dispatch. `server.py` binds the live module object rather than
+  letting group modules `import server`, which in production (where it runs as
+  `__main__`) would execute a second copy with its own handler registry and its
+  own sandbox state.
+
+### Fixed
+- **Edits were verified by re-parsing our own output.** `fcpxml/preview.py`
+  draws coloured blocks from the XML, so a fixed flash frame and a broken one
+  read identically through it. `preview_check` reads the media.
+- `showwavespic` draws on a transparent background that flattens to white, so
+  a white trace was invisible while every ordinary check still passed — the PNG
+  existed, was valid, and two ranges still differed because the FILMSTRIP
+  differed. Caught by looking at the artifact, not the exit code. Now composited
+  over a dark plate, with a test that renders the same video against loud and
+  near-silent audio so any difference must come from the waveform.
+- The watch snapshot digests CONTENT, not `(mtime, size)`. Re-exporting over the
+  same filename is the normal iteration loop, and two exports of equal byte
+  count inside one filesystem timestamp tick produce an identical stat pair —
+  a stat-only watcher reports "no export" for the change just made.
+- `format_diff()` extracted from `handle_diff_timelines` into `fcpxml/diff.py`
+  so `watch_pull` and `diff_timelines` cannot drift into two formats for the
+  same data. The handler went from 45 lines to 5.
+
+### Fixed — validation warned on Final Cut Pro's own output
+- `_check_timebases` inlined `tv.simplify().denominator not in
+  _FCPXML_STANDARD_TIMEBASES`, a second copy of a rule that already lives on
+  `TimeValue.is_standard_timebase()` — and the copy is the one that drifted.
+  `36/24s` (36 frames at 24fps, the canonical form FCP itself writes) reduces
+  to `3/2`, so **every generated timeline logged a validation warning for every
+  clip that was not a whole number of seconds long**. `is_standard_timebase()`
+  now checks the denominator as WRITTEN as well as simplified, matching what
+  `to_fcpxml()` actually emits, and the validator asks it instead of
+  re-deriving. Found by running the new tools end to end on real media rather
+  than trusting a green suite; covered by a mutation check proving `15/7s` and
+  `5/13s` still warn.
+
+### Known
+- Transitions render as **hard cuts** in the proxy. Every one is REPORTED as a
+  substitution rather than applied silently — a preview that lies about the cut
+  is worse than no preview. Crossfade compilation follows.
+- Connected-clip lanes are compiled and reported but not yet composited into the
+  rendered proxy; the spine is what is drawn.
+- Bridge export triggering is not implemented (see above).
+- `_maybe_autopush` is wired into `handle_add_marker` only. The remaining write
+  handlers are mechanical and follow separately.
+
 ## [0.16.0] - 2026-08-16
 
 ### Changed
@@ -1534,7 +2073,10 @@ Tests: 942 → 955.
 - FCPXMLWriter generator now emits `completed` attribute for TODO and COMPLETED markers
 - `list_markers` tool now supports filtering by "completed" marker type
 
-## [Unreleased]
+## [Unreleased at 0.4.2] — historical, shipped long ago
+
+<!-- Left in place rather than deleted: this block records real work. It was
+never renamed when it shipped, which made "[Unreleased]" ambiguous. -->
 
 ### Added
 

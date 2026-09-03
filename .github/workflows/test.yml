@@ -40,6 +40,156 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
+  # The analysis index is a cache and never a source of truth: every tool has
+  # to give the same answer with it switched off, only more slowly. This job
+  # is what keeps that promise honest — a cache that quietly became
+  # load-bearing reads green everywhere else.
+  index-off:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg (media intelligence integration tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,intelligence]"
+
+      - name: Run tests with the index disabled
+        env:
+          FCP_MCP_INDEX: "off"
+        run: pytest tests/ -v
+
+  # No job above installs the optional extras, so `scenedetect[opencv]` sat in
+  # pyproject from 0.18.0 onward naming an extra PySceneDetect does not have.
+  # pip prints a warning and installs anyway, so every surface stayed green.
+  # This job reads the warning.
+  extras:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `find` is deliberately absent: mlx-vlm is Apple Silicon only and has
+      # no Linux wheel, so requiring it here would fail for a true reason and
+      # teach everyone to ignore this job.
+      - name: Optional extras must install without a resolver warning
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,intelligence,transcribe,scenes]" 2>&1 | tee /tmp/pip.log
+          # Both wordings on purpose. pip says "does not provide the extra",
+          # uv says "does not have an extra named"; the first draft of this
+          # step grepped only uv's string, which is a check that could never
+          # have gone red under the installer it actually runs.
+          if grep -Ei "does not provide the extra|does not have an extra named" /tmp/pip.log; then
+            echo "::error::pyproject asks for an extra that does not exist"
+            exit 1
+          fi
+
+      # Installing is not importing. An extra that resolves but leaves the
+      # feature unusable reads identically from pip.
+      - name: The extras must actually be importable
+        run: |
+          python -c "
+          import scenedetect, faster_whisper, librosa
+          print('scenedetect', scenedetect.__version__)
+          "
+
+      - name: Run tests with every installable extra present
+        run: pytest tests/ -q
+
+  # An inline `actions/github-script` block is JavaScript that nothing parses
+  # until the day it runs. The `report` job in publish.yml — the one whose
+  # entire purpose is to be the surface that survives a failed release — held
+  # `${tag#v}` inside a JS template literal from the day it was written, and
+  # died of a SyntaxError the first time a release ever needed it.
+  workflow-scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml
+
+      - name: Every inline github-script block must parse
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys, yaml
+
+          failed = []
+          for wf in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              doc = yaml.safe_load(wf.read_text())
+              for job, spec in (doc.get("jobs") or {}).items():
+                  for i, step in enumerate(spec.get("steps") or []):
+                      uses, with_ = step.get("uses", ""), step.get("with") or {}
+                      if not uses.startswith("actions/github-script"):
+                          continue
+                      script = with_.get("script")
+                      if not script:
+                          continue
+                      # github-script runs the body inside an async function,
+                      # so top-level await is legal there and a bare parse
+                      # would reject it for the wrong reason.
+                      src = "async function main(){\n" + script + "\n}\n"
+                      out = pathlib.Path(f"/tmp/{wf.stem}-{job}-{i}.js")
+                      out.write_text(src)
+                      r = subprocess.run(["node", "--check", str(out)],
+                                         capture_output=True, text=True)
+                      status = "ok" if r.returncode == 0 else "FAILED"
+                      print(f"{wf.name} {job} step {i}: {status}")
+                      if r.returncode != 0:
+                          print(r.stderr)
+                          failed.append(f"{wf.name}:{job}")
+          if failed:
+              print("::error::inline github-script does not parse: " + ", ".join(failed))
+              sys.exit(1)
+          PY
+
+      - name: Every inline python -c block must compile
+        # v0.22.0's registry check died of an IndentationError: a python -c
+        # body indented to match the surrounding YAML is handed to Python
+        # with that indentation intact. The logic had been verified by hand;
+        # the step that wrapped it had never run.
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys, yaml
+
+          BLOCK = re.compile(r'python3? -c "((?:[^"\\]|\\.)*)"', re.S)
+          failed, seen = [], 0
+          for wf in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              doc = yaml.safe_load(wf.read_text())
+              for job, spec in (doc.get("jobs") or {}).items():
+                  for i, step in enumerate(spec.get("steps") or []):
+                      for body in BLOCK.findall(step.get("run") or ""):
+                          seen += 1
+                          try:
+                              compile(body, f"{wf.name}:{job}:{i}", "exec")
+                              print(f"{wf.name} {job} step {i}: ok")
+                          except SyntaxError as exc:
+                              print(f"{wf.name} {job} step {i}: FAILED — {exc}")
+                              failed.append(f"{wf.name}:{job}")
+          print(f"{seen} inline python block(s) checked")
+          if failed:
+              print("::error::inline python -c does not compile: " + ", ".join(failed))
+              sys.exit(1)
+          PY
+
   # The declared floor has to be tested, not just declared. Every job above
   # installs whatever mcp is latest, which is structurally why a
   # `mcp.server.lowlevel.helper_types` import that needs >=1.3.0 sat under a

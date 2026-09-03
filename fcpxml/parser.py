@@ -218,7 +218,7 @@ class FCPXMLParser:
             video_role=elem.get('videoRole', ''),
         )
 
-        clip.markers.extend(self._collect_markers(elem))
+        clip.markers.extend(self._collect_markers(elem, offset, source_start.frames))
 
         for keyword_elem in elem.findall('keyword'):
             keyword = self._parse_keyword(keyword_elem)
@@ -242,19 +242,37 @@ class FCPXMLParser:
             note=elem.get('note', '')
         )
 
-    def _collect_markers(self, elem: ET.Element) -> list:
+    def _collect_markers(
+        self,
+        elem: ET.Element,
+        host_offset_frames: Optional[int] = None,
+        host_start_frames: int = 0,
+    ) -> list:
         """Collect all markers (standard + chapter) from an element in a single pass.
 
         Iterates children once, selecting recognised marker tags via
         MARKER_XML_TAGS rather than making a separate findall per tag.
+
+        A marker's ``start`` is in the host's local time, which begins at the
+        host's ``start`` attribute. When the caller knows where the host sits
+        on the timeline, each marker's ``timeline_start`` is resolved as
+        ``host_offset + (marker.start - host_start)``; the raw ``start`` is
+        kept as written.
         """
-        return [
+        markers = [
             marker
             for child in elem
             if child.tag in MARKER_XML_TAGS
             for marker in [self._parse_marker_element(child)]
             if marker is not None
         ]
+        if host_offset_frames is not None:
+            for marker in markers:
+                marker.timeline_start = Timecode(
+                    frames=host_offset_frames + marker.start.frames - host_start_frames,
+                    frame_rate=self.frame_rate,
+                )
+        return markers
 
     def _parse_keyword(self, elem: ET.Element) -> Optional[Keyword]:
         """Parse a keyword element."""
@@ -361,7 +379,7 @@ class FCPXMLParser:
             ref_id=ref, parent_clip_name=parent_name,
         )
 
-        connected.markers.extend(self._collect_markers(elem))
+        connected.markers.extend(self._collect_markers(elem, offset.frames, start.frames))
 
         for keyword_elem in elem.findall('keyword'):
             keyword = self._parse_keyword(keyword_elem)

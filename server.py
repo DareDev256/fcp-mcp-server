@@ -30,15 +30,17 @@ from mcp.types import (
     Tool,
 )
 
-from fcpxml.diff import compare_timelines
-from fcpxml.export import DaVinciExporter
+from fcpxml import diversity as _diversity
+from fcpxml import journal as _journal
+from fcpxml import live
+from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.mcp_compat import register_handlers, tool_input_schema
-from fcpxml.media_intel import (
-    detect_beats,
-    detect_silence,
-    map_silence_to_timeline,
-    media_src_to_path,
-)
+
+# Not called from this module. tools/media.py reaches these three through the
+# bound server module (srv.detect_silence, ...) because the tests monkeypatch
+# them HERE to keep ffmpeg and Whisper out of the suite. Drop the import and
+# the handlers would still run, but every patch would silently miss.
+from fcpxml.media_intel import detect_beats, detect_silence  # noqa: F401
 from fcpxml.models import (
     DuplicateGroup,
     FlashFrame,
@@ -47,25 +49,15 @@ from fcpxml.models import (
     MarkerType,
     SegmentSpec,
     Timecode,
-    TimeValue,
 )
 from fcpxml.parser import FCPXMLParser
 from fcpxml.preview import render_timeline_html
 from fcpxml.rational import fcp_frame_rate_name
 from fcpxml.rough_cut import RoughCutGenerator
-from fcpxml.templates import ClipSpec, apply_template, list_templates
-from fcpxml.transcribe import (
-    DEFAULT_FILLERS,
-    find_filler_spans,
-    find_phrase_spans,
-    invert_ranges,
-    merge_ranges,
-    segments_to_srt,
-    transcribe,
-)
-from fcpxml.writer import FCPXMLModifier, list_effects
+from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
+from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.16.0"
+__version__ = "0.22.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -379,6 +371,9 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
                 f"{resolved} is not under {anchor}"
             )
 
+    # The journal seam: every write passes through here, so noting the
+    # approved path is enough for the ledger to record it once it exists.
+    _journal.note_output(str(resolved))
     return str(resolved)
 
 
@@ -556,6 +551,16 @@ def _parse_project(filepath: str):
     if not project.timelines:
         return None, None
     return project, project.primary_timeline
+
+
+_CONFIRM_UNREVIEWED_SCHEMA = {
+    "type": "boolean",
+    "description": (
+        "Ship without a rendered preview of the file's current state. Off by "
+        "default: the gate refuses and names the preview_render call that "
+        "would satisfy it."
+    ),
+}
 
 
 def _text_result(text: str) -> list[TextContent]:
@@ -1081,7 +1086,9 @@ Please:
 # ============================================================================
 
 def _legacy_tool_list() -> list[Tool]:
-    """The original 62 flat tools. Still dispatchable; advertised only on opt-in."""
+    """The flat tool schemas (the original 62 plus transcript_pack). Still
+    dispatchable; advertised only on opt-in. Operations born as group actions
+    (preview, watch, index, scenes) have no flat schema."""
     return [
         # ===== READ TOOLS =====
         Tool(
@@ -1166,7 +1173,8 @@ def _legacy_tool_list() -> list[Tool]:
             description="Generate EDL (Edit Decision List) from timeline",
             inputSchema={
                 "type": "object",
-                "properties": {"filepath": {"type": "string"}},
+                "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,"filepath": {"type": "string"}},
                 "required": ["filepath"]
             }
         ),
@@ -1176,6 +1184,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string"},
                     "include": {"type": "array", "items": {"type": "string"}}
                 },
@@ -1482,7 +1491,11 @@ def _legacy_tool_list() -> list[Tool]:
                     },
                     "priority": {"type": "string", "enum": ["best", "favorites", "longest", "shortest", "random"], "default": "best"},
                     "favorites_only": {"type": "boolean", "default": False},
-                    "add_transitions": {"type": "boolean", "default": False}
+                    "add_transitions": {"type": "boolean", "default": False},
+                    "min_source_separation": {
+                        "type": "integer", "minimum": 0, "maximum": 20, "default": 0,
+                        "description": "Minimum number of other shots between two uses of the same source; 0 = off"
+                    }
                 },
                 "required": ["filepath", "output_path", "target_duration"]
             }
@@ -1679,6 +1692,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                 },
                 "required": ["filepath"]
@@ -1771,6 +1785,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "clip_name": {"type": "string", "description": "Only transcribe the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size: tiny, base, small, medium, large-v3 (default base; larger = slower + more accurate)"},
                     "language": {"type": "string", "description": "ISO language code hint (e.g. 'en'); auto-detected if omitted"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "write_srt": {"type": "boolean", "default": False, "description": "Also write a _transcript.srt next to each media file (plugs into import_srt_markers)"},
                 },
                 "required": ["filepath"]
@@ -1787,6 +1802,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "mode": {"type": "string", "enum": ["remove", "keep_only"], "default": "remove", "description": "remove=cut matches out; keep_only=keep only matches"},
                     "clip_name": {"type": "string", "description": "Only edit the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "padding": {"type": "number", "default": 0.0, "description": "Seconds to widen each cut on both sides (0-2, default 0)"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _transcript_edit suffix)"},
                 },
@@ -1803,8 +1819,27 @@ def _legacy_tool_list() -> list[Tool]:
                     "fillers": {"type": "array", "items": {"type": "string"}, "description": "Filler words/phrases to cut (default: um, uh, uhh, umm, erm, ehm, mmm, hmm, mhm)"},
                     "clip_name": {"type": "string", "description": "Only clean the clip with this name"},
                     "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
                     "padding": {"type": "number", "default": 0.02, "description": "Seconds to widen each cut on both sides (0-2, default 0.02)"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _defillered suffix)"},
+                },
+                "required": ["filepath"]
+            }
+        ),
+
+        Tool(
+            name="transcript_pack",
+            description="The whole shoot on one page: every clip's transcript packed into one document — a header per source, one line per utterance, broken on silence or a speaker change, audio events inline. Built for planning an edit from what was said. Uses each media file's _transcript.json / the index (auto-transcribes if missing). Truncated at 60KB; write=true saves the full pack as <project>_pack.md beside the FCPXML.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "Path to FCPXML file"},
+                    "clip_name": {"type": "string", "description": "Only pack the clip with this name"},
+                    "model": {"type": "string", "default": "base", "description": "Whisper model size if transcription is needed"},
+                    "language": {"type": "string", "description": "ISO language code hint if transcription is needed"},
+                    "backend": {"type": "string", "enum": ["local", "elevenlabs"], "default": "local", "description": "local = faster-whisper on this machine, nothing leaves it. elevenlabs = upload the media to ElevenLabs Scribe for speaker labels and audio events (needs ELEVENLABS_API_KEY; opt-in, audio leaves the machine)"},
+                    "gap": {"type": "number", "default": 0.5, "description": "Seconds of silence that end an utterance (0.1-5, default 0.5)"},
+                    "write": {"type": "boolean", "default": False, "description": "Also write the full, untruncated pack to <project>_pack.md next to the FCPXML"},
                 },
                 "required": ["filepath"]
             }
@@ -1847,6 +1882,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                     "flatten_compounds": {"type": "boolean", "default": True, "description": "Flatten compound clips for compatibility"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _resolve suffix)"},
@@ -1860,6 +1896,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                     "output_path": {"type": "string", "description": "Output path (default: adds _fcp7.xml suffix)"},
                 },
@@ -1969,6 +2006,7 @@ def _legacy_tool_list() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file or .fcpxmld bundle to import"},
                     "library_location": {"type": "string", "description": "Target .fcpbundle library path (auto-created if it doesn't exist; the extension is normalized to .fcpbundle). Omit to import into the active library, but note FCP then shows a modal 'Open Library' picker that blocks until answered"},
                     "suppress_warnings": {"type": "boolean", "description": "Suppress non-fatal import warning dialogs", "default": True},
@@ -1991,7 +2029,7 @@ def _legacy_tool_list() -> list[Tool]:
 
 
 def _legacy_tools_enabled() -> bool:
-    """Advertise the original 62 flat tools alongside the groups.
+    """Advertise the flat tool schemas alongside the groups.
 
     Off by default so new users pay only the small schema cost. Existing configs
     that call flat tool names keep working either way, because call_tool
@@ -2219,15 +2257,15 @@ async def handle_list_markers(arguments: dict) -> Sequence[TextContent]:
     marker_type = arguments.get("marker_type", "all")
     if marker_type != "all":
         markers = [m for m in markers if m.marker_type == MarkerType.from_string(marker_type)]
-    markers.sort(key=lambda m: m.start.frames)
+    markers.sort(key=lambda m: m.position.frames)
     fmt = arguments.get("format", "detailed")
     if fmt == "youtube":
         result = "# YouTube Chapters\n\n" + "\n".join(f"{m.to_youtube_timestamp()} {m.name}" for m in markers)
     elif fmt == "simple":
-        result = "\n".join(f"{format_timecode(m.start)} - {m.name}" for m in markers)
+        result = "\n".join(f"{format_timecode(m.position)} - {m.name}" for m in markers)
     else:
         result = f"# Markers ({len(markers)})\n\n| TC | Name | Type |\n|---|------|------|\n"
-        result += "\n".join(f"| {format_timecode(m.start)} | {m.name} | {m.marker_type.value} |" for m in markers)
+        result += "\n".join(f"| {format_timecode(m.position)} | {m.name} | {m.marker_type.value} |" for m in markers)
     return _text_result(result)
 
 
@@ -2474,7 +2512,10 @@ async def handle_add_marker(arguments: dict) -> Sequence[TextContent]:
         marker_type=marker_type, note=arguments.get("note"),
     )
     modifier.save(output_path)
-    return _text_result(f"Added marker '{arguments['name']}' at {arguments['timecode']}\n\nSaved to: {output_path}")
+    return _text_result(
+        f"Added marker '{arguments['name']}' at {arguments['timecode']}\n\n"
+        f"Saved to: {output_path}"
+    )
 
 
 async def handle_batch_add_markers(arguments: dict) -> Sequence[TextContent]:
@@ -2547,12 +2588,22 @@ async def handle_change_speed(arguments: dict) -> Sequence[TextContent]:
 
 async def handle_delete_clips(arguments: dict) -> Sequence[TextContent]:
     filepath, output_path, modifier = _setup_modifier(arguments)
-    modifier.delete_clip(
-        clip_ids=arguments["clip_ids"],
+    requested = arguments["clip_ids"]
+    deleted = modifier.delete_clip(
+        clip_ids=requested,
         ripple=arguments.get("ripple", True),
     )
     modifier.save(output_path)
-    return _text_result(f"Deleted {len(arguments['clip_ids'])} clip(s)\n\nSaved to: {output_path}")
+    # Report what was deleted, never what was asked for. Counting the request
+    # made this answer "Deleted 2 clip(s)" to a request that matched nothing.
+    missed = [c for c in requested if c not in deleted]
+    text = f"Deleted {len(deleted)} clip(s)"
+    if missed:
+        text += (
+            f"\n\nNo clip matched: {', '.join(repr(m) for m in missed)} — "
+            f"an id here is a clip NAME, and names are matched exactly."
+        )
+    return _text_result(f"{text}\n\nSaved to: {output_path}")
 
 
 async def handle_split_clip(arguments: dict) -> Sequence[TextContent]:
@@ -2755,6 +2806,7 @@ async def handle_auto_rough_cut(arguments: dict) -> Sequence[TextContent]:
         priority=arguments.get("priority", "best"),
         favorites_only=arguments.get("favorites_only", False),
         add_transitions=arguments.get("add_transitions", False),
+        min_source_separation=int(arguments.get("min_source_separation", 0)),
     )
 
     return _text_result(f"""# Rough Cut Generated
@@ -2764,6 +2816,7 @@ async def handle_auto_rough_cut(arguments: dict) -> Sequence[TextContent]:
 - **Target Duration**: {format_duration(result.target_duration)}
 - **Actual Duration**: {format_duration(result.actual_duration)}
 - **Average Clip**: {format_duration(result.average_clip_duration)}
+- **{_diversity.describe(result.diversity_score)}**
 
 ## Output
 Saved to: `{result.output_path}`
@@ -2938,7 +2991,7 @@ async def handle_snap_to_beats(arguments: dict) -> Sequence[TextContent]:
     if not markers and not connected_marker_times:
         return _text_result("No markers found. Use `import_beat_markers` first.")
 
-    marker_times = sorted([m.start.seconds for m in markers])
+    marker_times = sorted([m.position.seconds for m in markers])
 
     spine = modifier._get_spine()
     adjusted_count = 0
@@ -3381,7 +3434,8 @@ async def handle_export_role_stems(arguments: dict) -> Sequence[TextContent]:
     result = f"# Audio Stem Plan for {tl.name}\n\n"
     for role, clips in sorted(stems.items()):
         total_dur = sum(c.duration_seconds for c in clips)
-        result += f"## {role.title()} ({len(clips)} clips, {format_duration(total_dur)})\n\n"
+        plural = "clip" if len(clips) == 1 else "clips"
+        result += f"## {role.title()} ({len(clips)} {plural}, {format_duration(total_dur)})\n\n"
         for c in clips:
             result += f"- {c.name} ({format_duration(c.duration_seconds)})\n"
         result += "\n"
@@ -3395,46 +3449,8 @@ async def handle_diff_timelines(arguments: dict) -> Sequence[TextContent]:
     filepath_a = _validate_filepath(arguments["filepath_a"], ('.fcpxml', '.fcpxmld'))
     filepath_b = _validate_filepath(arguments["filepath_b"], ('.fcpxml', '.fcpxmld'))
 
-    diff = compare_timelines(filepath_a, filepath_b)
-
-    if not diff.has_changes:
-        return _text_result((
-            f"# Timeline Diff: No Changes\n\n"
-            f"**{diff.timeline_a_name}** vs **{diff.timeline_b_name}** are identical."
-        ))
-
-    result = (
-        f"# Timeline Diff\n\n"
-        f"**Baseline**: {diff.timeline_a_name}\n"
-        f"**Comparison**: {diff.timeline_b_name}\n"
-        f"**Total changes**: {diff.total_changes}\n\n"
-    )
-
-    if diff.format_changes:
-        result += "## Format Changes\n\n"
-        for change in diff.format_changes:
-            result += f"- {change}\n"
-        result += "\n"
-
-    clip_changes = [d for d in diff.clip_diffs if d.action != "unchanged"]
-    if clip_changes:
-        result += "## Clip Changes\n\n| Action | Clip | Details |\n|--------|------|--------|\n"
-        for d in clip_changes:
-            result += f"| {d.action.upper()} | {d.clip_name} | {d.details} |\n"
-        result += "\n"
-
-    if diff.marker_diffs:
-        result += "## Marker Changes\n\n| Action | Marker | Details |\n|--------|--------|--------|\n"
-        for d in diff.marker_diffs:
-            result += f"| {d.action.upper()} | {d.marker_name} | {d.details} |\n"
-        result += "\n"
-
-    if diff.transition_diffs:
-        result += "## Transition Changes\n\n"
-        for change in diff.transition_diffs:
-            result += f"- {change}\n"
-
-    return _text_result(result)
+    # Formatting lives in fcpxml.diff so watch_pull renders diffs identically.
+    return _text_result(format_diff(compare_timelines(filepath_a, filepath_b)))
 
 
 # ----- SOCIAL MEDIA REFORMAT HANDLER (v0.5.0) -----
@@ -3468,716 +3484,36 @@ async def handle_reformat_timeline(arguments: dict) -> Sequence[TextContent]:
     ))
 
 
-# ----- SILENCE DETECTION HANDLERS (v0.5.0) -----
-
-async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
-    noise_db = float(arguments.get("noise_db", -30.0))
-    min_silence = float(arguments.get("min_silence", 0.5))
-    # Same bounds detect_silence() enforces — validated here so a bad request
-    # fails before any media file is opened.
-    if not (-120.0 <= noise_db <= 0.0):
-        raise ValueError(f"noise_db must be between -120 and 0 dB, got {noise_db}")
-    if not (0 < min_silence <= 3600):
-        raise ValueError(f"min_silence must be between 0 and 3600 seconds, got {min_silence}")
-
-    _, tl = _require_timeline(arguments["filepath"])
-    clip_filter = arguments.get("clip_name")
-
-    max_media_probes = 100
-    findings: list[tuple[str, float, float]] = []
-    skipped: list[tuple[str, str]] = []
-    probe_cache: dict[str, list | None] = {}
-    for clip in tl.clips:
-        if clip_filter and clip.name != clip_filter:
-            continue
-        media_path = media_src_to_path(clip.media_path or "")
-        if not media_path or not Path(media_path).is_file():
-            skipped.append((clip.name, "media file missing"))
-            continue
-        if media_path not in probe_cache:
-            if len(probe_cache) >= max_media_probes:
-                skipped.append((clip.name, f"probe cap reached ({max_media_probes} media files)"))
-                continue
-            probe_cache[media_path] = detect_silence(
-                media_path, noise_db=noise_db, min_duration=min_silence
-            )
-        silences = probe_cache[media_path]
-        if silences is None:
-            skipped.append((clip.name, "unanalyzable (ffmpeg missing or media unreadable)"))
-            continue
-        source_start = clip.source_start.seconds if clip.source_start else 0.0
-        mapped = map_silence_to_timeline(
-            silences, source_start, clip.duration.seconds, clip.start.seconds
-        )
-        findings.extend((clip.name, start, end) for start, end in mapped)
-
-    total_silence = sum(end - start for _, start, end in findings)
-    result = f"""# Media Silence Detection (real audio analysis)
-
-## Summary
-- **Threshold**: {noise_db} dB for >= {min_silence}s
-- **Media Files Probed**: {len(probe_cache)}
-- **Silence Spans Found**: {len(findings)} ({format_duration(total_silence)} total)
-"""
-    if findings:
-        result += "\n## Silence Spans (timeline time)\n"
-        result += _markdown_table(
-            ["Clip", "Start", "End", "Duration"],
-            [[name, f"{start:.2f}s", f"{end:.2f}s", f"{end - start:.2f}s"]
-             for name, start, end in findings],
-        ) + "\n"
-        result += "\n*To remove: `split_clip` at each boundary, then `delete_clips` with ripple.*"
-    if skipped:
-        result += "\n## Skipped Clips\n"
-        result += _markdown_table(
-            ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
-        ) + "\n"
-    if not findings and not skipped:
-        result += "\nNo silence detected in any clip's source audio."
-    return _text_result(result)
-
-
-async def handle_remove_media_silence(arguments: dict) -> Sequence[TextContent]:
-    noise_db = float(arguments.get("noise_db", -30.0))
-    min_silence = float(arguments.get("min_silence", 0.5))
-    padding = float(arguments.get("padding", 0.05))
-    if not (-120.0 <= noise_db <= 0.0):
-        raise ValueError(f"noise_db must be between -120 and 0 dB, got {noise_db}")
-    if not (0 < min_silence <= 3600):
-        raise ValueError(f"min_silence must be between 0 and 3600 seconds, got {min_silence}")
-    if not (0 <= padding <= 5):
-        raise ValueError(f"padding must be between 0 and 5 seconds, got {padding}")
-
-    filepath, output_path, modifier = _setup_modifier(arguments, "_silence_removed")
-    clip_filter = arguments.get("clip_name")
-    fps = modifier._detect_fps()
-
-    def to_frame_timevalue(seconds: float) -> TimeValue:
-        # Snap cut boundaries to the frame grid in the 2400-tick timebase so
-        # output stays frame-aligned and DTD-friendly.
-        return TimeValue(int(round(seconds * fps) * round(2400 / fps)), 2400)
-
-    max_media_probes = 100
-    cuts_made: list[tuple[str, int, float]] = []
-    skipped: list[tuple[str, str]] = []
-    probe_cache: dict[str, list | None] = {}
-    spine_clips = [el for _, el in modifier._iter_spine_clips()]
-    for el in spine_clips:
-        name = el.get("name", "")
-        if clip_filter and name != clip_filter:
-            continue
-        src = modifier.resources.get(el.get("ref", ""), {}).get("src", "")
-        media_path = media_src_to_path(src)
-        if not media_path or not Path(media_path).is_file():
-            skipped.append((name, "media file missing"))
-            continue
-        if media_path not in probe_cache:
-            if len(probe_cache) >= max_media_probes:
-                skipped.append((name, f"probe cap reached ({max_media_probes} media files)"))
-                continue
-            probe_cache[media_path] = detect_silence(
-                media_path, noise_db=noise_db, min_duration=min_silence
-            )
-        silences = probe_cache[media_path]
-        if silences is None:
-            skipped.append((name, "unanalyzable (ffmpeg missing or media unreadable)"))
-            continue
-
-        clip_source_start = modifier._parse_time(el.get("start", "0s")).to_seconds()
-        clip_duration = modifier._parse_time(el.get("duration", "0s")).to_seconds()
-        cut_ranges = []
-        for sil_start, sil_end in silences:
-            # Source time -> clip-relative, padded so cuts breathe.
-            cut_start = max(sil_start, clip_source_start) - clip_source_start + padding
-            cut_end = min(sil_end, clip_source_start + clip_duration) - clip_source_start - padding
-            if cut_end > cut_start:
-                cut_ranges.append((to_frame_timevalue(cut_start), to_frame_timevalue(cut_end)))
-        if not cut_ranges:
-            continue
-        removed = modifier.cut_clip_ranges(el, cut_ranges)
-        if removed > TimeValue.zero():
-            cuts_made.append((name, len(cut_ranges), removed.to_seconds()))
-
-    if not cuts_made:
-        text = "# Media Silence Removal\n\nNo silence found to remove — file unchanged (nothing saved)."
-        if skipped:
-            text += "\n\n## Skipped Clips\n" + _markdown_table(
-                ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
-            )
-        return _text_result(text)
-
-    modifier.save(output_path)
-    total_removed = sum(seconds for _, _, seconds in cuts_made)
-    result = f"""# Media Silence Removal (real audio analysis)
-
-## Summary
-- **Threshold**: {noise_db} dB for >= {min_silence}s, padding {padding}s
-- **Clips Cut**: {len(cuts_made)}
-- **Total Removed**: {format_duration(total_removed)}
-
-## Cuts
-"""
-    result += _markdown_table(
-        ["Clip", "Silence Spans Cut", "Removed"],
-        [[name, str(count), f"{seconds:.2f}s"] for name, count, seconds in cuts_made],
-    ) + "\n"
-    if skipped:
-        result += "\n## Skipped Clips\n" + _markdown_table(
-            ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
-        ) + "\n"
-    result += f"\nSaved to: {output_path}\n\n*Preview first next time with `detect_media_silence`. Original file untouched.*"
-    return _text_result(result)
-
-
-AUDIO_MEDIA_EXTENSIONS = (
-    '.wav', '.aif', '.aiff', '.mp3', '.m4a', '.aac', '.flac', '.mov', '.mp4',
+# ----- MEDIA INTELLIGENCE / TRANSCRIPT / NLE EXPORT / EFFECTS / TEMPLATES / RELINK -----
+#
+# Moved to tools/media.py and tools/nle.py. Re-exported here under the original
+# names so TOOL_HANDLERS, the flat tool list and existing callers keep resolving
+# one definition rather than two that can drift apart. detect_silence,
+# detect_beats and transcribe stay imported at the top of this file:
+# tools/media.py reaches them as srv.X so the tests' monkeypatches on this
+# module still take effect.
+from tools.media import (  # noqa: E402
+    handle_detect_beats,
+    handle_detect_media_silence,
+    handle_detect_silence_candidates,
+    handle_edit_by_transcript,
+    handle_remove_filler_words,
+    handle_remove_media_silence,
+    handle_remove_silence_candidates,
+    handle_transcribe_media,
+    handle_transcript_pack,
 )
-
-
-async def handle_detect_beats(arguments: dict) -> Sequence[TextContent]:
-    media_path = _validate_filepath(arguments["media_path"], AUDIO_MEDIA_EXTENSIONS)
-
-    result = detect_beats(media_path)
-    if result is None:
-        return _text_result(
-            "Beat detection unavailable — librosa is not installed or the file "
-            "could not be analyzed.\n\nInstall the optional media-intelligence "
-            "extra:\n\n    pip install 'fcp-mcp-server[intelligence]'"
-        )
-
-    bpm, beats = result["bpm"], result["beats"]
-    beats_data = {
-        "source": str(Path(media_path).name),
-        "bpm": round(bpm, 2),
-        "beats": [round(b, 4) for b in beats],
-        "downbeats": [round(b, 4) for b in beats[::4]],
-    }
-    json_path = _validate_output_path(
-        str(Path(media_path).with_name(Path(media_path).stem + "_beats.json")),
-        anchor_dir=str(Path(media_path).parent),
-    )
-    with open(json_path, "w") as f:
-        json.dump(beats_data, f, indent=2)
-
-    preview = beats[:16]
-    result_text = f"""# Beat Detection
-
-## Summary
-- **Source**: {Path(media_path).name}
-- **Estimated Tempo**: {bpm:.1f} BPM
-- **Beats Detected**: {len(beats)} ({format_duration(beats[-1]) if beats else '0s'} span)
-- **Beats JSON**: {json_path}
-
-## First Beats
-"""
-    result_text += _markdown_table(
-        ["#", "Time"],
-        [[str(i + 1), f"{b:.3f}s"] for i, b in enumerate(preview)],
-    ) + "\n"
-    result_text += (
-        f"\n*Next: `import_beat_markers` with beats_path=\"{json_path}\" to place "
-        "markers, then `snap_to_beats` to align your cuts.*"
-    )
-    return _text_result(result_text)
-
-
-# ===== TRANSCRIPT INTELLIGENCE (v0.13.1) =====
-
-TRANSCRIBE_MAX_MEDIA = 10
-
-_TRANSCRIBE_INSTALL_HINT = (
-    "\n\nInstall the optional transcription extra:\n\n"
-    "    pip install 'fcp-mcp-server[transcribe]'\n\n"
-    "or run via uvx:\n\n"
-    "    uvx --from \"fcp-mcp-server[transcribe]\" fcp-mcp-server"
+from tools.nle import (  # noqa: E402
+    handle_add_audio,
+    handle_apply_template,
+    handle_create_compound_clip,
+    handle_export_fcp7_xml,
+    handle_export_resolve_xml,
+    handle_flatten_compound_clip,
+    handle_list_effects,
+    handle_list_templates,
+    handle_relink_media,
 )
-
-
-def _transcript_json_path(media_path: str) -> Path:
-    p = Path(media_path)
-    return p.with_name(p.stem + "_transcript.json")
-
-
-def _load_or_transcribe(media_path: str, model: str, language: str | None) -> tuple[dict | None, str]:
-    """Load a cached ``_transcript.json`` for a media file, else transcribe and cache it.
-
-    Returns ``(transcript, "")`` or ``(None, reason)``. The cache makes
-    transcription a one-time cost per media file across all transcript tools.
-    """
-    json_path = _transcript_json_path(media_path)
-    if json_path.is_file():
-        try:
-            with open(json_path) as f:
-                data = json.load(f)
-            if isinstance(data, dict) and isinstance(data.get("words"), list):
-                return data, ""
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            pass  # unreadable cache falls through to re-transcribe
-    result = transcribe(media_path, model_size=model, language=language)
-    if result is None:
-        return None, "untranscribable (faster-whisper not installed or media unreadable)"
-    out_path = _validate_output_path(str(json_path), anchor_dir=str(Path(media_path).parent))
-    with open(out_path, "w") as f:
-        json.dump({"source": Path(media_path).name, **result}, f, indent=2)
-    return result, ""
-
-
-def _cut_transcript_spans(modifier, clip_filter, model, language, padding, spans_fn, keep_only=False):
-    """Shared cut engine for transcript-driven editing.
-
-    ``spans_fn(words) -> [(start, end), ...]`` in source seconds. Spans are
-    padded, clamped to each clip's used source window, optionally inverted
-    (keep_only), snapped to the frame grid, and cut with ripple.
-    """
-    fps = modifier._detect_fps()
-    tick = round(2400 / fps)
-
-    def to_frame(seconds: float) -> TimeValue:
-        return TimeValue(int(round(seconds * fps) * tick), 2400)
-
-    cache: dict[str, tuple] = {}
-    cuts_made: list[tuple[str, int, float]] = []
-    skipped: list[tuple[str, str]] = []
-    spine_clips = [el for _, el in modifier._iter_spine_clips()]
-    for el in spine_clips:
-        name = el.get("name", "")
-        if clip_filter and name != clip_filter:
-            continue
-        src = modifier.resources.get(el.get("ref", ""), {}).get("src", "")
-        media_path = media_src_to_path(src)
-        if not media_path or not Path(media_path).is_file():
-            skipped.append((name, "media file missing"))
-            continue
-        if media_path not in cache:
-            if len(cache) >= TRANSCRIBE_MAX_MEDIA:
-                skipped.append((name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
-                continue
-            cache[media_path] = _load_or_transcribe(media_path, model, language)
-        data, reason = cache[media_path]
-        if data is None:
-            skipped.append((name, reason))
-            continue
-
-        clip_source_start = modifier._parse_time(el.get("start", "0s")).to_seconds()
-        clip_duration = modifier._parse_time(el.get("duration", "0s")).to_seconds()
-        window_start = clip_source_start
-        window_end = clip_source_start + clip_duration
-
-        spans = spans_fn(data.get("words", []))
-        padded = merge_ranges([(s - padding, e + padding) for s, e in spans])
-        clamped = [
-            (max(s, window_start), min(e, window_end))
-            for s, e in padded
-            if min(e, window_end) > max(s, window_start)
-        ]
-        if keep_only:
-            if not clamped:
-                # Never delete a whole clip just because nothing matched in it.
-                skipped.append((name, "no phrase matches — left untouched (keep_only)"))
-                continue
-            cut_source = invert_ranges(clamped, window_start, window_end)
-        else:
-            cut_source = clamped
-        cut_ranges = [
-            (to_frame(s - clip_source_start), to_frame(e - clip_source_start))
-            for s, e in cut_source
-        ]
-        cut_ranges = [(a, b) for a, b in cut_ranges if b > a]
-        if not cut_ranges:
-            continue
-        removed = modifier.cut_clip_ranges(el, cut_ranges)
-        if removed > TimeValue.zero():
-            cuts_made.append((name, len(cut_ranges), removed.to_seconds()))
-    return cuts_made, skipped
-
-
-def _transcript_cut_report(title, summary_lines, cuts_made, skipped, output_path, footer):
-    if not cuts_made:
-        text = f"# {title}\n\nNo cuts to make — file unchanged (nothing saved)."
-        if skipped:
-            text += "\n\n## Skipped Clips\n" + _markdown_table(
-                ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
-            )
-        if any("faster-whisper" in reason for _, reason in skipped):
-            text += _TRANSCRIBE_INSTALL_HINT
-        return _text_result(text)
-    total_removed = sum(seconds for _, _, seconds in cuts_made)
-    result = f"# {title}\n\n## Summary\n"
-    result += "\n".join(summary_lines) + "\n"
-    result += f"- **Clips Cut**: {len(cuts_made)}\n- **Total Removed**: {format_duration(total_removed)}\n"
-    result += "\n## Cuts\n"
-    result += _markdown_table(
-        ["Clip", "Ranges Cut", "Removed"],
-        [[name, str(count), f"{seconds:.2f}s"] for name, count, seconds in cuts_made],
-    ) + "\n"
-    if skipped:
-        result += "\n## Skipped Clips\n" + _markdown_table(
-            ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
-        ) + "\n"
-    result += f"\nSaved to: {output_path}\n\n{footer}"
-    return _text_result(result)
-
-
-async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
-    model = arguments.get("model", "base")
-    language = arguments.get("language")
-    write_srt = bool(arguments.get("write_srt", False))
-    _, tl = _require_timeline(arguments["filepath"])
-    clip_filter = arguments.get("clip_name")
-
-    done: dict[str, dict | None] = {}
-    skipped: list[tuple[str, str]] = []
-    rows: list[list[str]] = []
-    srt_paths: list[str] = []
-    for clip in tl.clips:
-        if clip_filter and clip.name != clip_filter:
-            continue
-        media_path = media_src_to_path(clip.media_path or "")
-        if not media_path or not Path(media_path).is_file():
-            skipped.append((clip.name, "media file missing"))
-            continue
-        if media_path in done:
-            continue
-        if len(done) >= TRANSCRIBE_MAX_MEDIA:
-            skipped.append((clip.name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
-            continue
-        data, reason = _load_or_transcribe(media_path, model, language)
-        done[media_path] = data
-        if data is None:
-            skipped.append((clip.name, reason))
-            continue
-        if write_srt and data.get("segments"):
-            srt_path = _validate_output_path(
-                str(Path(media_path).with_name(Path(media_path).stem + "_transcript.srt")),
-                anchor_dir=str(Path(media_path).parent),
-            )
-            with open(srt_path, "w") as f:
-                f.write(segments_to_srt(data["segments"]))
-            srt_paths.append(srt_path)
-        preview = data.get("text", "")[:160]
-        rows.append([
-            Path(media_path).name,
-            data.get("language", "?"),
-            str(len(data.get("words", []))),
-            format_duration(float(data.get("duration", 0.0))),
-            preview + ("…" if len(data.get("text", "")) > 160 else ""),
-        ])
-
-    result = f"""# Media Transcription (local Whisper)
-
-## Summary
-- **Model**: {model}
-- **Media Files Transcribed**: {len(rows)}
-"""
-    if rows:
-        result += "\n## Transcripts (saved as _transcript.json next to each media file)\n"
-        result += _markdown_table(
-            ["Media", "Language", "Words", "Duration", "Preview"], rows
-        ) + "\n"
-        result += (
-            "\n*Next: `edit_by_transcript` to cut by what was said, or "
-            "`remove_filler_words` to clean ums/uhs. Transcripts are cached — "
-            "media is only transcribed once.*"
-        )
-    if srt_paths:
-        result += "\n\n## SRT Files\n" + "\n".join(f"- {p}" for p in srt_paths)
-    if skipped:
-        result += "\n## Skipped Clips\n" + _markdown_table(
-            ["Clip", "Reason"], [[name, reason] for name, reason in skipped]
-        ) + "\n"
-    if not rows and any("faster-whisper" in reason for _, reason in skipped):
-        result += _TRANSCRIBE_INSTALL_HINT
-    return _text_result(result)
-
-
-async def handle_edit_by_transcript(arguments: dict) -> Sequence[TextContent]:
-    phrases = arguments.get("phrases") or []
-    if not isinstance(phrases, list) or not all(isinstance(p, str) for p in phrases):
-        raise ValueError("phrases must be a list of strings")
-    phrases = [p for p in phrases if p.strip()]
-    if not phrases:
-        raise ValueError("phrases must contain at least one non-empty string")
-    mode = arguments.get("mode", "remove")
-    if mode not in ("remove", "keep_only"):
-        raise ValueError(f"mode must be 'remove' or 'keep_only', got {mode!r}")
-    padding = float(arguments.get("padding", 0.0))
-    if not (0 <= padding <= 2):
-        raise ValueError(f"padding must be between 0 and 2 seconds, got {padding}")
-    model = arguments.get("model", "base")
-    language = arguments.get("language")
-
-    filepath, output_path, modifier = _setup_modifier(arguments, "_transcript_edit")
-
-    def spans_fn(words):
-        return merge_ranges(
-            [span for phrase in phrases for span in find_phrase_spans(words, phrase)]
-        )
-
-    cuts_made, skipped = _cut_transcript_spans(
-        modifier, arguments.get("clip_name"), model, language, padding,
-        spans_fn, keep_only=(mode == "keep_only"),
-    )
-    if cuts_made:
-        modifier.save(output_path)
-    verb = "kept only" if mode == "keep_only" else "removed"
-    return _transcript_cut_report(
-        "Transcript Edit",
-        [f"- **Mode**: {mode} ({verb} the matched phrases)",
-         f"- **Phrases**: {', '.join(repr(p) for p in phrases)}",
-         f"- **Padding**: {padding}s"],
-        cuts_made, skipped, output_path,
-        "*Transcripts are cached as _transcript.json. Original file untouched.*",
-    )
-
-
-async def handle_remove_filler_words(arguments: dict) -> Sequence[TextContent]:
-    fillers = arguments.get("fillers") or list(DEFAULT_FILLERS)
-    if not isinstance(fillers, list) or not all(isinstance(f, str) for f in fillers):
-        raise ValueError("fillers must be a list of strings")
-    padding = float(arguments.get("padding", 0.02))
-    if not (0 <= padding <= 2):
-        raise ValueError(f"padding must be between 0 and 2 seconds, got {padding}")
-    model = arguments.get("model", "base")
-    language = arguments.get("language")
-
-    filepath, output_path, modifier = _setup_modifier(arguments, "_defillered")
-
-    cuts_made, skipped = _cut_transcript_spans(
-        modifier, arguments.get("clip_name"), model, language, padding,
-        lambda words: merge_ranges(find_filler_spans(words, fillers)),
-    )
-    if cuts_made:
-        modifier.save(output_path)
-    return _transcript_cut_report(
-        "Filler Word Removal",
-        [f"- **Fillers**: {', '.join(fillers)}", f"- **Padding**: {padding}s"],
-        cuts_made, skipped, output_path,
-        "*Transcripts are cached as _transcript.json. Original file untouched.*",
-    )
-
-
-async def handle_detect_silence_candidates(arguments: dict) -> Sequence[TextContent]:
-    filepath = _validate_filepath(arguments["filepath"], ('.fcpxml', '.fcpxmld'))
-    modifier = FCPXMLModifier(filepath)
-    candidates = modifier.detect_silence_candidates(
-        min_gap_seconds=arguments.get("min_gap_seconds", 0.5),
-        patterns=arguments.get("patterns"),
-    )
-
-    if not candidates:
-        return _text_result("No silence candidates detected.")
-
-    result = f"# Silence Candidates Detected\n\n**Found**: {len(candidates)}\n\n"
-    result += "| # | Timecode | Duration | Reason | Confidence | Clip |\n"
-    result += "|---|----------|----------|--------|------------|------|\n"
-    for i, c in enumerate(candidates, 1):
-        result += (
-            f"| {i} | {c['start_timecode']} | {format_duration(c['duration_seconds'])} | "
-            f"{c['reason']} | {c['confidence']:.0%} | {c.get('clip_name') or '-'} |\n"
-        )
-    result += (
-        "\n**Note**: Detection uses timeline heuristics (gaps, ultra-short clips, name patterns). "
-        "Review candidates before removing — some may be intentional."
-    )
-    return _text_result(result)
-
-
-async def handle_remove_silence_candidates(arguments: dict) -> Sequence[TextContent]:
-    filepath, output_path, modifier = _setup_modifier(arguments, "_silence_cleaned")
-    actions = modifier.remove_silence_candidates(
-        mode=arguments.get("mode", "mark"),
-        min_gap_seconds=arguments.get("min_gap_seconds", 0.5),
-        min_confidence=arguments.get("min_confidence", 0.7),
-    )
-    modifier.save(output_path)
-
-    if not actions:
-        return _text_result("No silence candidates met the confidence threshold.")
-
-    mode = arguments.get("mode", "mark")
-    result = f"# Silence Candidates {'Marked' if mode == 'mark' else 'Removed'}\n\n"
-    result += f"**Actions taken**: {len(actions)}\n\n"
-    for a in actions:
-        result += f"- **{a['action']}** {a.get('clip_name', 'gap')} ({a['reason']})\n"
-    result += f"\nSaved to: `{output_path}`"
-    return _text_result(result)
-
-
-# ----- NLE EXPORT HANDLERS (v0.5.0) -----
-
-async def handle_export_resolve_xml(arguments: dict) -> Sequence[TextContent]:
-    filepath, output_path = _resolve_io_paths(arguments, "_resolve")
-    exporter = DaVinciExporter(filepath)
-    exporter.export_simplified_fcpxml(
-        output_path,
-        flatten_compounds=arguments.get("flatten_compounds", True),
-    )
-    return _text_result((
-        f"# Exported for DaVinci Resolve\n\n"
-        f"- **Format**: Simplified FCPXML v1.9\n"
-        f"- **Compound clips flattened**: {arguments.get('flatten_compounds', True)}\n\n"
-        f"Saved to: `{output_path}`\n\n"
-        f"**Next step**: In DaVinci Resolve, go to File > Import > Timeline > Import AAF/EDL/XML"
-    ))
-
-
-async def handle_export_fcp7_xml(arguments: dict) -> Sequence[TextContent]:
-    filepath, output_path = _resolve_io_paths(arguments, "_fcp7")
-    exporter = DaVinciExporter(filepath)
-    exporter.export_xmeml(output_path)
-    return _text_result((
-        f"# Exported as FCP7 XML (XMEML)\n\n"
-        f"- **Format**: XMEML v5\n"
-        f"- **Compatible with**: Premiere Pro, DaVinci Resolve, Avid Media Composer\n\n"
-        f"Saved to: `{output_path}`\n\n"
-        f"**Next step**: Import via File > Import in your target NLE"
-    ))
-
-
-# ----- v0.6.0 HANDLERS -----
-
-async def handle_list_effects(arguments: dict) -> Sequence[TextContent]:
-    effects = list_effects()
-    lines = ["# Available FCP Transition Effects\n"]
-    for eff in effects:
-        lines.append(f"- **{eff['slug']}**: {eff['name']} (`{eff['uuid']}`)")
-    return _text_result("\n".join(lines))
-
-
-async def handle_add_audio(arguments: dict) -> Sequence[TextContent]:
-    filepath, output_path, modifier = _setup_modifier(arguments, "_audio")
-
-    parent_clip_id = arguments.get("parent_clip_id")
-    if parent_clip_id:
-        modifier.add_audio_clip(
-            parent_clip_id=parent_clip_id,
-            asset_id=arguments.get("asset_id"),
-            offset=arguments.get("offset", "0s"),
-            duration=arguments.get("duration"),
-            role=arguments.get("role", "dialogue"),
-            lane=arguments.get("lane", -1),
-            src=arguments.get("src"),
-        )
-        action = f"Added audio clip to '{parent_clip_id}'"
-    else:
-        modifier.add_music_bed(
-            asset_id=arguments.get("asset_id"),
-            duration=arguments.get("duration"),
-            role=arguments.get("role", "music"),
-            src=arguments.get("src"),
-        )
-        action = "Added music bed spanning full timeline"
-
-    modifier.save(output_path)
-    return _text_result(f"{action}\nSaved to: `{output_path}`")
-
-
-async def handle_create_compound_clip(arguments: dict) -> Sequence[TextContent]:
-    filepath, output_path, modifier = _setup_modifier(arguments, "_compound")
-    clip_ids = arguments["clip_ids"]
-    name = arguments.get("name", "Compound Clip")
-    modifier.create_compound_clip(clip_ids, name)
-    modifier.save(output_path)
-    return _text_result((
-        f"Created compound clip '{name}' from {len(clip_ids)} clips.\n"
-        f"Saved to: `{output_path}`"
-    ))
-
-
-async def handle_flatten_compound_clip(arguments: dict) -> Sequence[TextContent]:
-    filepath, output_path, modifier = _setup_modifier(arguments, "_flattened")
-    ref_clip_id = arguments["ref_clip_id"]
-    extracted = modifier.flatten_compound_clip(ref_clip_id)
-    modifier.save(output_path)
-    return _text_result((
-        f"Flattened compound clip '{ref_clip_id}' into {len(extracted)} clips.\n"
-        f"Saved to: `{output_path}`"
-    ))
-
-
-async def handle_list_templates(arguments: dict) -> Sequence[TextContent]:
-    templates = list_templates()
-    lines = ["# Available Timeline Templates\n"]
-    for tmpl in templates:
-        lines.append(f"## {tmpl['name']}")
-        lines.append(f"{tmpl['description']}\n")
-        lines.append("| Slot | Type | Default Duration | Lane | Required |")
-        lines.append("|------|------|-----------------|------|----------|")
-        for s in tmpl['slots']:
-            lines.append(
-                f"| {s['name']} | {s['slot_type']} | {s['default_duration']}s "
-                f"| {s['lane']} | {'Yes' if s['required'] else 'No'} |"
-            )
-        lines.append("")
-    return _text_result("\n".join(lines))
-
-
-async def handle_apply_template(arguments: dict) -> Sequence[TextContent]:
-    template_name = arguments["template_name"]
-    clips_raw = arguments["clips"]
-    output_path = _validate_output_path(arguments["output_path"], anchor_dir=PROJECTS_DIR)
-    fps = arguments.get("fps", 24)
-
-    # Convert raw clips dict to ClipSpec objects
-    clips_map = {}
-    for slot_name, spec_data in clips_raw.items():
-        if isinstance(spec_data, dict):
-            clips_map[slot_name] = ClipSpec(
-                asset_id=spec_data.get("asset_id"),
-                src=spec_data.get("src"),
-                name=spec_data.get("name", slot_name),
-                duration=spec_data.get("duration"),
-            )
-
-    result_path = apply_template(template_name, clips_map, output_path, fps)
-    return _text_result((
-        f"Applied template '{template_name}' with {len(clips_map)} clips.\n"
-        f"Saved to: `{result_path}`"
-    ))
-
-
-async def handle_relink_media(arguments: dict) -> Sequence[TextContent]:
-    dry_run = arguments.get("dry_run", False)
-    if dry_run:
-        filepath = _validate_filepath(arguments["filepath"], ('.fcpxml', '.fcpxmld'))
-        modifier = FCPXMLModifier(filepath)
-        result = modifier.relink_media(
-            arguments["find"], arguments["replace"], dry_run=True
-        )
-        footer = "Dry run — no file written."
-    else:
-        filepath, output_path, modifier = _setup_modifier(arguments, "_relinked")
-        result = modifier.relink_media(arguments["find"], arguments["replace"])
-        saved = modifier.save(output_path)
-        footer = f"Saved to: {saved}"
-
-    if not result["relinked"]:
-        return _text_result(
-            f"No media paths matched prefix '{arguments['find']}' "
-            f"({result['total_assets']} assets scanned). Nothing to relink."
-        )
-
-    lines = [
-        f"{'Would relink' if dry_run else 'Relinked'} "
-        f"{result['relinked']} media reference(s) "
-        f"across {result['total_assets']} asset(s):",
-        "",
-    ]
-    missing = 0
-    for change in result["changes"]:
-        mark = "✓" if change["target_exists"] else "⚠ target missing"
-        if not change["target_exists"]:
-            missing += 1
-        lines.append(f"  {change['asset']}: {change['new']}  [{mark}]")
-    if missing:
-        lines.append("")
-        lines.append(
-            f"⚠ {missing} new path(s) do not exist on this machine — "
-            f"FCP will show those clips as missing until the media is present."
-        )
-    lines.append("")
-    lines.append(footer)
-    return _text_result("\n".join(lines))
 
 
 async def handle_push_to_fcp(arguments: dict) -> Sequence[TextContent]:
@@ -4243,6 +3579,89 @@ async def handle_list_fcp_libraries(arguments: dict) -> Sequence[TextContent]:
 # TOOL DISPATCH
 # ============================================================================
 
+# Anything not in this set turns autopush ON. An UNSET variable reads as "",
+# which is in the set, so the default is OFF — repeated imports accumulate
+# library churn in Final Cut Pro, and that is the operator's call to make
+# rather than a default to inflict on them.
+_AUTOPUSH_OFF = {"", "0", "false", "no", "off"}
+
+
+def _autopush_enabled() -> bool:
+    """Whether every write should also land in the running Final Cut Pro."""
+    return os.environ.get("FCP_MCP_AUTOPUSH", "").strip().lower() not in _AUTOPUSH_OFF
+
+
+def _maybe_autopush(output_path: str) -> str:
+    """Push *output_path* into FCP when autopush is on. Returns a report line.
+
+    Never raises. The edit already succeeded and is on disk; a failed push is a
+    note about the PUSH, not a failure of the edit, and turning it into an
+    exception would lose the operator a file they already have.
+    """
+    if not _autopush_enabled():
+        return ""
+    try:
+        result = live.push_to_fcp(output_path)
+    except (RuntimeError, OSError) as exc:
+        return f"\nAutopush: not pushed — {exc}"
+    launched = " (launched Final Cut Pro)" if result.get("launched_fcp") else ""
+    return f"\nPushed to Final Cut Pro: {result.get('sent', output_path)}{launched}"
+
+
+async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
+    """Author an FCPXML timeline from a video-use style edl.json cut list.
+
+    The bridge that lets an agentic editing pipeline finish in Final Cut Pro
+    instead of dead-ending at a flat mp4.
+    """
+    import json
+
+    from fcpxml.edl import EDLValidationError, edl_to_fcpxml
+
+    filepath = arguments.get("filepath")
+    if not filepath:
+        return _text_result("import_edl_json requires 'filepath' (an edl.json).")
+    path = _validate_filepath(filepath, ('.json',))
+
+    output_path = arguments.get("output_path") or str(
+        Path(path).with_suffix('.fcpxml')
+    )
+    output_path = _validate_output_path(output_path, anchor_dir=str(Path(path).parent))
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return _text_result(f"Could not read {path}: {exc}")
+
+    try:
+        result = edl_to_fcpxml(
+            data, output_path,
+            base_dir=str(Path(path).parent),
+            fps=float(arguments.get("fps", 24.0)),
+            name=arguments.get("name", "EDL Import"),
+        )
+    except EDLValidationError as exc:
+        return _text_result(f"Invalid EDL: {exc}")
+
+    lines = [
+        f"Authored {result['path']} from {result['clips']} ranges.",
+    ]
+    for note in result["ignored"]:
+        lines.append(f"Ignored: {note}")
+    if result["missing"]:
+        lines.append(
+            "Media not found on this machine (the timeline still references "
+            "it; relink in FCP or with deliver.relink_media): "
+            + ", ".join(result["missing"])
+        )
+    lines.append(
+        "Preview it with preview.preview_render, or import with "
+        "deliver.push_to_fcp."
+    )
+    return _text_result("\n".join(lines))
+
+
 TOOL_HANDLERS = {
     # Read
     "list_projects": handle_list_projects,
@@ -4277,6 +3696,7 @@ TOOL_HANDLERS = {
     "validate_timeline": handle_validate_timeline,
     # Generation
     "auto_rough_cut": handle_auto_rough_cut,
+    "import_edl_json": handle_import_edl_json,
     "generate_montage": handle_generate_montage,
     "generate_ab_roll": handle_generate_ab_roll,
     # Beat Sync
@@ -4304,6 +3724,7 @@ TOOL_HANDLERS = {
     "transcribe_media": handle_transcribe_media,
     "edit_by_transcript": handle_edit_by_transcript,
     "remove_filler_words": handle_remove_filler_words,
+    "transcript_pack": handle_transcript_pack,
     "detect_beats": handle_detect_beats,
     "detect_silence_candidates": handle_detect_silence_candidates,
     "remove_silence_candidates": handle_remove_silence_candidates,
@@ -4329,8 +3750,9 @@ TOOL_HANDLERS = {
 # GROUPED TOOL FACADE
 #
 # 62 flat tools cost ~9,000 tokens of schema in every conversation before the
-# user types anything. These 7 groups (inspect, diagnose, edit, mark,
-# generate, transcript, deliver) advertise the same capability for a
+# user types anything. These groups (inspect, diagnose, edit, mark, generate,
+# transcript, deliver here; preview, watch, index, scenes registered from
+# tools/) advertise the same capability for a
 # fraction of that. They dispatch straight into TOOL_HANDLERS, so behaviour is
 # identical and every legacy tool name keeps working whether or not it is
 # advertised in list_tools.
@@ -4392,6 +3814,7 @@ TOOL_GROUPS: dict[str, dict] = {
         "actions": [
             "auto_rough_cut", "generate_ab_roll", "generate_montage",
             "apply_template", "create_compound_clip", "flatten_compound_clip",
+            "import_edl_json",
         ],
     },
     "transcript": {
@@ -4401,12 +3824,15 @@ TOOL_GROUPS: dict[str, dict] = {
         ),
         "actions": [
             "transcribe_media", "edit_by_transcript", "remove_filler_words",
+            "transcript_pack",
         ],
     },
     "deliver": {
         "description": (
             "Get the edit out: export to other NLEs, CSV, EDL and stems, "
-            "reformat, relink media, or push straight into a running Final Cut Pro."
+            "reformat, relink media, or push straight into a running Final Cut Pro. "
+            "Exports and push refuse a cut with no rendered preview of its current "
+            "state (pass confirm_unreviewed=true to ship anyway)."
         ),
         "actions": [
             "export_csv", "export_edl", "export_fcp7_xml", "export_resolve_xml",
@@ -4415,6 +3841,53 @@ TOOL_GROUPS: dict[str, dict] = {
         ],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# tools/ package merge
+# ---------------------------------------------------------------------------
+# Groups defined in tools/ are folded into TOOL_GROUPS and TOOL_HANDLERS here,
+# rather than kept in a second registry that every call site would have to
+# consult. One source of truth means list_tools, handle_group, call_tool,
+# _action_param_help and the "valid actions" error messages all keep working
+# unchanged, and test_every_handler_belongs_to_exactly_one_group keeps its
+# meaning.
+#
+# The import is deliberately down here, not at the top of the file: tools/
+# group modules import fcpxml.* and tools._common, never server, but keeping
+# the import adjacent to the merge makes the dependency direction obvious.
+import sys  # noqa: E402
+
+import tools as _extra_tools  # noqa: E402
+
+# Hand tools/ the live module object rather than letting it `import server`.
+# In production this file runs as __main__, so that import would execute a
+# second copy under a different name, with its own handler registry and its own
+# sandbox state.
+_extra_tools.bind_server(sys.modules[__name__])
+
+def _merge_extra_tools(
+    groups: dict, handlers: dict, into_groups: dict, into_handlers: dict
+) -> None:
+    """Fold tools/ groups and handlers into the server's registries.
+
+    A function rather than inline statements so the shadowing guard can be
+    tested. A guard nothing exercises is a guard nobody knows is broken.
+    """
+    for name, spec in groups.items():
+        if name in into_groups:
+            raise RuntimeError(f"tools/ group shadows a builtin group: {name}")
+    for action in handlers:
+        if action in into_handlers:
+            raise RuntimeError(f"tools/ action shadows a builtin action: {action}")
+    into_groups.update(groups)
+    into_handlers.update(handlers)
+
+
+_merge_extra_tools(
+    _extra_tools.EXTRA_GROUPS, _extra_tools.EXTRA_HANDLERS,
+    TOOL_GROUPS, TOOL_HANDLERS,
+)
 
 
 def _group_action_error(group: str, action: str | None) -> list[TextContent]:
@@ -4449,14 +3922,24 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
         # test_every_group_action_resolves_to_a_real_handler exists to prevent.
         return _text_result(f"No handler registered for action: {action}")
 
-    call_args = arguments.get("args") or {}
-    if not isinstance(call_args, dict):
-        return _text_result(
-            f"Invalid 'args' for '{group}.{action}': expected an object, "
-            f"got {type(call_args).__name__}."
-        )
+    if "args" in arguments:
+        call_args = arguments.get("args") or {}
+        if not isinstance(call_args, dict):
+            return _text_result(
+                f"Invalid 'args' for '{group}.{action}': expected an object, "
+                f"got {type(call_args).__name__}."
+            )
+    else:
+        # The schema says arguments live under "args", and a caller that sends
+        # them flat used to get "Missing required argument: filepath" while
+        # looking at a call that plainly passed filepath — the one error text
+        # guaranteed to send someone hunting in the wrong place. Models make
+        # this mistake constantly against grouped tools. Take the flat form
+        # rather than teaching it a lesson; the advertised schema is unchanged,
+        # so a correct caller is unaffected.
+        call_args = {k: v for k, v in arguments.items() if k != "action"}
 
-    return await handler(call_args)
+    return await _journaled(group, action, call_args, handler)
 
 
 def _group_tool(name: str) -> Tool:
@@ -4524,6 +4007,77 @@ def _action_param_help(action: str | None) -> str:
     return f"'{action}' accepts:\n" + "\n".join(lines)
 
 
+GATED_ACTIONS = frozenset({
+    "export_csv", "export_edl", "export_fcp7_xml", "export_resolve_xml",
+    "export_role_stems", "push_to_fcp",
+})
+
+
+_UNREVIEWED_NOTE = (
+    "\n\n*Shipped UNREVIEWED (confirm_unreviewed=true): no rendered preview "
+    "matches this file's current state.*"
+)
+
+
+def _review_gate(action: str, arguments: dict) -> list[TextContent] | None:
+    """The editors' checkpoint: watch it in full before it leaves.
+
+    Refuses a gated action when the journal holds no preview_render whose
+    input hash equals the file as it is NOW. A render of an earlier state
+    proves nothing about this one. Returns the refusal, or None to proceed.
+    """
+    if action not in GATED_ACTIONS or arguments.get("confirm_unreviewed") is True:
+        return None
+    filepath = arguments.get("filepath")
+    if not isinstance(filepath, str):
+        return None  # the handler reports the missing argument itself
+    call = json.dumps({"action": "preview_render", "args": {"filepath": filepath}})
+    if not _journal.enabled():
+        return _text_result(
+            f"Refused: {action} cannot verify a review because the journal is off "
+            f"(FCP_MCP_JOURNAL). Turn it on and render first: preview {call} — "
+            "or pass confirm_unreviewed=true to ship without watching it."
+        )
+    if _journal.reviewed(filepath) is None:
+        return _text_result(
+            f"Refused: {filepath} has no rendered preview for its current state. "
+            f"Watch it first: preview {call} — then run {action} again. "
+            "To ship unreviewed anyway, pass confirm_unreviewed=true."
+        )
+    return None
+
+
+async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequence[TextContent]:
+    """Run *handler* inside a journal ledger, behind the review gate.
+
+    Any path the handler validates as an output and then writes is recorded
+    against the input. Handlers change nothing for this: the seam is
+    _validate_output_path, which every write already passes through.
+    """
+    refusal = _review_gate(action, arguments)
+    if refusal is not None:
+        return refusal
+    filepath = arguments.get("filepath")
+    input_path = filepath if isinstance(filepath, str) else None
+    token = _journal.begin(tool, action, arguments, input_path)
+    try:
+        result = await handler(arguments)
+    finally:
+        written = _journal.finish(token)
+    # Autopush lives HERE, on the same seam, so every write handler gets it
+    # without knowing: whatever this request wrote as FCPXML is pushed.
+    # push_to_fcp is the push; it is not pushed again.
+    if action != "push_to_fcp" and _autopush_enabled():
+        pushed = "".join(
+            _maybe_autopush(p) for p in written if p.endswith((".fcpxml", ".fcpxmld"))
+        )
+        if pushed:
+            result = _text_result(result[0].text + pushed)
+    if action in GATED_ACTIONS and arguments.get("confirm_unreviewed") is True:
+        result = _text_result(result[0].text + _UNREVIEWED_NOTE)
+    return result
+
+
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     handler = TOOL_HANDLERS.get(name)
     if not handler and name not in TOOL_GROUPS:
@@ -4531,7 +4085,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
     try:
         if name in TOOL_GROUPS:
             return await handle_group(name, arguments)
-        return await handler(arguments)
+        return await _journaled(name, name, arguments, handler)
     except _NoTimelineError:
         return _no_timeline()
     except FileNotFoundError as e:
