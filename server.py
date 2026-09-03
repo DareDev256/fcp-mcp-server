@@ -4615,12 +4615,22 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
         # test_every_group_action_resolves_to_a_real_handler exists to prevent.
         return _text_result(f"No handler registered for action: {action}")
 
-    call_args = arguments.get("args") or {}
-    if not isinstance(call_args, dict):
-        return _text_result(
-            f"Invalid 'args' for '{group}.{action}': expected an object, "
-            f"got {type(call_args).__name__}."
-        )
+    if "args" in arguments:
+        call_args = arguments.get("args") or {}
+        if not isinstance(call_args, dict):
+            return _text_result(
+                f"Invalid 'args' for '{group}.{action}': expected an object, "
+                f"got {type(call_args).__name__}."
+            )
+    else:
+        # The schema says arguments live under "args", and a caller that sends
+        # them flat used to get "Missing required argument: filepath" while
+        # looking at a call that plainly passed filepath — the one error text
+        # guaranteed to send someone hunting in the wrong place. Models make
+        # this mistake constantly against grouped tools. Take the flat form
+        # rather than teaching it a lesson; the advertised schema is unchanged,
+        # so a correct caller is unaffected.
+        call_args = {k: v for k, v in arguments.items() if k != "action"}
 
     return await _journaled(group, action, call_args, handler)
 

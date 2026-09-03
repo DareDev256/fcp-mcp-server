@@ -144,8 +144,23 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           for attempt in $(seq 1 10); do
+            # The search endpoint returns EVERY version of a server, oldest
+            # first, so taking the first match reads whichever version was
+            # published first — 0.13.1 here — and reports failure for a
+            # publish that worked. The registry marks exactly one entry
+            # isLatest; that is the only one that answers "what does the
+            # registry serve".
             served=$(curl -sf "https://registry.modelcontextprotocol.io/v0.1/servers?search=fcpxml-mcp-server" \
-              | python3 -c "import json,sys; print(next((s['server']['version'] for s in json.load(sys.stdin).get('servers',[]) if s['server']['name']=='io.github.DareDev256/fcpxml-mcp-server'), ''))")
+              | python3 -c "
+            import json, sys
+            NAME = 'io.github.DareDev256/fcpxml-mcp-server'
+            KEY = 'io.modelcontextprotocol.registry/official'
+            entries = json.load(sys.stdin).get('servers', [])
+            latest = [e for e in entries
+                      if e['server']['name'] == NAME
+                      and e.get('_meta', {}).get(KEY, {}).get('isLatest')]
+            print(latest[0]['server']['version'] if latest else '')
+            ")
             if [ "$served" = "$version" ]; then
               echo "registry is serving ${version}"
               exit 0
@@ -171,6 +186,12 @@ jobs:
         with:
           script: |
             const tag = process.env.GITHUB_REF_NAME;
+            // Computed in JS, never interpolated into the template literal
+            // below. `${tag#v}` is valid bash and a syntax error inside a JS
+            // template string, and it took the whole job down the first time
+            // this job ever ran for real — the one job whose entire purpose is
+            // to be the surface that survives a failed release.
+            const version = tag.replace(/^v/, "");
             const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             await github.rest.issues.create({
               owner: context.repo.owner,
@@ -183,7 +204,7 @@ jobs:
                 `complete. Check the index before believing them:`,
                 ``,
                 '```',
-                `curl -s https://pypi.org/simple/fcp-mcp-server/ | grep ${tag#v}`,
+                `curl -s https://pypi.org/simple/fcp-mcp-server/ | grep ${version}`,
                 '```',
                 ``,
                 `Run: ${url}`,

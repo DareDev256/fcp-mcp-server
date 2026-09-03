@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Fixed
+- **The registry verification step read the wrong entry and called a working
+  publish a failure.** The registry's search endpoint returns every version of
+  a server, oldest first, so taking the first match read 0.13.1 forever. It
+  now reads the one entry the registry marks `isLatest`. 0.21.2 published
+  correctly; only the check was wrong.
+- **The `report` job had never worked.** Its inline `actions/github-script`
+  body contained `${tag#v}` — valid bash, a JavaScript syntax error inside a
+  template literal — so the one job whose entire purpose is to be the surface
+  that survives a failed release died of a SyntaxError the first time a
+  release ever needed it. A `workflow-scripts` CI job now parses every inline
+  `github-script` block with `node --check`, wrapped in an async function
+  because github-script allows top-level await and a bare parse would reject
+  it for the wrong reason. Control-tested against the broken form.
+- **Grouped tools now accept their arguments sent flat.** The schema puts them
+  under `args`; a caller that sent `{"action": "analyze_timeline", "filepath":
+  ...}` got back "Missing required argument: filepath" for a call that plainly
+  passed filepath — an error that points at the argument instead of at the
+  nesting. Both forms work now, with a test that nested `args` still wins.
+
+### Added
+- **The README demo is a script that runs.** `demo/demo.py` synthesises three
+  shots with ffmpeg, cuts them into a timeline from an `edl.json`, analyses
+  it, draws the ASCII timeline, finds the dead air in the source audio, trims
+  it, redraws, and renders a proxy — every line real output from
+  `server.call_tool`. `vhs demo/demo.tape` records it to `docs/assets/demo.gif`,
+  replacing a hand-made GIF of v0.13.0 that predated everything from v0.17.0
+  onward. A demo that regenerates from the code cannot drift from it.
+
+### Changed
+- The "Not Ideal For" table said "creative editing decisions (no visual
+  feedback)" and "anything visual" — written before proxy renders, contact
+  sheets, filmstrips and the ASCII timeline existed.
+
 ## [0.21.2] - 2026-09-03
 
 ### Fixed

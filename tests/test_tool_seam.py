@@ -7,9 +7,12 @@ groups must advertise exactly as they did before.
 """
 
 import asyncio
+from pathlib import Path
 
 import server
 import tools
+
+SAMPLE = Path(__file__).resolve().parent.parent / "examples" / "sample.fcpxml"
 
 
 def test_extra_groups_have_the_same_shape_as_builtin_groups():
@@ -154,3 +157,32 @@ def test_every_flat_handler_is_named_by_some_test():
     assert not unnamed, (
         f"{len(unnamed)} handler(s) have no test naming them: {', '.join(unnamed)}"
     )
+
+
+def test_group_call_accepts_arguments_sent_flat():
+    """`{"action": ..., "filepath": ...}` instead of the nested `args` form.
+
+    The schema asks for `args`, but a caller that sends the arguments flat
+    got "Missing required argument: filepath" for a call that visibly passed
+    filepath, which is the worst possible error: it points at the argument
+    rather than at the nesting. The flat form is now taken as written.
+    """
+    result = asyncio.run(
+        server.call_tool("inspect", {"action": "analyze_timeline",
+                                     "filepath": str(SAMPLE)})
+    )
+    text = result[0].text
+    assert "Missing required argument" not in text
+    assert "clip" in text.lower()
+
+
+def test_nested_args_still_win_over_flat_keys():
+    """A control: with `args` present, the flat path must not run at all —
+    otherwise the leniency above quietly changes what a correct caller sends.
+    """
+    result = asyncio.run(
+        server.call_tool("inspect", {"action": "analyze_timeline",
+                                     "args": {"filepath": str(SAMPLE)},
+                                     "filepath": "/nonexistent/should-be-ignored.fcpxml"})
+    )
+    assert "should-be-ignored" not in result[0].text

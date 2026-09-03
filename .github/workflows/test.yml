@@ -110,6 +110,57 @@ jobs:
       - name: Run tests with every installable extra present
         run: pytest tests/ -q
 
+  # An inline `actions/github-script` block is JavaScript that nothing parses
+  # until the day it runs. The `report` job in publish.yml — the one whose
+  # entire purpose is to be the surface that survives a failed release — held
+  # `${tag#v}` inside a JS template literal from the day it was written, and
+  # died of a SyntaxError the first time a release ever needed it.
+  workflow-scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml
+
+      - name: Every inline github-script block must parse
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys, yaml
+
+          failed = []
+          for wf in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              doc = yaml.safe_load(wf.read_text())
+              for job, spec in (doc.get("jobs") or {}).items():
+                  for i, step in enumerate(spec.get("steps") or []):
+                      uses, with_ = step.get("uses", ""), step.get("with") or {}
+                      if not uses.startswith("actions/github-script"):
+                          continue
+                      script = with_.get("script")
+                      if not script:
+                          continue
+                      # github-script runs the body inside an async function,
+                      # so top-level await is legal there and a bare parse
+                      # would reject it for the wrong reason.
+                      src = "async function main(){\n" + script + "\n}\n"
+                      out = pathlib.Path(f"/tmp/{wf.stem}-{job}-{i}.js")
+                      out.write_text(src)
+                      r = subprocess.run(["node", "--check", str(out)],
+                                         capture_output=True, text=True)
+                      status = "ok" if r.returncode == 0 else "FAILED"
+                      print(f"{wf.name} {job} step {i}: {status}")
+                      if r.returncode != 0:
+                          print(r.stderr)
+                          failed.append(f"{wf.name}:{job}")
+          if failed:
+              print("::error::inline github-script does not parse: " + ", ".join(failed))
+              sys.exit(1)
+          PY
+
   # The declared floor has to be tested, not just declared. Every job above
   # installs whatever mcp is latest, which is structurally why a
   # `mcp.server.lowlevel.helper_types` import that needs >=1.3.0 sat under a
