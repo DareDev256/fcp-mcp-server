@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-04
+
+### Fixed
+- **The reporting tools were still blind to a gap-based storyline.** v0.23.0
+  fixed the parser and the media tools; an audit of the remaining `tl.clips`
+  call sites found nine read-only tools that still walked the spine alone.
+  On the #23 project `export_edl` and `export_csv` produced an empty export,
+  `analyze_pacing` answered "No clips to analyze", `list_markers` and
+  `list_keywords` found nothing, and `filter_by_role` reported no matches —
+  each silently, with no hint the edit was in lanes. Same defect as #23, one
+  surface out. `Timeline.all_clips()` is the base view (spine plus every
+  connected clip, including the ones with no media, because a caption still
+  carries markers, keywords and a role), and `media_clips()` is now the
+  subset of it that has media. `list_markers`, `list_keywords`,
+  `export_csv` and `filter_by_role` read `all_clips()`; `export_edl` and
+  `analyze_pacing` read `media_clips()`, because an EDL row names a source a
+  caption does not have and a caption is not a cut to average into pacing.
+  `list_markers` also missed markers on connected clips in *spine*-based
+  projects — a marker on a connected title was never listed.
+- **The preview placed connected clips by their raw offset.** A clip under a
+  gap whose clock starts at 3600s was drawn against a 3600s origin and
+  landed four seconds early on the #23 project. Connected clips now render
+  at their `timeline_start`, and the origin heuristic ignores elements the
+  parser has already normalised (so a gap-based storyline, whose spine gaps
+  establish 0 and are not kept as clips, gets an origin of 0).
+- **`detect_media_silence` reported spans of 0.00s.** ffmpeg routinely puts
+  a silence start tens of microseconds before a clip's out-point; clamping
+  that to the used window left a span too short to print and impossible to
+  act on, since `split_clip` cannot cut inside a frame.
+  `map_silence_to_timeline` takes a `min_mapped` floor and the handler
+  passes one frame duration. The default is 0, so other callers are
+  unchanged.
+
+### Added
+- `Timeline.all_clips()` — every clip carrying the edit, positioned on the
+  timeline, spine or lanes.
+
 ## [0.23.0] - 2026-09-04
 
 ### Fixed

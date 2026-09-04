@@ -787,6 +787,16 @@ class Timeline:
         """
         return not self.clips and bool(self.connected_clips)
 
+    def all_clips(self) -> List[Clip]:
+        """Every clip carrying the edit, positioned on the timeline.
+
+        Spine clips first, then every connected clip in :class:`Clip` shape —
+        including the ones with no media, because a caption or title still
+        carries markers, keywords and a role that the reporting tools claim
+        to list. On a spine-based project this is ``self.clips`` unchanged.
+        """
+        return list(self.clips) + [c.as_clip() for c in self.connected_clips]
+
     def media_clips(self) -> List[Clip]:
         """Every clip that references source media, positioned on the timeline.
 
@@ -797,9 +807,7 @@ class Timeline:
         transcript, index, find) walk, so a gap-based edit opens the same
         files a spine-based one would.
         """
-        out = list(self.clips)
-        out.extend(c.as_clip() for c in self.connected_clips if c.media_path)
-        return out
+        return [c for c in self.all_clips() if c.media_path]
 
     @property
     def total_cuts(self) -> int:

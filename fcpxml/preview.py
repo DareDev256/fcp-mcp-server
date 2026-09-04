@@ -97,7 +97,15 @@ def _timeline_origin(timeline, connected) -> float:
     reads 0s on real projects whose clips nonetheless start at 3600s.
     """
     starts = [float(c.start.seconds or 0) for c in timeline.clips if c.start]
-    starts += [float(c.offset.seconds or 0) for c in connected if c.offset]
+    # A connected clip with a timeline_start has already been normalised to
+    # the sequence's own clock by the parser, so it needs no origin shift and
+    # must not drag one in. Only raw offsets vote. When every element is
+    # already normalised — a gap-based storyline, where the spine gaps
+    # establish 0 and are not kept as clips — the origin is 0.
+    starts += [
+        float(c.offset.seconds or 0) for c in connected
+        if c.offset and getattr(c, "timeline_start", None) is None
+    ]
     return min(starts) if starts else 0.0
 
 
@@ -127,7 +135,8 @@ def render_timeline_html(timeline) -> str:
         blocks = []
         for cc in lanes[lane]:
             seconds = float(cc.duration.seconds or 0)
-            cc_offset = float(cc.offset.seconds or 0) if cc.offset else 0.0
+            position = cc.timeline_start if getattr(cc, "timeline_start", None) else cc.offset
+            cc_offset = float(position.seconds or 0) if position else 0.0
             left, width = _left_width(cc_offset - origin, seconds, total)
             blocks.append(_render_clip_block(cc.name, left, width, _lane_color(lane), seconds, "lane-clip"))
         return (

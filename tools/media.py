@@ -127,7 +127,8 @@ async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
             continue
         source_start = clip.source_start.seconds if clip.source_start else 0.0
         mapped = map_silence_to_timeline(
-            silences, source_start, clip.duration.seconds, clip.start.seconds
+            silences, source_start, clip.duration.seconds, clip.start.seconds,
+            min_mapped=(1.0 / tl.frame_rate if tl.frame_rate else 0.0),
         )
         findings.extend((clip.name, start, end) for start, end in mapped)
 

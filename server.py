@@ -57,7 +57,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.23.0"
+__version__ = "0.24.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -2282,7 +2282,7 @@ async def handle_list_clips(arguments: dict) -> Sequence[TextContent]:
 async def handle_list_markers(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     markers = list(tl.markers)
-    for clip in tl.clips:
+    for clip in tl.all_clips():
         markers.extend(clip.markers)
     marker_type = arguments.get("marker_type", "all")
     if marker_type != "all":
@@ -2324,7 +2324,7 @@ async def handle_find_long_clips(arguments: dict) -> Sequence[TextContent]:
 async def handle_list_keywords(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     keywords = {}
-    for clip in tl.clips:
+    for clip in tl.all_clips():
         for kw in clip.keywords:
             keywords.setdefault(kw.value, []).append(clip.name)
     if not keywords:
@@ -2338,7 +2338,7 @@ async def handle_list_keywords(arguments: dict) -> Sequence[TextContent]:
 async def handle_export_edl(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     edl = f"TITLE: {tl.name}\nFCM: NON-DROP FRAME\n\n"
-    for i, c in enumerate(tl.clips, 1):
+    for i, c in enumerate(sorted(tl.media_clips(), key=lambda c: c.start.seconds), 1):
         edl += f"{i:03d}  AX       V     C        {format_timecode(c.source_start)} {format_timecode(c.end)} {format_timecode(c.start)} {format_timecode(c.end)}\n"
         edl += f"* FROM CLIP NAME: {c.name}\n\n"
     return _text_result(f"```edl\n{edl}```")
@@ -2347,7 +2347,7 @@ async def handle_export_edl(arguments: dict) -> Sequence[TextContent]:
 async def handle_export_csv(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     csv = "Name,Start,End,Duration,Keywords\n"
-    for c in tl.clips:
+    for c in sorted(tl.all_clips(), key=lambda c: c.start.seconds):
         kws = "|".join(k.value for k in c.keywords)
         csv += f'"{c.name}",{format_timecode(c.start)},{format_timecode(c.end)},{c.duration_seconds:.3f},"{kws}"\n'
     return _text_result(f"```csv\n{csv}```")
@@ -2355,18 +2355,19 @@ async def handle_export_csv(arguments: dict) -> Sequence[TextContent]:
 
 async def handle_analyze_pacing(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
-    if not tl.clips:
+    clips = sorted(tl.media_clips(), key=lambda c: c.start.seconds)
+    if not clips:
         return _text_result("No clips to analyze")
-    durs = [c.duration_seconds for c in tl.clips]
+    durs = [c.duration_seconds for c in clips]
     avg = sum(durs) / len(durs)
     q_len = len(durs) // 4 or 1
     segments = [durs[i:i+q_len] for i in range(0, len(durs), q_len)][:4]
     seg_avgs = [sum(s)/len(s) if s else 0 for s in segments]
     suggestions = []
-    flash = [c for c in tl.clips if c.duration_seconds < 0.2]
+    flash = [c for c in clips if c.duration_seconds < 0.2]
     if flash:
         suggestions.append(f"  {len(flash)} potential flash frames (< 0.2s)")
-    long = [c for c in tl.clips if c.duration_seconds > 30]
+    long = [c for c in clips if c.duration_seconds > 30]
     if long:
         suggestions.append(f"  {len(long)} long takes (> 30s) - consider trimming")
     if len(seg_avgs) >= 4 and seg_avgs[3] < seg_avgs[0] * 0.7:
@@ -3445,7 +3446,7 @@ async def handle_filter_by_role(arguments: dict) -> Sequence[TextContent]:
     role_type = arguments.get("role_type", "any")
     matches = []
 
-    for clip in tl.clips:
+    for clip in tl.all_clips():
         if role_type in ("audio", "any") and clip.audio_role.lower() == role:
             matches.append((clip.name, "audio", clip.audio_role, format_duration(clip.duration_seconds)))
         if role_type in ("video", "any") and clip.video_role.lower() == role:

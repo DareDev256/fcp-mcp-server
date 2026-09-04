@@ -58,12 +58,20 @@ def map_silence_to_timeline(
     source_start: float,
     clip_duration: float,
     timeline_offset: float,
+    min_mapped: float = 0.0,
 ) -> List[Tuple[float, float]]:
     """Map source-time silence ranges onto the timeline.
 
     A clip uses ``[source_start, source_start + clip_duration)`` of its source
     media and sits at ``timeline_offset``. Ranges outside the used window are
     excluded; ranges overlapping its edges are clamped.
+
+    ``min_mapped`` drops spans shorter than that many seconds *after*
+    clamping. ffmpeg routinely reports a silence beginning tens of
+    microseconds before a clip's out-point, which clamps to a span that
+    prints as ``0.00s`` and that nothing can act on — ``split_clip`` cannot
+    cut inside a frame. Callers pass one frame duration; the default of 0
+    keeps every span, so other callers are unaffected.
     """
     source_end = source_start + clip_duration
     mapped: List[Tuple[float, float]] = []
@@ -71,6 +79,8 @@ def map_silence_to_timeline(
         clamped_start = max(start, source_start)
         clamped_end = min(end, source_end)
         if clamped_end <= clamped_start:
+            continue
+        if clamped_end - clamped_start < min_mapped:
             continue
         mapped.append((
             timeline_offset + (clamped_start - source_start),
