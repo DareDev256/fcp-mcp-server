@@ -106,8 +106,9 @@ async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
     findings: list[tuple[str, float, float]] = []
     skipped: list[tuple[str, str]] = []
     probe_cache: dict[str, list | None] = {}
-    prog = _progress.start(total=len(tl.clips))
-    for clip in tl.clips:
+    clips = tl.media_clips()
+    prog = _progress.start(total=len(clips))
+    for clip in clips:
         await prog.step(f"silence: {clip.name}")
         if clip_filter and clip.name != clip_filter:
             continue
@@ -488,8 +489,9 @@ async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
     skipped: list[tuple[str, str]] = []
     rows: list[list[str]] = []
     srt_paths: list[str] = []
-    prog = _progress.start(total=len(tl.clips))
-    for clip in tl.clips:
+    clips = tl.media_clips()
+    prog = _progress.start(total=len(clips))
+    for clip in clips:
         await prog.step(f"transcribe: {clip.name}")
         if clip_filter and clip.name != clip_filter:
             continue
@@ -611,8 +613,9 @@ async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
 
     sources: dict[str, dict] = {}
     skipped: list[tuple[str, str]] = []
-    prog = _progress.start(total=len(tl.clips))
-    for clip in tl.clips:
+    clips = tl.media_clips()
+    prog = _progress.start(total=len(clips))
+    for clip in clips:
         await prog.step(f"pack: {clip.name}")
         if clip_filter and clip.name != clip_filter:
             continue

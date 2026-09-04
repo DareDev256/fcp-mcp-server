@@ -57,7 +57,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.22.1"
+__version__ = "0.23.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -2214,14 +2214,25 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
     durs = [c.duration_seconds for c in tl.clips]
     avg, med, mn, mx = (0, 0, 0, 0) if not durs else (
         sum(durs)/len(durs), sorted(durs)[len(durs)//2], min(durs), max(durs))
+    shape = ""
+    if tl.is_gap_based:
+        # Spine statistics are all zero here by construction, not because the
+        # edit is empty. Say so before the zeros, or they read as a clean bill.
+        shape = (
+            f"\n> **Gap-based primary storyline.** The spine holds only gaps; the "
+            f"{len(tl.connected_clips)} connected clips in lanes carry the edit. "
+            f"Spine clip and cut counts below are 0 by construction — see "
+            f"`list_connected_clips`; the media tools read the lane clips.\n"
+        )
     return _text_result(f"""# Timeline Analysis: {tl.name}
-
+{shape}
 ## Overview
 - **Duration**: {format_duration(tl.duration.seconds)}
 - **Resolution**: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 
 ## Clip Statistics
 - **Total Clips**: {tl.total_clips}
+- **Connected Clips**: {len(tl.connected_clips)}
 - **Total Cuts**: {tl.total_cuts}
 - **Transitions**: {len(tl.transitions)}
 
@@ -2241,6 +2252,25 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
 async def handle_list_clips(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     limit = arguments.get("limit")
+    if tl.is_gap_based:
+        # Nothing on the spine to list; the edit is in the lanes (issue #23).
+        clips = sorted(tl.connected_clips, key=lambda c: (c.timeline_start or c.offset).frames)
+        clips = clips[:limit] if limit else clips
+        result = (
+            f"# Clips in {tl.name}\n\n"
+            f"_Gap-based primary storyline: the spine holds only gaps, so these are the "
+            f"{len(tl.connected_clips)} connected clips in lanes._\n\n"
+            f"| # | Name | Lane | Type | Start | Duration | Keywords |\n"
+            f"|---|------|------|------|-------|----------|----------|\n"
+        )
+        for i, c in enumerate(clips, 1):
+            kws = ", ".join(k.value for k in c.keywords) if c.keywords else "-"
+            result += (
+                f"| {i} | {c.name} | {c.lane} | {c.clip_type} | "
+                f"{format_timecode(c.timeline_start or c.offset)} | "
+                f"{format_duration(c.duration_seconds)} | {kws} |\n"
+            )
+        return _text_result(result)
     clips = tl.clips[:limit] if limit else tl.clips
     result = f"# Clips in {tl.name}\n\n| # | Name | Start | Duration | Keywords |\n|---|------|-------|----------|----------|\n"
     for i, c in enumerate(clips, 1):
@@ -2777,6 +2807,17 @@ async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
     else:
         result += "_No issues found!_"
 
+    if tl.is_gap_based:
+        # The gap and duplicate checks walk the spine, which here is empty by
+        # design. Without this line a 100 % reads as a clean bill for an edit
+        # the checks never looked at (issue #23).
+        result += (
+            f"\n\n> **Gap-based primary storyline**: the spine holds only gaps and the "
+            f"{len(tl.connected_clips)} connected clips carry the edit. Flash frames were "
+            f"checked on the connected clips; the gap and duplicate-source checks apply to "
+            f"the spine and did not evaluate them."
+        )
+
     result += "\n\n*Use `fix_flash_frames` and `fill_gaps` to automatically resolve issues.*"
     return _text_result(result)
 
@@ -3291,11 +3332,12 @@ async def handle_list_connected_clips(arguments: dict) -> Sequence[TextContent]:
         return _text_result("No connected clips found in timeline.")
 
     result = f"# Connected Clips in {tl.name}\n\n**Total**: {len(clips)}\n\n"
-    result += "| # | Name | Lane | Type | Duration | Parent | Role |\n"
-    result += "|---|------|------|------|----------|--------|------|\n"
+    result += "| # | Name | Lane | Type | Start | Duration | Parent | Role |\n"
+    result += "|---|------|------|------|-------|----------|--------|------|\n"
     for i, c in enumerate(clips, 1):
         result += (
             f"| {i} | {c.name} | {c.lane} | {c.clip_type} | "
+            f"{format_timecode(c.timeline_start or c.offset)} | "
             f"{format_duration(c.duration_seconds)} | {c.parent_clip_name} | "
             f"{c.role or '-'} |\n"
         )

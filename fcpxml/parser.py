@@ -24,8 +24,18 @@ from .safe_xml import safe_fromstring, safe_parse
 # Maximum FCPXML file size (50 MB) — prevents memory exhaustion from crafted files
 _MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
 
-# Tags that represent connected clip elements (includes 'title' for text overlays)
-_CONNECTED_CLIP_TAGS = ('asset-clip', 'clip', 'video', 'audio', 'title', 'ref-clip')
+# Tags that represent connected clip elements. Every %anchor_item; the DTD
+# allows under a clip or a gap that carries content: 'title' for text
+# overlays, 'mc-clip' / 'sync-clip' because a connected-clip multicam edit
+# (the FCP 12.3 export shape, issue #23) hangs every picture off a gap, and
+# 'caption' because it has no ref and no media but is still on a lane.
+_CONNECTED_CLIP_TAGS = (
+    'asset-clip', 'clip', 'video', 'audio', 'title', 'ref-clip',
+    'mc-clip', 'sync-clip', 'caption',
+)
+
+# Tags whose media path comes from a <media> resource rather than an <asset>.
+_MEDIA_REF_TAGS = ('mc-clip', 'ref-clip')
 
 
 class FCPXMLParser:
@@ -40,6 +50,7 @@ class FCPXMLParser:
     def __init__(self):
         self.resources: Dict[str, Dict[str, Any]] = {}
         self.formats: Dict[str, Dict[str, Any]] = {}
+        self.media: Dict[str, Dict[str, Any]] = {}
         self.frame_rate: float = 24.0
 
     def _tc(self, elem: ET.Element, attr: str, default: str = '0s') -> Timecode:
@@ -147,6 +158,71 @@ class FCPXMLParser:
                 'hasAudio': asset.get('hasAudio', '1') == '1',
             }
 
+        # <media> resources: a multicam (angles, each a small storyline) or a
+        # compound clip (a nested sequence). An mc-clip / ref-clip refs one of
+        # THESE, not an asset, so before this pass such a clip had no media
+        # path even when it sat directly on the spine (issue #23). Only the
+        # angle -> first asset ref is recorded; the asset's src is looked up
+        # at clip-parse time because resource order in the file is free.
+        for media in resources.findall('media'):
+            media_id = media.get('id', '')
+            multicam = media.find('multicam')
+            if multicam is not None:
+                angles = []
+                for angle in multicam.findall('mc-angle'):
+                    first = angle.find('asset-clip')
+                    angles.append((angle.get('angleID', ''), first.get('ref', '') if first is not None else ''))
+                self.media[media_id] = {'id': media_id, 'name': media.get('name', ''),
+                                        'kind': 'multicam', 'angles': angles}
+                continue
+            sequence = media.find('sequence')
+            if sequence is not None:
+                first = sequence.find('.//asset-clip')
+                self.media[media_id] = {'id': media_id, 'name': media.get('name', ''),
+                                        'kind': 'sequence',
+                                        'angles': [('', first.get('ref', '') if first is not None else '')]}
+
+    def _name_for(self, elem: ET.Element, fallback: str = 'Untitled') -> str:
+        """An element's own name, else the name of the resource it refs.
+
+        FCP leaves ``name`` off an mc-clip that still shows the multicam's
+        name in the timeline; showing "Untitled" for it hides the one label
+        the editor knows the clip by.
+        """
+        name = elem.get('name')
+        if name:
+            return name
+        ref = elem.get('ref', '')
+        source = self.media.get(ref) or self.resources.get(ref) or {}
+        return source.get('name') or fallback
+
+    def _media_path_for(self, elem: ET.Element) -> str:
+        """Resolve the source media an element refers to.
+
+        asset-clip / clip / video / audio ref an <asset>. mc-clip and ref-clip
+        ref a <media>; for a multicam the enabled angle (``<mc-source
+        srcEnable="all|video">``) decides which asset, and with no mc-source
+        the first angle is what FCP shows. A caption or title has no media.
+        """
+        ref = elem.get('ref', '')
+        if not ref:
+            return ''
+        if elem.tag in _MEDIA_REF_TAGS and ref in self.media:
+            angles = self.media[ref]['angles']
+            if not angles:
+                return ''
+            chosen = angles[0][1]
+            for source in elem.findall('mc-source'):
+                if source.get('srcEnable', 'all') in ('all', 'video'):
+                    wanted = source.get('angleID', '')
+                    for angle_id, asset_ref in angles:
+                        if angle_id == wanted:
+                            chosen = asset_ref
+                            break
+                    break
+            return self.resources.get(chosen, {}).get('src', '')
+        return self.resources.get(ref, {}).get('src', '')
+
     def _parse_project(self, project: ET.Element) -> Optional[Timeline]:
         """Parse a project element into a Timeline."""
         name = project.get('name', 'Untitled')
@@ -193,7 +269,8 @@ class FCPXMLParser:
                     current_offset += clip.duration.frames
             elif tag == 'gap':
                 gap_frames = self._tc(elem, 'duration').frames
-                self._parse_gap_connected_clips(elem, current_offset, timeline)
+                self._parse_gap_connected_clips(
+                    elem, current_offset, self._tc(elem, 'start').frames, timeline)
                 current_offset += gap_frames
             elif tag == 'transition':
                 transition = self._parse_transition(elem, current_offset)
@@ -202,11 +279,10 @@ class FCPXMLParser:
 
     def _parse_clip(self, elem: ET.Element, offset: int) -> Optional[Clip]:
         """Parse a clip element."""
-        name = elem.get('name', 'Untitled Clip')
+        name = self._name_for(elem, 'Untitled Clip')
         duration = self._tc(elem, 'duration')
         source_start = self._tc(elem, 'start')
-        ref = elem.get('ref', '')
-        media_path = self.resources.get(ref, {}).get('src', '')
+        media_path = self._media_path_for(elem)
 
         clip = Clip(
             name=name,
@@ -324,19 +400,23 @@ class FCPXMLParser:
 
         return result
 
-    def _iter_connected_elements(self, parent_elem: ET.Element, parent_name: str):
-        """Yield ``(element, lane, parent_name)`` tuples for connected clips.
+    def _iter_connected_elements(self, parent_elem: ET.Element, parent_name: str,
+                                 parent_offset: int, parent_start: int):
+        """Yield parsed :class:`ConnectedClip` objects hanging off ``parent_elem``.
 
         Shared iteration logic for both spine-clip and gap-attached connected
         clips — walks direct children with a ``lane`` attribute and
-        ``<storyline>`` wrappers, yielding parsed :class:`ConnectedClip`
-        objects without prescribing where they get stored.
+        ``<storyline>`` wrappers, without prescribing where the results get
+        stored. ``parent_offset`` is where the parent sits on the timeline
+        (frames) and ``parent_start`` is where its local clock begins; a
+        child's ``offset`` is written in that local clock, so its timeline
+        position is ``parent_offset + (offset - parent_start)``.
         """
         for child in parent_elem:
             lane = child.get('lane')
             if lane is not None and child.tag in _CONNECTED_CLIP_TAGS:
                 connected = self._parse_one_connected_clip(
-                    child, int(lane), parent_name)
+                    child, int(lane), parent_name, parent_offset, parent_start)
                 if connected:
                     yield connected
             elif child.tag == 'storyline':
@@ -344,42 +424,55 @@ class FCPXMLParser:
                 for sub_elem in child:
                     if sub_elem.tag in _CONNECTED_CLIP_TAGS:
                         connected = self._parse_one_connected_clip(
-                            sub_elem, lane_val, parent_name)
+                            sub_elem, lane_val, parent_name, parent_offset, parent_start)
                         if connected:
                             yield connected
 
     def _parse_connected_clips(self, parent_elem: ET.Element,
                                 parent_clip: Clip, timeline: Timeline):
         """Parse connected clips attached to a primary storyline clip."""
-        for connected in self._iter_connected_elements(parent_elem, parent_clip.name):
+        for connected in self._iter_connected_elements(
+                parent_elem, parent_clip.name,
+                parent_clip.start.frames, parent_clip.source_start.frames):
             parent_clip.connected_clips.append(connected)
             timeline.connected_clips.append(connected)
 
-    def _parse_gap_connected_clips(self, gap_elem: ET.Element,
-                                    gap_offset: int, timeline: Timeline):
+    def _parse_gap_connected_clips(self, gap_elem: ET.Element, gap_offset: int,
+                                    gap_start: int, timeline: Timeline):
         """Parse connected clips attached to gap elements."""
-        for connected in self._iter_connected_elements(gap_elem, f"gap@{gap_offset}"):
+        for connected in self._iter_connected_elements(
+                gap_elem, f"gap@{gap_offset}", gap_offset, gap_start):
             timeline.connected_clips.append(connected)
 
-    def _parse_one_connected_clip(self, elem: ET.Element, lane: int,
-                                   parent_name: str) -> Optional[ConnectedClip]:
+    def _parse_one_connected_clip(self, elem: ET.Element, lane: int, parent_name: str,
+                                   parent_offset: int = 0, parent_start: int = 0,
+                                   ) -> Optional[ConnectedClip]:
         """Parse a single connected clip element."""
-        name = elem.get('name', 'Untitled')
         duration = self._tc(elem, 'duration')
         start = self._tc(elem, 'start')
         offset = self._tc(elem, 'offset')
         ref = elem.get('ref', '')
-        media_path = self.resources.get(ref, {}).get('src', '')
+        media_path = self._media_path_for(elem)
         role = elem.get('audioRole', '') or elem.get('videoRole', '')
+        text = ''
+        if elem.tag == 'caption':
+            text = ''.join(t.text or '' for t in elem.iter('text')).strip()
+        name = self._name_for(elem, text or 'Untitled')
+        timeline_start = Timecode(
+            frames=parent_offset + offset.frames - parent_start,
+            frame_rate=self.frame_rate,
+        )
 
         connected = ConnectedClip(
             name=name, start=start, duration=duration,
             lane=lane, offset=offset, source_start=start,
             media_path=media_path, clip_type=elem.tag, role=role,
             ref_id=ref, parent_clip_name=parent_name,
+            timeline_start=timeline_start, text=text,
         )
 
-        connected.markers.extend(self._collect_markers(elem, offset.frames, start.frames))
+        connected.markers.extend(
+            self._collect_markers(elem, timeline_start.frames, start.frames))
 
         for keyword_elem in elem.findall('keyword'):
             keyword = self._parse_keyword(keyword_elem)

@@ -69,8 +69,9 @@ async def _cuts_per_clip(tl, args: dict):
     cache: dict = {}
     found: list[tuple] = []
     skipped: list[tuple[str, str]] = []
-    prog = _progress.start(total=len(tl.clips))
-    for clip in tl.clips:
+    clips = tl.media_clips()
+    prog = _progress.start(total=len(clips))
+    for clip in clips:
         await prog.step(f"scenes: {clip.name}")
         if clip_filter and clip.name != clip_filter:
             continue

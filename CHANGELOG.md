@@ -2,7 +2,34 @@
 
 ## [Unreleased]
 
-## [Unreleased]
+## [0.23.0] - 2026-09-04
+
+### Fixed
+- **A gap-based primary storyline read as an empty project** (#23, reported
+  by @tomartmedia). Final Cut Pro exports every connected-clip multicam edit
+  with a spine of `<gap>` elements and the picture hanging off them in
+  lanes. Four things went wrong at once: `mc-clip` and `caption` were not in
+  the connected-clip tag list, so both were dropped; `<media>` resources
+  (multicam and compound) were never indexed, so an `mc-clip` had no media
+  path even when it sat on the spine; connected clips under a gap were
+  positioned in the gap's local clock (an `offset="3600s"` clip reported as
+  an hour in, or dropped); and every media tool walked `tl.clips` alone.
+  `list_clips` returned an empty table, `analyze_timeline` counted zero
+  clips, `validate_timeline` gave a 100 % health score to an edit it had not
+  looked at, and `detect_media_silence` / `detect_scenes` opened zero files.
+  Now: both tags parse as connected clips; the parser indexes `<media>` and
+  resolves an `mc-clip` to the angle its `<mc-source>` enables (first angle
+  when there is none) and a `ref-clip` to its sequence's first asset; an
+  unnamed `mc-clip` takes the multicam's name instead of "Untitled"; a
+  caption carries its text; connected clips gain `timeline_start` (parent
+  offset + local offset − parent start) and markers on them are placed with
+  it; `Timeline.media_clips()` presents spine clips plus every connected
+  clip that has media as timeline-positioned `Clip`s, and `media`, `scenes`,
+  `find` and `index` all read that view. `list_clips` renders the connected
+  clips (with a Lane column) when the spine is gaps only, `analyze_timeline`
+  says why and reports the connected-clip count, `list_connected_clips`
+  gains a Start column, and `validate_timeline` states which checks did and
+  did not cover a gap-based edit rather than declaring it clean.
 
 ### Changed
 - README: Quick Start moved directly under the demo, above the essay sections, so an install command is on the first screen. Roadmap catches up through 0.22.1 (the watch-folder round-trip shipped in 0.17.0 but was still unchecked; 0.20/0.21/0.22 were missing). Known Issues keeps the two rows that still bite and folds the three long-fixed ones into a disclosure.

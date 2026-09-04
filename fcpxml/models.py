@@ -692,10 +692,35 @@ class ConnectedClip:
     parent_clip_name: str = ""
     markers: List[Marker] = field(default_factory=list)
     keywords: List[Keyword] = field(default_factory=list)
+    # Where the clip sits on the TIMELINE. ``start`` above is the source
+    # in-point and ``offset`` is written in the parent's local clock, so
+    # neither says where the picture appears; the parser resolves this one.
+    timeline_start: Optional[Timecode] = None
+    # A <caption> has no ref and no media; its content is its text.
+    text: str = ""
 
     @property
     def duration_seconds(self) -> float:
         return self.duration.seconds
+
+    def as_clip(self) -> "Clip":
+        """This connected clip in :class:`Clip` shape, positioned on the timeline.
+
+        The media tools were written against spine clips, whose ``start`` is
+        a timeline position. Presenting a connected clip through the same
+        shape lets them map silence, scenes and transcript spans onto the
+        timeline without learning a second coordinate system.
+        """
+        return Clip(
+            name=self.name,
+            start=self.timeline_start if self.timeline_start is not None else self.offset,
+            duration=self.duration,
+            source_start=self.source_start,
+            media_path=self.media_path,
+            audio_role=self.role,
+            markers=list(self.markers),
+            keywords=list(self.keywords),
+        )
 
 
 @dataclass
@@ -751,6 +776,30 @@ class Timeline:
     @property
     def total_clips(self) -> int:
         return len(self.clips)
+
+    @property
+    def is_gap_based(self) -> bool:
+        """True when the spine holds no clips but content hangs off it in lanes.
+
+        This is how Final Cut Pro exports a connected-clip multicam edit
+        (issue #23) and a music video cut against a locked track (issue #16):
+        every spine handler sees an empty storyline and reports nothing.
+        """
+        return not self.clips and bool(self.connected_clips)
+
+    def media_clips(self) -> List[Clip]:
+        """Every clip that references source media, positioned on the timeline.
+
+        Spine clips first, then connected clips that carry a media path (an
+        ``mc-clip`` resolved to its enabled angle, a connected ``asset-clip``),
+        each in :class:`Clip` shape. Titles and captions have no media and
+        are left out. This is the list the media tools (silence, scenes,
+        transcript, index, find) walk, so a gap-based edit opens the same
+        files a spine-based one would.
+        """
+        out = list(self.clips)
+        out.extend(c.as_clip() for c in self.connected_clips if c.media_path)
+        return out
 
     @property
     def total_cuts(self) -> int:

@@ -82,7 +82,7 @@ def _contexts(filepath: str, clip_filter=None):
     for c in RoughCutGenerator(filepath).clips:
         refs.setdefault(c["name"], c["ref"])
     out, skipped = [], []
-    for clip in tl.clips:
+    for clip in tl.media_clips():
         if clip_filter and clip.name != clip_filter:
             continue
         media_path = media_src_to_path(clip.media_path or "")

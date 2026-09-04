@@ -56,7 +56,7 @@ async def handle_index_status(args: dict):
 
 def _sources(timeline) -> list[str]:
     seen: list[str] = []
-    for clip in timeline.clips:
+    for clip in timeline.media_clips():
         media_path = media_src_to_path(clip.media_path or "")
         if media_path and media_path not in seen:
             seen.append(media_path)
