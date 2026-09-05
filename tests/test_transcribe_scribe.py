@@ -230,3 +230,20 @@ def test_multipart_still_carries_the_file_bytes_unchanged(tmp_path):
     media.write_bytes(b"RIFF0000")
     body, _ctype = tr._multipart({}, "file", media)
     assert b"RIFF0000" in body
+
+
+def test_filename_params_punctuation_only_stem_is_not_a_name():
+    """Underscores surviving the ASCII filter must not become the fallback.
+
+    Found by running the shipped 0.24.1 against real multilingual clip names:
+    "зима_общий_план.mp4" produced filename="__.mp4", and every Russian clip in
+    a folder collapsed onto the same fallback.
+    """
+    assert 'filename="upload.mp4"' in tr._filename_params("зима_общий_план.mp4")
+    assert 'filename="upload.mp4"' in tr._filename_params("تفاصيل_الحذاء.mp4")
+
+
+def test_filename_params_keeps_a_mixed_stem_that_has_real_characters():
+    """A stem with actual ASCII alphanumerics still keeps them."""
+    params = tr._filename_params("采访_01_晨间外景.mp4")
+    assert 'filename="_01_.mp4"' in params

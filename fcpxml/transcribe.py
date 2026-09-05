@@ -159,7 +159,12 @@ def _filename_params(name: str) -> str:
     stem, dot, suffix = name.rpartition(".")
     if not dot:
         stem, suffix = name, ""
-    ascii_stem = "".join(c for c in stem if (c.isascii() and c.isalnum()) or c in "-_") or "upload"
+    ascii_stem = "".join(c for c in stem if (c.isascii() and c.isalnum()) or c in "-_")
+    # Punctuation alone is not a name. A stem of "зима_общий_план" survives the
+    # filter as "__", and every Russian clip in a folder collapses onto the same
+    # fallback. Require at least one alphanumeric before trusting what is left.
+    if not any(c.isalnum() for c in ascii_stem):
+        ascii_stem = "upload"
     ascii_suffix = "".join(c for c in suffix if c.isascii() and c.isalnum())
     fallback = f"{ascii_stem}.{ascii_suffix}" if ascii_suffix else ascii_stem
     params = f'filename="{fallback}"'

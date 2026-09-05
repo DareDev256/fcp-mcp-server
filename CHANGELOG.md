@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+- **The ASCII fallback filename could be punctuation and nothing else.** The
+  filter that builds the `filename` parameter kept `-` and `_`, so a stem with
+  no ASCII letters or digits survived as a name made entirely of underscores:
+  `зима_общий_план.mp4` became `filename="__.mp4"`, and every Russian clip in a
+  folder collapsed onto the same fallback. The `upload` substitution only fired
+  when the filtered stem was completely empty, which punctuation prevented. It
+  now requires at least one alphanumeric character. `filename*` was always
+  correct, so this only affected receivers that ignore it.
+
+  Found by running the shipped 0.24.1 against ten real multilingual clip names
+  rather than the test fixtures, which is a reminder that fixtures agree with
+  whoever wrote them.
+
 ## [0.24.1] - 2026-09-05
 
 ### Fixed
