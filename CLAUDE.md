@@ -163,6 +163,53 @@ CI runs both on every push to main. If either fails, the commit gets an X on Git
 
 1788 tests across 68 files (1781 pass, 7 skip without ffmpeg/FCP/PySceneDetect present; on mcp 2.x it is 1782 pass / 6 skip; with `FCP_MCP_INDEX=off` it is 1757 pass / 31 skip — the skips being tests OF the cache). v0.24.0 adds `test_gap_reporting.py` (the reporting tools and the preview on a gap-based edit, each with a spine-based control, plus the sub-frame silence floor). v0.23.0 adds `test_gap_multicam.py` (issue #23: mc-clip/caption under a gap spine, `<media>` angle resolution via `mc-source`, timeline_start against the gap's local clock, the `media_clips()` view, and that `detect_media_silence`/`detect_scenes` open the angle files). v0.20.0 adds transition and lane coverage to `test_filtergraph.py` (xfade placement, the unplaceable/missing/occupied/shortened reports, the crossfade-shifted overlay window, lane stacking order) and to `test_render.py` (real ffmpeg accepts both chains; the overlaid frame is compared against the same frame of a spine-only render, so a graph that composites nothing fails). v0.19.0 adds `test_journal.py` + `test_journal_wiring.py` (hash-checked undo, never-deletes, one ledger per folder), `test_review_gate.py`, `test_organize.py` + `test_organize_group.py` (DTD order of inserted `<keyword>`/`<rating>`, organize_auto never computes), `test_diversity_constraint.py` (with its mutation check), `test_find.py`, `test_vlm.py` (fake `mlx_vlm` records the env at import; sockets patched to raise) and `test_find_group.py` (never transcribes, never downloads, live captions stored once). v0.18.0 adds `test_index.py` (schema, invalidation on a touched source, corrupt-file rebuild, dir mode 700), `test_index_wiring.py` (second call skips ffmpeg/whisper; index off hits them every time), `test_index_group.py`, `test_progress.py` (both SDKs), `test_scenes.py` + `test_scenes_group.py` (synthesised colour-bar clips; real PySceneDetect when installed), `test_transcript_pack.py` + `test_transcript_pack_handler.py`, `test_transcribe_scribe.py` (urlopen patched throughout; the key-leak guard is mutation-checked), and `test_version.py`. Beyond the pre-existing suites, v0.17.0 added: `test_filtergraph.py` (Timeline -> ffmpeg graph, exact Fractions at NTSC rates, the Clip/.start vs ConnectedClip/.offset distinction, transition substitution reporting), `test_render.py` (proxy render plus the artifact duration read-back and its mutation check), `test_visual.py` (filmstrip+waveform from source media, silent-source fallback, and the mutation check that caught the invisible white-on-white waveform), `test_watchfolder.py` (export detection, content digesting, bundle handling), `test_bridges.py` (loopback-only probing, session caching, describe() honesty), `test_preview_group.py` and `test_watch_group.py` (MCP wiring, UNVERIFIED labelling), `test_edl_import.py` (the real video-use schema, round-tripped against the literal from their own test file), `test_autopush.py`, and `test_tool_seam.py` (the tools/ registry, the merge guard, and the server binding). Tests use `examples/sample.fcpxml` and `examples/music-video.fcpxml` as fixture data plus inline XML and synthesised ffmpeg media. Tests create temp files and clean up after.
 
+## Releasing — the tag is not the release
+
+A version bump that is committed and not tagged is a lie in three files. A tag
+that is pushed and not verified on PyPI is a lie to every user. Five Publish
+runs failed silently between v0.18.0 and v0.22.0 while the repo read as
+shipped, and the packaging bug that made four consecutive releases uninstall-
+able was found by a user, not by us. So the release is one unbroken sequence,
+and it is not done in the middle.
+
+1. **Bump all three version locations.** `pyproject.toml`, `server.py`
+   `__version__`, and `server.json` (twice). `tests/test_version.py` is the
+   only thing that catches the third; run it, do not eyeball it.
+2. **Write the CHANGELOG entry before tagging**, and mark it for an editor
+   mid-cut: `Added` means new operations only and is safe to take at any
+   point; `Changed`/`Fixed` means the output of an existing operation moved.
+   An existing operation does not change its output in a patch release. If
+   behaviour has to change it takes its own minor version and says so.
+3. **Run `ruff check .` as well as pytest.** CI lints and the local pytest
+   run does not, so a green suite here is not a green run there. A lint-only
+   failure on `main` still puts an X on the commit a user sees.
+4. **Tag, push the tag, then WATCH the Publish run.** `gh run list
+   --workflow=Publish`. Walking away at the push is how five failures went
+   unnoticed. If it is going to fail, cancel before it uploads: a PyPI
+   version number can never be reused.
+5. **Verify the artifact, not the workflow's green tick.** A successful
+   publish job only proves an upload happened. Install the published wheel
+   into a clean venv and start the server:
+
+   ```bash
+   uv venv /tmp/rel && uv pip install --python /tmp/rel/bin/python "fcp-mcp-server==<version>"
+   /tmp/rel/bin/python -c "import server, tools; print(server.__version__)"
+   ```
+
+   That import is the exact check that would have caught v0.19.2 through
+   v0.21.0, where every install succeeded and every server then refused to
+   start. Serving a file is not the same as the file working. Run it from
+   outside this directory: inside the repo, `import server` finds the working
+   copy and passes no matter what PyPI holds.
+
+   When checking whether PyPI has the version, do NOT read
+   `https://pypi.org/pypi/fcp-mcp-server/json`. That aggregate endpoint is
+   CDN-cached and reported 0.24.0 as latest for minutes after 0.24.1's files
+   were live. Read `https://pypi.org/simple/fcp-mcp-server/`, or the
+   version-specific `.../pypi/fcp-mcp-server/0.24.1/json`, both of which are
+   keyed per version. A stale reader that says "not published" will send you
+   chasing a publish that already worked.
+
 ## FCPXML Gotchas
 
 - FCPXML uses rational time everywhere: `"3600/2400s"` = 1.5 seconds
