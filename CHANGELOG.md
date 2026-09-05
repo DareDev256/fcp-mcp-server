@@ -2,13 +2,36 @@
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-09-05
+
+### Fixed
+- **A Chinese media filename went into an HTTP header as raw UTF-8.** The
+  Scribe upload built `Content-Disposition` with `filename="{name}"` and
+  encoded the whole line, so a non-Latin clip name travelled as raw bytes in
+  a field the spec defines as ASCII. What happens next is the receiving
+  server's business — rejection, mojibake, or a truncated name the transcript
+  then carries — which is the worst shape a bug can take: remote, silent, and
+  indistinguishable from a transcription fault. `_filename_params` now emits
+  both parameters RFC 6266/2231 asks for: an ASCII `filename` any parser can
+  read, and `filename*=UTF-8''…` carrying the real name percent-encoded. The
+  control test decodes the header region as ASCII and fails on the old form;
+  mutation-checked by restoring the naive line and confirming three tests go
+  red.
+
+  Found while reading Marty Hou's account of a documentary cut whose clip,
+  project and folder names are all in Chinese. Not yet confirmed as the
+  failure he will hit, which is what the test corpus is for.
+
 ### Changed
-- **The v0.21.1 credit now records how the diagnosis was actually produced.**
-  Marty Hou wrote back to say the honest version is that Claude did the
-  diagnosis and he forwarded it, and that he would rather that be recorded
-  than have it recorded wrong. The README line now says so. The credit stands:
-  four releases were broken, anyone could have run that diagnosis, and he is
-  the one who ran it and wrote in.
+- **Releases now declare whether they change behaviour.** Every entry from
+  here is marked `Added` (new operations only — safe to take at any point) or
+  `Changed`/`Fixed` where the output of an existing operation moves. An
+  operation that already exists will not change its output in a patch
+  release; if behaviour has to change it takes its own minor version and says
+  so here. This exists because editors do not upgrade when a release ships —
+  they upgrade at episode boundaries, and a tool whose output shifts mid-cut
+  is indistinguishable from a decision they made two days earlier. Marty
+  Hou's framing, adopted verbatim.
 
 ## [0.24.0] - 2026-09-04
 

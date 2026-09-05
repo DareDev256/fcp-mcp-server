@@ -177,3 +177,56 @@ class TestThroughTheServer:
         assert "S0 Hello world" in text
         assert "(laughter)" in text
         assert "S1 yes" in text
+
+
+# ── _filename_params: non-Latin media names ─────────────────────────
+#
+# Reported in substance by Marty Hou, a documentary editor whose clip,
+# project and folder names are all in Chinese. The multipart builder wrote
+# the media filename straight into Content-Disposition, so a Chinese name
+# went on the wire as raw UTF-8 bytes in a header field that is defined as
+# ASCII. What a server does with that is its own business, which is the
+# problem: the failure is remote, silent, and looks like a transcript bug.
+
+
+def test_filename_params_ascii_name_unchanged():
+    """An ASCII name emits one plain parameter and no filename*."""
+    params = tr._filename_params("interview_01.wav")
+    assert params == 'filename="interview_01.wav"'
+
+
+def test_filename_params_non_latin_is_rfc2231_encoded():
+    """A Chinese name travels percent-encoded, with an ASCII fallback."""
+    params = tr._filename_params("采访_01.wav")
+    assert "filename*=UTF-8''%E9%87%87%E8%AE%BF_01.wav" in params
+    assert 'filename="_01.wav"' in params
+    assert "采访" not in params
+
+
+def test_filename_params_all_non_ascii_stem_keeps_a_usable_name():
+    """A name with no ASCII stem left still names something."""
+    params = tr._filename_params("采访.wav")
+    assert 'filename="upload.wav"' in params
+
+
+def test_multipart_header_is_ascii_with_a_chinese_filename(tmp_path):
+    """The control: the header bytes must survive an ASCII decode.
+
+    This is the assertion the old code failed. Decoding the header region as
+    ASCII is what a strict receiver effectively does; if the name is still in
+    there raw, this raises.
+    """
+    media = tmp_path / "采访_01.wav"
+    media.write_bytes(b"RIFF0000")
+    body, _ctype = tr._multipart({"model_id": "scribe_v1"}, "file", media)
+    header = body.split(b"\r\n\r\nRIFF")[0]
+    header.decode("ascii")  # raises UnicodeDecodeError on the pre-fix output
+    assert b"filename*=UTF-8''%E9%87%87%E8%AE%BF_01.wav" in header
+
+
+def test_multipart_still_carries_the_file_bytes_unchanged(tmp_path):
+    """Encoding the name must not touch the payload."""
+    media = tmp_path / "采访_01.wav"
+    media.write_bytes(b"RIFF0000")
+    body, _ctype = tr._multipart({}, "file", media)
+    assert b"RIFF0000" in body

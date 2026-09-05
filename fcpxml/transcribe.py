@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,34 @@ def is_diarized(data: dict) -> bool:
     return any(w.get("speaker") for w in data.get("words", []))
 
 
+def _filename_params(name: str) -> str:
+    """Render the ``filename`` parameters for a Content-Disposition header.
+
+    A header is not a place for raw UTF-8. Writing a Chinese clip name
+    straight into ``filename="..."`` puts non-ASCII bytes on the wire in a
+    field the spec says is ASCII, and what happens next belongs to whichever
+    server receives it: rejection, mojibake, or a truncated name that the
+    transcript then carries. RFC 6266/2231 answers this with two parameters —
+    an ASCII ``filename`` any parser can read, and a ``filename*`` carrying
+    the real name percent-encoded as UTF-8. Senders emit both; receivers that
+    understand ``filename*`` prefer it, and the rest still get something.
+
+    The ASCII fallback keeps the extension, because that is the part a
+    receiver is most likely to act on. A name that is entirely non-ASCII
+    falls back to ``upload`` plus its suffix rather than an empty string.
+    """
+    stem, dot, suffix = name.rpartition(".")
+    if not dot:
+        stem, suffix = name, ""
+    ascii_stem = "".join(c for c in stem if (c.isascii() and c.isalnum()) or c in "-_") or "upload"
+    ascii_suffix = "".join(c for c in suffix if c.isascii() and c.isalnum())
+    fallback = f"{ascii_stem}.{ascii_suffix}" if ascii_suffix else ascii_stem
+    params = f'filename="{fallback}"'
+    if not name.isascii():
+        params += f"; filename*=UTF-8''{quote(name, safe='')}"
+    return params
+
+
 def _multipart(fields: dict, file_field: str, file_path: Path) -> tuple[bytes, str]:
     boundary = "----fcpmcp" + uuid.uuid4().hex
     ctype = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
@@ -147,7 +176,7 @@ def _multipart(fields: dict, file_field: str, file_path: Path) -> tuple[bytes, s
         out += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
     out += (
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; "
-        f"filename=\"{file_path.name}\"\r\nContent-Type: {ctype}\r\n\r\n"
+        f"{_filename_params(file_path.name)}\r\nContent-Type: {ctype}\r\n\r\n"
     ).encode()
     out += file_path.read_bytes()
     out += f"\r\n--{boundary}--\r\n".encode()

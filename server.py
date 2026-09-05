@@ -57,7 +57,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.24.0"
+__version__ = "0.24.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 
