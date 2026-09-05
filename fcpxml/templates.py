@@ -280,8 +280,8 @@ def apply_template(
             asset_map[slot_name] = aid
 
     # Library/event/project structure
-    library = ET.SubElement(root, 'library',
-                            location="file:///Users/editor/Movies/Template.fcpbundle/")
+    # No `location` — see the note in fcpxml/edl.py.
+    library = ET.SubElement(root, 'library')
     event = ET.SubElement(library, 'event',
                           name=template_name, uid=str(uuid.uuid4()).upper())
     project_elem = ET.SubElement(event, 'project',

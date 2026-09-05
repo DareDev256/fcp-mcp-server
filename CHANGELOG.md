@@ -2,50 +2,73 @@
 
 ## [Unreleased]
 
-### Fixed
-- **The ASCII fallback filename could be punctuation and nothing else.** The
-  filter that builds the `filename` parameter kept `-` and `_`, so a stem with
-  no ASCII letters or digits survived as a name made entirely of underscores:
-  `зима_общий_план.mp4` became `filename="__.mp4"`, and every Russian clip in a
-  folder collapsed onto the same fallback. The `upload` substitution only fired
-  when the filtered stem was completely empty, which punctuation prevented. It
-  now requires at least one alphanumeric character. `filename*` was always
-  correct, so this only affected receivers that ignore it.
+## [0.25.0] - 2026-09-05
 
-  Found by running the shipped 0.24.1 against ten real multilingual clip names
-  rather than the test fixtures, which is a reminder that fixtures agree with
-  whoever wrote them.
-
-## [0.24.1] - 2026-09-05
-
-### Fixed
-- **A Chinese media filename went into an HTTP header as raw UTF-8.** The
-  Scribe upload built `Content-Disposition` with `filename="{name}"` and
-  encoded the whole line, so a non-Latin clip name travelled as raw bytes in
-  a field the spec defines as ASCII. What happens next is the receiving
-  server's business — rejection, mojibake, or a truncated name the transcript
-  then carries — which is the worst shape a bug can take: remote, silent, and
-  indistinguishable from a transcription fault. `_filename_params` now emits
-  both parameters RFC 6266/2231 asks for: an ASCII `filename` any parser can
-  read, and `filename*=UTF-8''…` carrying the real name percent-encoded. The
-  control test decodes the header region as ASCII and fails on the old form;
-  mutation-checked by restoring the naive line and confirming three tests go
-  red.
-
-  Found while reading Marty Hou's account of a documentary cut whose clip,
-  project and folder names are all in Chinese. Not yet confirmed as the
-  failure he will hit, which is what the test corpus is for.
+**Behaviour change.** `push_to_fcp` can now refuse where it previously returned
+success, and generated documents no longer carry a `<library location>`. If you
+pass an explicit `library_location`, nothing about your workflow changes. If you
+relied on the default, it was never importing anything — see below.
 
 ### Changed
-- **Releases now declare whether they change behaviour.** Every entry from
-  here is marked `Added` (new operations only — safe to take at any point) or
-  `Changed`/`Fixed` where the output of an existing operation moves. An
-  operation that already exists will not change its output in a patch
-  release; if behaviour has to change it takes its own minor version and says
-  so here. This exists because editors do not upgrade when a release ships —
-  they upgrade at episode boundaries, and a tool whose output shifts mid-cut
-  is indistinguishable from a decision they made two days earlier. Marty
-  Hou's framing, adopted verbatim.
+- **`push_to_fcp` reported success for an import that never happened.** With no
+  `library_location`, no `library location` import option was written at all, so
+  Final Cut Pro received a document with no target, imported nothing, and the
+  tool answered "Sent to Final Cut Pro". Reproduced on FCP 12.3: the Apple event
+  was delivered, three open libraries were untouched, and the call returned
+  cleanly. `osascript` exiting 0 means an Apple event was *delivered*; it has
+  never meant an import occurred.
+
+  `push_to_fcp` now resolves a real target before sending, in this order:
+  an explicit `library_location`; else the one open library when there is
+  exactly one; else it **refuses**, naming every open library and the argument
+  to pass. It does not guess among several — AppleScript orders `libraries` by
+  internal application order, not by which is frontmost, so a silent pick lands
+  in the wrong library some of the time, and for an editor that means clips
+  appearing in a client project they were not working on. It never invents a
+  `~/Movies/<name>.fcpbundle` default either: creating a library is a side
+  effect nobody asked for, and doing it on every push leaves a Movies folder
+  full of libraries. Library creation stays an explicit argument.
+
+- **The import is now verified, not assumed.** After the Apple event, the tool
+  polls until the document's `<project>` names appear in the target library, and
+  raises `ImportNotObservedError` if they never do (`verify_timeout`, default
+  60s; `verify=false` opts out). Project-name presence is the only observable
+  that separates "imported" from "silently did nothing" — a bundle can be
+  created and the import still die on a media-identity collision, which
+  `suppress warnings=1` swallows. When a project name already existed in the
+  target, the tool reports NOT VERIFIED rather than claiming success on
+  evidence that proves nothing.
+
+- **Generated documents no longer fabricate `<library location>`.** Every file
+  the tool has ever produced carried a hardcoded
+  `file:///Users/editor/Movies/...` — a path that exists on nobody's machine.
+  The DTD marks the attribute `#IMPLIED`, so it is now omitted unless a caller
+  supplies one. Four generators, `examples/sample.fcpxml`, and the writer test
+  that asserted the fabricated value and thereby locked the defect in place.
+  Old files already on disk are repaired on the way through: the `_import` copy
+  gets the resolved target, and your original is never rewritten.
+
+- **`list_fcp_libraries` now returns each library's `file` path.** The import
+  check matches the target on path, not display name — two libraries can share
+  a name and only one is the target. Note `POSIX path of (file of lib)` raises
+  `-1700` on FCP 12.3, because `file of lib` answers an HFS alias; coerce
+  `as text` first.
+
+### Fixed
+- **The stale FCP 12.2 finding that caused this.** The module docstring and the
+  tool description both promised that a missing library location raises a modal
+  "Open Library" picker which blocks the Apple event. On 12.3 there is no picker
+  and no block — the import is a silent no-op. The 12.2 note is replaced rather
+  than appended beside, and dated.
+
+- **An ASCII fallback filename made only of punctuation.** The filter building
+  the `filename` parameter kept `-` and `_`, so a stem with no ASCII
+  alphanumerics survived as underscores: `зима_общий_план.mp4` became
+  `filename="__.mp4"` and every Russian clip in a folder collapsed onto one
+  fallback. Now requires at least one alphanumeric. `filename*` was always
+  correct, so this only reached receivers that ignore it. Found by running the
+  shipped 0.24.1 against ten real multilingual clip names instead of the
+  fixtures.
 
 ## [0.24.0] - 2026-09-04
 

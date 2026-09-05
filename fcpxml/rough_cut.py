@@ -397,8 +397,9 @@ class RoughCutGenerator:
                 )
 
         # Create library structure
-        library = ET.SubElement(root, 'library',
-            location="file:///Users/editor/Movies/RoughCut.fcpbundle/")
+        # No `location` — see the note in fcpxml/edl.py; the import target is
+        # set at push time via <import-options>.
+        library = ET.SubElement(root, 'library')
         event = ET.SubElement(library, 'event',
             name="Rough Cut", uid=str(uuid.uuid4()).upper())
         project = ET.SubElement(event, 'project',

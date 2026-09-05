@@ -3613,8 +3613,8 @@ class FCPXMLWriter:
                 width=str(timeline.width), height=str(timeline.height))
             resource_map['_format'] = format_id
 
-        library = ET.SubElement(root, 'library',
-            location=f"file:///Users/editor/Movies/{project.name}.fcpbundle/")
+        # No `location` — see the note in fcpxml/edl.py.
+        library = ET.SubElement(root, 'library')
         event = ET.SubElement(library, 'event', name=project.name, uid=self._generate_uid())
 
         for timeline in project.timelines:

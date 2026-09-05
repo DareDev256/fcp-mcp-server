@@ -57,7 +57,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.24.1"
+__version__ = "0.25.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -2002,15 +2002,17 @@ def _legacy_tool_list() -> list[Tool]:
         # ===== v0.9.0 LIVE MODE (macOS + Final Cut Pro required) =====
         Tool(
             name="push_to_fcp",
-            description="LIVE: send an FCPXML file into the running Final Cut Pro with zero clicks (official Open Document Apple event). Creates/targets a library via import-options. Launches FCP if needed. macOS-only; first use triggers an Automation permission prompt. For true zero-click, pass a library_location ending in .fcpbundle (a new path is auto-created); omitting it makes FCP show a modal library picker.",
+            description="LIVE: send an FCPXML file into the running Final Cut Pro with zero clicks (official Open Document Apple event), then VERIFY the import actually landed. macOS-only; first use triggers an Automation permission prompt. Pass library_location ending in .fcpbundle to target a library (a path that does not exist yet is created by FCP). Omit it and the target is inferred only when exactly one library is open; with several open, or none, the call refuses and names them rather than guessing. Verification polls FCP until the document's project names appear in the target, so the call can block up to verify_timeout (default 60s); pass verify=false to skip it.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "confirm_unreviewed": _CONFIRM_UNREVIEWED_SCHEMA,
                     "filepath": {"type": "string", "description": "Path to FCPXML file or .fcpxmld bundle to import"},
-                    "library_location": {"type": "string", "description": "Target .fcpbundle library path (auto-created if it doesn't exist; the extension is normalized to .fcpbundle). Omit to import into the active library, but note FCP then shows a modal 'Open Library' picker that blocks until answered"},
+                    "library_location": {"type": "string", "description": "Target .fcpbundle library path (a path that does not exist yet is created by FCP; the extension is normalized to .fcpbundle). Omit it and the target is inferred ONLY when exactly one library is open; with several open, or with FCP closed, the call refuses and names the open libraries rather than guessing"},
                     "suppress_warnings": {"type": "boolean", "description": "Suppress non-fatal import warning dialogs", "default": True},
                     "copy_assets": {"type": "boolean", "description": "Copy media into the library (true) or link in place (false). Omit for FCP default"},
+                    "verify": {"type": "boolean", "description": "After sending, poll FCP until the document's project names appear in the target library, and raise if they never do. osascript returning 0 only means the Apple event was delivered", "default": True},
+                    "verify_timeout": {"type": "number", "description": "Seconds to wait for the import to be observed before raising. The call blocks for up to this long", "default": 60},
                 },
                 "required": ["filepath"]
             }
@@ -3580,14 +3582,29 @@ async def handle_push_to_fcp(arguments: dict) -> Sequence[TextContent]:
         suppress_warnings=arguments.get("suppress_warnings", True),
         copy_assets=arguments.get("copy_assets"),
         import_copy_path=import_copy,
+        verify=arguments.get("verify", True),
+        verify_timeout=arguments.get("verify_timeout", 60.0),
     )
+    # Only ever claim what was observed. Until v0.25.0 this said "Sent to
+    # Final Cut Pro ... import happens in-app" whether or not anything was
+    # imported, which is how a silent no-op read as success.
+    if result.get("verified"):
+        headline = (
+            f"Imported into Final Cut Pro: "
+            f"{', '.join(result['expected_projects'])}"
+        )
+    else:
+        headline = f"Sent to Final Cut Pro: {result['sent']}"
     lines = [
-        f"Sent to Final Cut Pro: {result['sent']}",
-        f"FCP {'was launched' if result['launched_fcp'] else 'was already running'} — "
-        f"import happens in-app (libraries/events are created or merged per import-options).",
+        headline,
+        f"Target library: {result['library_location']}",
+        f"FCP {'was launched' if result['launched_fcp'] else 'was already running'}.",
     ]
-    if arguments.get("library_location"):
-        lines.append(f"Target library: {arguments['library_location']}")
+    if result.get("verified") is None:
+        lines.append(
+            "NOT VERIFIED: "
+            + result.get("verification_note", "verification was skipped")
+        )
     lines.append(
         "Note: Apple offers no programmatic export — to round-trip edits "
         "back, use File > Export XML in FCP."

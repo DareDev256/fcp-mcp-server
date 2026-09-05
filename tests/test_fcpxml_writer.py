@@ -174,11 +174,19 @@ def test_build_fcpxml_has_format_resource(writer, basic_project):
 
 
 def test_build_fcpxml_has_library(writer, basic_project):
-    """FCPXML should contain a <library> element."""
+    """FCPXML should contain a <library> element, with NO fabricated location.
+
+    Until v0.25.0 the writer stamped every generated file with
+    file:///Users/editor/Movies/<name>.fcpbundle — a path that exists on
+    nobody's machine — and this test asserted the fabricated value, so it
+    locked the defect in place. The DTD marks `location` #IMPLIED. The real
+    import target is set at push time via <import-options>.
+    """
     root = writer._build_fcpxml(basic_project)
     library = root.find("library")
     assert library is not None
-    assert "Test Project" in library.get("location", "")
+    assert library.get("location") is None
+    assert "/Users/editor" not in ET.tostring(root, encoding="unicode")
 
 
 def test_build_fcpxml_has_event(writer, basic_project):

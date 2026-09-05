@@ -151,9 +151,11 @@ def edl_to_fcpxml(
             duration=TimeValue.from_seconds(float(end), fps).to_fcpxml(),
         )
 
-    library = ET.SubElement(
-        root, 'library', location="file:///Users/editor/Movies/EDLImport.fcpbundle/"
-    )
+    # No `location`: the DTD marks it #IMPLIED, and a fabricated path is worse
+    # than none. Every generated file used to carry a hardcoded
+    # /Users/editor/Movies/... that exists on nobody's machine. The real import
+    # target is set at push time via <import-options>, not by this hint.
+    library = ET.SubElement(root, 'library')
     event = ET.SubElement(library, 'event', name=name, uid=str(uuid.uuid4()).upper())
     project = ET.SubElement(
         event, 'project', name=name, uid=str(uuid.uuid4()).upper(),

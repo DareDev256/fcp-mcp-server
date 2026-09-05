@@ -7,7 +7,7 @@
         <asset id="r3" name="Broll_City" src="file:///Media/Broll_City.mov" start="0s" duration="120s" hasVideo="1" hasAudio="1" format="r1"/>
         <asset id="r4" name="Broll_Studio" src="file:///Media/Broll_Studio.mov" start="0s" duration="90s" hasVideo="1" hasAudio="1" format="r1"/>
     </resources>
-    <library location="file:///Users/editor/Movies/Sample.fcpbundle/">
+    <library>
         <event name="Sample Event">
             <project name="Music Video Edit" modDate="2025-01-15 10:30:00 -0500">
                 <sequence format="r1" duration="2880/24s" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">

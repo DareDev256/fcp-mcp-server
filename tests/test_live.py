@@ -113,6 +113,10 @@ def test_push_sends_options_copy(project_file, tmp_path, monkeypatch):
         str(project_file),
         library_location="/tmp/Lib.fcplibrary",
         import_copy_path=copy_path,
+        # These tests assert DELIVERY of the Apple event, not import. The
+        # osascript call is faked, so nothing can ever land in a library and
+        # the v0.25.0 verification would (correctly) raise.
+        verify=False,
     )
     assert result["sent"] == copy_path
     assert result["launched_fcp"] is False
@@ -123,8 +127,13 @@ def test_push_sends_options_copy(project_file, tmp_path, monkeypatch):
 def test_push_reports_launch(project_file, tmp_path, monkeypatch):
     monkeypatch.setattr(live, "_run_osascript", lambda s: _fake_proc())
     monkeypatch.setattr(live, "fcp_is_running", lambda: False)
+    # v0.25.0: a push with no library_location now refuses rather than
+    # sending a document with nowhere to land, so these delivery-path
+    # tests must name a target. verify=False because osascript is faked:
+    # no import can land, and the verification would correctly raise.
     result = push_to_fcp(
-        str(project_file), import_copy_path=str(tmp_path / "x.fcpxml")
+        str(project_file), import_copy_path=str(tmp_path / "x.fcpxml"),
+        library_location="/tmp/Lib.fcpbundle", verify=False,
     )
     assert result["launched_fcp"] is True
 
@@ -136,7 +145,8 @@ def test_push_permission_error_hint(project_file, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(live, "fcp_is_running", lambda: True)
     with pytest.raises(RuntimeError, match="Automation permission"):
-        push_to_fcp(str(project_file), import_copy_path=str(tmp_path / "x.fcpxml"))
+        push_to_fcp(str(project_file), import_copy_path=str(tmp_path / "x.fcpxml"),
+                    library_location="/tmp/Lib.fcpbundle", verify=False)
 
 
 def test_push_escapes_applescript_quotes(tmp_path, monkeypatch):
@@ -148,7 +158,7 @@ def test_push_escapes_applescript_quotes(tmp_path, monkeypatch):
         lambda s: captured.setdefault("script", s) and _fake_proc() or _fake_proc(),
     )
     monkeypatch.setattr(live, "fcp_is_running", lambda: True)
-    push_to_fcp(str(evil))
+    push_to_fcp(str(evil), library_location="/tmp/Lib.fcpbundle", verify=False)
     assert '\\"' in captured["script"]
 
 
@@ -164,17 +174,22 @@ def test_list_refuses_to_launch(monkeypatch):
 
 def test_list_parses_records(monkeypatch):
     monkeypatch.setattr(live, "fcp_is_running", lambda: True)
+    # v0.25.0: field 1 is the library's POSIX path. push_to_fcp matches the
+    # target library on that path, not on the display name — two libraries
+    # can share a name, and only one of them is the import target.
     payload = (
-        "LibA\x1fEvt1\x1fProj1\x1fProj2\x1f\x1e"
-        "LibA\x1fEvt2\x1f\x1e"
-        "LibB\x1f\x1e"
+        "LibA\x1f/m/LibA.fcpbundle/\x1fEvt1\x1fProj1\x1fProj2\x1f\x1e"
+        "LibA\x1f/m/LibA.fcpbundle/\x1fEvt2\x1f\x1e"
+        "LibB\x1f/m/LibB.fcpbundle/\x1f\x1e"
     )
     monkeypatch.setattr(live, "_run_osascript", lambda s: _fake_proc(stdout=payload))
     libs = list_fcp_libraries()
     by_name = {lib["name"]: lib for lib in libs}
+    assert by_name["LibA"]["file"] == "/m/LibA.fcpbundle/"
     assert by_name["LibA"]["events"][0]["projects"] == ["Proj1", "Proj2"]
     assert by_name["LibA"]["events"][1]["name"] == "Evt2"
     assert by_name["LibB"]["events"] == []
+    assert by_name["LibB"]["file"] == "/m/LibB.fcpbundle/"
 
 
 # ============================================================
@@ -184,9 +199,14 @@ def test_list_parses_records(monkeypatch):
 async def test_handler_push(project_file, monkeypatch):
     monkeypatch.setattr(live, "_run_osascript", lambda s: _fake_proc())
     monkeypatch.setattr(live, "fcp_is_running", lambda: True)
-    result = await server.handle_push_to_fcp({"filepath": str(project_file)})
+    result = await server.handle_push_to_fcp({
+        "filepath": str(project_file),
+        "library_location": "/tmp/Lib.fcpbundle",
+        "verify": False,
+    })
     text = result[0].text
     assert "Sent to Final Cut Pro" in text
+    assert "NOT VERIFIED" in text  # the handler never claims an unseen import
     assert "_import" in text  # options copy, original untouched
     assert "Export XML" in text  # read-back asymmetry stated
 
