@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **The v0.21.1 credit now records how the diagnosis was actually produced.**
+  Marty Hou wrote back to say the honest version is that Claude did the
+  diagnosis and he forwarded it, and that he would rather that be recorded
+  than have it recorded wrong. The README line now says so. The credit stands:
+  four releases were broken, anyone could have run that diagnosis, and he is
+  the one who ran it and wrote in.
+
 ## [0.24.0] - 2026-09-04
 
 ### Fixed

@@ -930,7 +930,7 @@ Want to try builds before they ship? Say so in the email — pre-release wheels 
 
 ## Status & Contributing
 
-**Actively maintained** — live-verified against FCP 12.2, with external contributions already merged and credited: [@mikegrant25](https://github.com/mikegrant25) (sandbox security fix, #6), [@jardelapp](https://github.com/jardelapp) (audio duration probing, #7), and Marty Hou, documentary editor, who reported the v0.19.2–0.21.0 packaging failure by email with a diagnosis that held on every point.
+**Actively maintained** — live-verified against FCP 12.2, with external contributions already merged and credited: [@mikegrant25](https://github.com/mikegrant25) (sandbox security fix, #6), [@jardelapp](https://github.com/jardelapp) (audio duration probing, #7), and Marty Hou, documentary editor, who reported the v0.19.2–0.21.0 packaging failure by email. The diagnosis he forwarded was produced with Claude on his own machine, checked against the published artifacts rather than from memory, and held on every point — his words, recorded here the way he asked for them.
 
 PRs welcome. If you're a video editor who codes (or a coder who edits), let's build this together.
 
