@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-09-08
+
+### Changed
+- README hero is now `docs/assets/demo-live-fcp.gif`, recorded against a running
+  copy of Final Cut Pro rather than a terminal alone: a ten clip timeline read
+  back off the document, a marker placed on every cut, and dialogue/music/effects
+  roles assigned across the clips, with Final Cut open and untouched throughout.
+  The earlier terminal only GIF is kept at `docs/assets/demo.gif`.
+
+### Added
+- `demo/session.sh`, the four act script that recording drives: build a timeline
+  from an `edl.json`, mark every cut, assign roles, then detect and remove real
+  media silence, pushing to Final Cut and verifying the import after each act.
+  Paths come from `CLIPS`, `TAKES` and `REPO` so it runs outside one machine.
+  It exits non-zero on an unverified push rather than narrating a landed import
+  that never happened.
+
 ## [0.25.0] - 2026-09-05
 
 **Behaviour change.** `push_to_fcp` can now refuse where it previously returned
