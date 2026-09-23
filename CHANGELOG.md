@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`add_marker` / `batch_add_markers` produced DTD-invalid FCPXML on any clip
+  carrying `adjust-colorConform` (or `object-tracker`, `adjust-cinematic`,
+  `adjust-stereo-3D`, `live-drawing`, `hidden-clip-marker`).** `adjust-transform`
+  + `adjust-colorConform` is an ordinary combination on any reframed,
+  color-managed clip — e.g. vertical iPhone footage pulled into a 1.14 project
+  — so this broke real timelines, not an edge case. `_ASSET_CLIP_CHILD_ORDER`
+  (`fcpxml/writer.py`) was missing those six DTD element names; a tag missing
+  from that table sorts as "last priority" in `_dtd_insert`'s lookup, which
+  made an already-correctly-placed `<adjust-colorConform>` look like it
+  belonged *after* a newly-inserted `<marker>`. The marker landed before it
+  instead, and Final Cut Pro (12.3 / FCPXML 1.14) rejected the file on
+  import: `DTD validation failed. (Element asset-clip content does not
+  follow the DTD, expecting (note?, (conform-rate?, timeMap?),
+  (object-tracker?, ... adjust-colorConform?, adjust-stereo-3D?, ...` The
+  same incomplete table also blinded the server's own pre-export validator
+  (`_check_child_order`) to the exact ordering bug it was introducing, since
+  both read the same lookup. Six tags added in their correct DTD position
+  (verified against xmllint's reported content model for FCPXMLv1_14.dtd);
+  `FCPXMLWriter._add_keyword` also moved off a blind `ET.SubElement` append
+  onto the same `_dtd_insert` helper every other insertion site already used,
+  for consistency. See `tests/test_marker_dtd_order_regression.py`.
+
 ## [0.25.1] - 2026-09-08
 
 ### Changed
