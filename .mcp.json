@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fcp": {
+      "command": "uvx",
+      "args": ["fcp-mcp-server"]
+    }
+  }
+}

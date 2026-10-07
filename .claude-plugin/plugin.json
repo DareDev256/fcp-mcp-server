@@ -1,0 +1,21 @@
+{
+  "name": "fcpxml-mcp",
+  "displayName": "Final Cut Pro (FCPXML)",
+  "version": "0.25.2",
+  "description": "Drive Final Cut Pro from a conversation: read a timeline, run quality control, batch-edit, build rough cuts, manage markers, transcribe, and export to other NLEs. 13 grouped tools covering 88 operations over .fcpxml and .fcpxmld, with an operation journal and undo.",
+  "author": {
+    "name": "James Olusoga",
+    "url": "https://github.com/DareDev256"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/DareDev256/fcp-mcp-server",
+  "repository": "https://github.com/DareDev256/fcp-mcp-server",
+  "keywords": [
+    "final-cut-pro",
+    "fcpxml",
+    "video-editing",
+    "post-production",
+    "nle",
+    "macos"
+  ]
+}

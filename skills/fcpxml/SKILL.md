@@ -1,3 +1,8 @@
+---
+name: fcpxml
+description: Work with Final Cut Pro timelines and .fcpxml/.fcpxmld files. Use when the user mentions FCPXML, Final Cut Pro or FCP, asks to analyse or quality-check a timeline, batch-edit clips, build a rough cut, manage markers, pull a transcript, relink media, or export an edit to another NLE such as Premiere or Resolve.
+---
+
 # FCPXML MCP — Agent Skill
 
 Use when working with Final Cut Pro XML files (.fcpxml) — timeline analysis, quality control, batch editing, rough cut generation, marker management, cross-NLE export, and multi-track workflows.

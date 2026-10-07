@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.25.2] - 2026-10-07
+
+First release on PyPI since 0.25.0. 0.25.1 was tagged in the manifests but never
+published, so `server.json` advertised a version PyPI did not have; this release
+ships everything listed under 0.25.1 as well.
+
+### Added
+- **Packaged as a Claude plugin bundle**, which is now the only route into Anthropic's directory for a server like this one. `.claude-plugin/plugin.json`, `.mcp.json` pointing at `uvx fcp-mcp-server`, and the agent skill moved to `skills/fcpxml/SKILL.md`. `claude plugin validate .` passes.
+- Recorded why the other routes are closed: a directory **MCP connector** submission accepts "one remote MCP server… the server's URL", and this server is stdio and must run on the Mac that has Final Cut Pro. Packaging a local server as a desktop extension (MCPB) is also out — the directory deprecated MCPB listings and no longer accepts them. A plugin bundle carrying a local server loads in Claude Code and in Cowork sessions running on the person's computer, and is ignored in chat, which is correct for a macOS-only server.
+
 ### Fixed
 - **`add_marker` / `batch_add_markers` produced DTD-invalid FCPXML on any clip
   carrying `adjust-colorConform` (or `object-tracker`, `adjust-cinematic`,
@@ -24,6 +34,8 @@
   `FCPXMLWriter._add_keyword` also moved off a blind `ET.SubElement` append
   onto the same `_dtd_insert` helper every other insertion site already used,
   for consistency. See `tests/test_marker_dtd_order_regression.py`.
+  Thanks to @xwil04 for the report (#24) and the fix (#25).
+- **`SKILL.md` had no YAML frontmatter**, so nothing that loads skills could ever have registered it. It now declares `name` and `description`, with the description written as the situations a user is actually in.
 
 ## [0.25.1] - 2026-09-08
 
