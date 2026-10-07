@@ -1,6 +1,6 @@
 # FCPXML MCP
 
-**The bridge between Final Cut Pro and AI. 13 grouped tools (88 underlying operations) that turn timeline XML into structured data Claude can read, edit, generate, SEE, find — and undo.**
+**The bridge between Final Cut Pro and AI. 13 grouped tools (92 underlying operations) that turn timeline XML into structured data Claude can read, edit, generate, SEE, find — and undo.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -26,6 +26,13 @@ Re-record it with `vhs demo/demo.tape`; the media is synthesised by ffmpeg at
 run time, so there is no fixture to keep.*
 
 ---
+
+## Keyframes in this fork
+
+This source branch adds four actions for video and audio keyframes to the
+existing `inspect` and `edit` groups. See [keyframe usage](docs/keyframes.md)
+for installation, exact time/value units, examples and supported clip types.
+These additions are not part of the upstream PyPI package.
 
 ## Quick Start
 
@@ -369,13 +376,13 @@ operation goes in `action`:
 ## Tools
 
 As of v0.19.0, the MCP tool list Claude sees by default is **13 grouped
-verbs**, not 88 flat tool names:
+verbs**, not 92 flat tool names:
 
 | Group | Covers |
 |-------|--------|
-| `inspect` | Read-only understanding — stats, clips, markers, keywords, EDL/CSV, pacing |
+| `inspect` | Read-only understanding — stats, clips, markers, keywords, EDL/CSV, pacing, keyframes |
 | `diagnose` | Finding problems — flash frames, gaps, duplicates, health score |
-| `edit` | Changing clips — markers, trim, reorder, transitions, speed, split, silence removal |
+| `edit` | Changing clips — markers, trim, reorder, transitions, speed, split, silence removal, keyframes |
 | `mark` | Markers and chapters — batch add, SRT/VTT import, beat import |
 | `generate` | Building new structure — rough cuts, montages, A/B roll, templates |
 | `transcript` | Local Whisper transcription and transcript-driven cuts; `transcript_pack` puts the whole shoot on one page; `backend: elevenlabs` opts into speaker labels and audio events (audio leaves the machine) |
@@ -388,14 +395,14 @@ verbs**, not 88 flat tool names:
 | `find` | "Find the shot where…" — a router over transcript words, metadata and offline vision captions that names the tier on every hit; `find_index` warms every source; `find_to_timeline` assembles the hits into a selects reel |
 
 Each call has the same shape: `{"action": "trim_clip", "args": {...}}`. The
-`action` is one of the 88 operation names below; `args` is whatever that
+`action` is one of the 92 operation names below; `args` is whatever that
 tool always took. The group dispatches straight into the same handler — the
 behavior is identical, only the schema Claude sees up front is smaller. An
 unknown or cross-group action returns an error listing the valid actions for
 that group, so a wrong guess is recoverable in one turn.
 
 **Grouping is what's advertised, not what's callable.** `call_tool` resolves
-every one of the 88 operation names from a handler registry that doesn't care
+every one of the 92 operation names from a handler registry that doesn't care
 what `list_tools` chose to show — an existing MCP config that calls `trim_clip`
 directly keeps working with no changes. If you'd rather also see the flat tool
 schemas (e.g. for debugging, or a client that doesn't like the grouped shape),
@@ -405,7 +412,7 @@ set:
 FCP_MCP_LEGACY_TOOLS=1
 ```
 
-This advertises the 63 flat schemas alongside the 13 groups — 76 tools in
+This advertises the 67 flat schemas alongside the 13 groups — 80 tools in
 total. The 25 operations that were born as group actions (`preview`, `watch`,
 `index`, `scenes`, `organize`, `find`, plus `import_edl_json`) have no flat
 schema and are reached through their group.
@@ -439,11 +446,11 @@ ln -s "$PWD/fcp-mcp-server/skill" ~/.claude/skills/final-cut-pro
 
 ---
 
-## All 88 Operations
+## All 92 Operations
 
-The 88 operations below are what the 13 groups in [Tools](#tools) dispatch
-to — every `action` value the groups accept. The first 63 are unchanged from
-prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
+The 92 operations below are what the 13 groups in [Tools](#tools) dispatch
+to — every `action` value the groups accept. All 67 flat-schema operations remain directly callable; set
+`FCP_MCP_LEGACY_TOOLS=1` to advertise them alongside the groups.
 
 | Category | Tools | What It Does |
 |----------|------:|--------------|
@@ -451,6 +458,7 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 | **Multi-Track** | 3 | Connected clips, compound clips, secondary lanes |
 | **Roles** | 4 | List, assign, filter, export stems |
 | **QC & Validation** | 4 | Flash frames, duplicates, gaps, health score |
+| **Keyframes** | 4 | Read, set, delete and batch-edit position, scale, rotation, opacity and volume; [usage and limits](docs/keyframes.md) |
 | **Editing** | 9 | Markers, trim, reorder, transitions, speed, split |
 | **Batch Fixes** | 3 | Auto-fix flash frames, rapid trim, fill gaps |
 | **Comparison** | 1 | Diff two timelines — added/removed/moved/trimmed |
@@ -474,7 +482,7 @@ prior releases and still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 | **Scenes** | 3 | Detect shot boundaries, mark them, split on them |
 | **Organize** | 6 | Bulk keywords/ratings/roles, auto-proposed keywords, operation history, hash-checked undo |
 | **Find** | 3 | Shot search across transcript, metadata and vision tiers; warm the index; assemble a selects reel |
-| | **88** | |
+| | **92** | |
 
 <details>
 <summary><strong>Full tool reference (click to expand)</strong></summary>
@@ -569,7 +577,7 @@ which are never mixed. The reported duration accounts for the overlaps, and
 | `FCP_MAX_BATCH_MARKERS` | No | `10000` | Cap on markers written by one batch or import operation. Excess markers are reported as dropped, never silently skipped |
 | `FCP_MAX_TRANSCRIPT_CHARS` | No | `1048576` | Cap on inline transcript text passed to `import_transcript_markers` |
 | `FCPXML_DTD_DIR` | No | FCP app bundle | Directory of Apple `FCPXMLv*_*.dtd` files for DTD validation (auto-detected from the installed Final Cut Pro) |
-| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the 63 flat tool schemas alongside the 13 grouped tools |
+| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the 67 flat tool schemas alongside the 13 grouped tools |
 | `FCP_WATCH_DIR` | No | unset | Default folder `watch_start` observes for Final Cut Pro XML exports |
 | `FCP_MCP_AUTOPUSH` | No | unset | Set to `1` so every write also imports into the running Final Cut Pro. Off by default — repeated imports accumulate library churn, which is your call to make |
 | `FCP_MCP_INDEX` | No | `~/.fcp-mcp/index.db` | Where the analysis cache lives. `off` disables it entirely; every tool still works, it just recomputes. Any other value is a path |
@@ -599,7 +607,7 @@ which are never mixed. The reported duration accounts for the overlaps, and
 ```
 fcp-mcp-server/           ~15.7k lines Python
 ├── server.py              MCP entry point — 13 grouped tools advertised by default
-│                          (TOOL_GROUPS), dispatching into 88 handlers
+│                          (TOOL_GROUPS), dispatching into 92 handlers
 │                          (TOOL_HANDLERS); 5 prompts, resource discovery.
 │                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the flat tools.
 │                          Binds itself to tools/ via bind_server() — group modules

@@ -336,7 +336,9 @@ def _validate_filepath(filepath: str, allowed_extensions: tuple[str, ...] | None
     return str(resolved)
 
 
-def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) -> str:
+def _validate_output_path(
+    output_path: str, *, anchor_dir: str | None = None, note_output: bool = True,
+) -> str:
     """Validate an output path with optional sandbox enforcement.
 
     Resolves traversal, blocks null bytes, ensures parent exists, and — when
@@ -349,6 +351,8 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
         anchor_dir: If set, the resolved output must be a child of this
             directory.  Typically the parent directory of the input file so
             outputs stay co-located with their sources.
+        note_output: Register a prospective journal output. New-file publishers
+            may defer this until their exclusive publication succeeds.
 
     Raises:
         ValueError: For null bytes, missing parent, or sandbox escape.
@@ -373,7 +377,8 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
 
     # The journal seam: every write passes through here, so noting the
     # approved path is enough for the ledger to record it once it exists.
-    _journal.note_output(str(resolved))
+    if note_output:
+        _journal.note_output(str(resolved))
     return str(resolved)
 
 
@@ -2027,7 +2032,7 @@ def _legacy_tool_list() -> list[Tool]:
                 },
             }
         ),
-    ]
+    ] + _keyframe_tools.tool_schemas()
 
 
 def _legacy_tools_enabled() -> bool:
@@ -3537,6 +3542,13 @@ async def handle_reformat_timeline(arguments: dict) -> Sequence[TextContent]:
 # detect_beats and transcribe stay imported at the top of this file:
 # tools/media.py reaches them as srv.X so the tests' monkeypatches on this
 # module still take effect.
+from tools import keyframes as _keyframe_tools  # noqa: E402
+from tools.keyframes import (  # noqa: E402
+    handle_batch_keyframes,
+    handle_delete_keyframes,
+    handle_list_keyframes,
+    handle_set_keyframes,
+)
 from tools.media import (  # noqa: E402
     handle_detect_beats,
     handle_detect_media_silence,
@@ -3723,6 +3735,10 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
 
 
 TOOL_HANDLERS = {
+    "list_keyframes": handle_list_keyframes,
+    "set_keyframes": handle_set_keyframes,
+    "delete_keyframes": handle_delete_keyframes,
+    "batch_keyframes": handle_batch_keyframes,
     # Read
     "list_projects": handle_list_projects,
     "analyze_timeline": handle_analyze_timeline,
@@ -3828,7 +3844,7 @@ TOOL_GROUPS: dict[str, dict] = {
             "list_projects", "analyze_timeline", "analyze_pacing", "list_clips",
             "list_markers", "list_roles", "list_keywords", "list_effects",
             "list_templates", "list_library_clips", "list_compound_clips",
-            "list_connected_clips", "filter_by_role",
+            "list_connected_clips", "filter_by_role", "list_keyframes",
         ],
     },
     "diagnose": {
@@ -3854,6 +3870,7 @@ TOOL_GROUPS: dict[str, dict] = {
             "reorder_clips", "change_speed", "rapid_trim", "add_transition",
             "add_audio", "add_connected_clip", "assign_role", "fill_gaps",
             "fix_flash_frames", "remove_silence_candidates", "remove_media_silence",
+            "set_keyframes", "delete_keyframes", "batch_keyframes",
         ],
     },
     "mark": {
@@ -4028,6 +4045,7 @@ def _group_tool(name: str) -> Tool:
                 },
             },
             "required": ["action"],
+            **_keyframe_tools.group_schema_extensions(spec["actions"]),
         },
     )
 
