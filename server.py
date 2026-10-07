@@ -2032,7 +2032,7 @@ def _legacy_tool_list() -> list[Tool]:
                 },
             }
         ),
-    ] + _keyframe_tools.tool_schemas()
+    ] + _keyframe_tools.tool_schemas() + _retime_tools.tool_schemas()
 
 
 def _legacy_tools_enabled() -> bool:
@@ -3543,6 +3543,7 @@ async def handle_reformat_timeline(arguments: dict) -> Sequence[TextContent]:
 # tools/media.py reaches them as srv.X so the tests' monkeypatches on this
 # module still take effect.
 from tools import keyframes as _keyframe_tools  # noqa: E402
+from tools import retime as _retime_tools  # noqa: E402
 from tools.keyframes import (  # noqa: E402
     handle_batch_keyframes,
     handle_delete_keyframes,
@@ -3570,6 +3571,11 @@ from tools.nle import (  # noqa: E402
     handle_list_effects,
     handle_list_templates,
     handle_relink_media,
+)
+from tools.retime import (  # noqa: E402
+    handle_list_speed_points,
+    handle_reset_speed,
+    handle_set_speed_curve,
 )
 
 
@@ -3735,6 +3741,9 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
 
 
 TOOL_HANDLERS = {
+    "list_speed_points": handle_list_speed_points,
+    "set_speed_curve": handle_set_speed_curve,
+    "reset_speed": handle_reset_speed,
     "list_keyframes": handle_list_keyframes,
     "set_keyframes": handle_set_keyframes,
     "delete_keyframes": handle_delete_keyframes,
@@ -3844,7 +3853,7 @@ TOOL_GROUPS: dict[str, dict] = {
             "list_projects", "analyze_timeline", "analyze_pacing", "list_clips",
             "list_markers", "list_roles", "list_keywords", "list_effects",
             "list_templates", "list_library_clips", "list_compound_clips",
-            "list_connected_clips", "filter_by_role", "list_keyframes",
+            "list_connected_clips", "filter_by_role", "list_keyframes", "list_speed_points",
         ],
     },
     "diagnose": {
@@ -3871,6 +3880,7 @@ TOOL_GROUPS: dict[str, dict] = {
             "add_audio", "add_connected_clip", "assign_role", "fill_gaps",
             "fix_flash_frames", "remove_silence_candidates", "remove_media_silence",
             "set_keyframes", "delete_keyframes", "batch_keyframes",
+            "set_speed_curve", "reset_speed",
         ],
     },
     "mark": {
@@ -4019,6 +4029,12 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
     return await _journaled(group, action, call_args, handler)
 
 
+def _animation_schema_extensions(actions: list[str]) -> dict:
+    clauses = [clause for module in (_keyframe_tools, _retime_tools)
+               for clause in module.group_schema_extensions(actions).get("allOf", [])]
+    return {"allOf": clauses} if clauses else {}
+
+
 def _group_tool(name: str) -> Tool:
     """Build the advertised Tool schema for one group."""
     spec = TOOL_GROUPS[name]
@@ -4045,7 +4061,7 @@ def _group_tool(name: str) -> Tool:
                 },
             },
             "required": ["action"],
-            **_keyframe_tools.group_schema_extensions(spec["actions"]),
+            **_animation_schema_extensions(spec["actions"]),
         },
     )
 

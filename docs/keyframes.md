@@ -1,9 +1,8 @@
 # Video and audio keyframes
 
-This fork adds `inspect.list_keyframes` and `edit.set_keyframes`,
-`edit.delete_keyframes`, `edit.batch_keyframes`. These are source-branch
-features, not an upstream PyPI release. The existing global MCP installation
-is independent of this checkout.
+Use `inspect.list_keyframes` to read animation, and `edit.set_keyframes`,
+`edit.delete_keyframes` or `edit.batch_keyframes` to change it. These actions
+belong to the existing `inspect` and `edit` tool groups.
 
 ## Run this source version
 
@@ -37,9 +36,25 @@ Each point contains `value` and exactly one of:
 Times must satisfy `0 <= time < duration`. Use `frame` for exact project-frame
 placement; rational `time` can represent subframe audio automation.
 For a six-second 30 fps clip, frames 0–179 are valid; frame 180 is outside.
-A source in-point of 5 seconds plus a relative point at 2 seconds becomes
-`time="7s"` in XML. Fractions are preserved for 23.976/29.97 frame rates.
+A clip `start` of 5 seconds plus a relative point at 2 seconds becomes
+`time="7s"` in XML. Intrinsic animation uses the clip's **local output clock**,
+including on retimed clips. Do not pass that animation time through `timeMap`
+when writing XML. Fractions are preserved for 23.976/29.97 frame rates.
 There is no floating-point time input or SMPTE string guessing.
+
+Inspection returns `time` relative to the visible clip start and `local_time`
+as the raw XML keyframe time. The earlier `source_time` field remains as a
+compatibility alias of `local_time`; it does not identify the media source
+clock on retimed clips. `mapped_source_time` reports that separate media clock
+through a supported linear `timeMap`, or `null` when unavailable. Retained
+points outside the visible clip still have their original local times and
+`in_range: false`; no source-map extrapolation is guessed.
+
+This distinction was verified with FCP 12.4 using a clip starting at 5 seconds,
+a 2x time map, and animation keys at local times 5 and 10 seconds. At output
+1.5 seconds, the animation is 30% between those keys (local time 6.5 seconds),
+while the media has reached source time 8 seconds. Both video and volume use
+this local output clock.
 
 New curves use native linear behavior. Optional `interp` / `curve` inputs
 accept only `"linear"`; omit them to preserve an existing point's attributes
@@ -103,12 +118,17 @@ publishing output. This can animate several properties or clips together.
 ## Supported scope and output
 
 Editable targets are ordinary `asset-clip`, `video` and `audio` elements in a
-project timeline, including one ordinary connected-clip layer where a 1:1
-source clock is provable. Retimed/conformed clips, uncertain rate conversion,
-compound/ref/multicam/sync/title structures and arbitrary effect parameters
-are rejected for editing and exposed with reasons. No custom Bezier editor,
-tracking or animation-aware retiming is provided. After trimming, splitting
-or changing speed through another tool, re-inspect and verify in FCP.
+project timeline, including one ordinary connected-clip layer with an
+unretimed host. The target may have a strictly increasing linear `timeMap`
+covering its full visible duration. Source and project frame rates must match.
+Explicit `conform-rate scaleEnabled="0"` is accepted only with matching rates.
+Reverse/freeze/smooth time maps, retimed hosts, active rate conform, uncertain frame
+conversion, compound/ref/multicam/sync/title structures and arbitrary effect
+parameters are rejected for editing and exposed with reasons. Unsupported
+maps remain inspectable: local keyframe times and values are retained, while
+`mapped_source_time` is unavailable. No custom Bezier editor or tracking is
+provided. After trimming, splitting or changing speed, re-inspect the visible
+range and verify in FCP. See [speed curve editing](retiming.md).
 
 Outputs are new numbered `_keyframes` siblings by default. Explicit
 `output_path` must pass the existing source-directory write policy and must

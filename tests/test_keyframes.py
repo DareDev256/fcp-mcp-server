@@ -167,7 +167,7 @@ def test_connected_gap_uses_clip_source_clock_not_host_clock(make_editor):
 
 @pytest.mark.parametrize("child,expected", [
     ('<timeMap><timept time="0s" value="0s"/></timeMap>', "timeMap/conform-rate"),
-    ('<conform-rate scaleEnabled="0"/>', "timeMap/conform-rate"),
+    ('<conform-rate scaleEnabled="1"/>', "timeMap/conform-rate"),
 ])
 def test_retime_is_explicitly_rejected(make_editor, child, expected):
     editor = make_editor(f'<asset-clip ref="r2" start="0s" duration="2s">{child}</asset-clip>')
@@ -473,3 +473,238 @@ def test_param_static_value_overrides_adjustment_and_survives_curve_deletion(mak
     adjustment = editor.modifier.root.find(".//adjust-blend")
     assert adjustment.get("amount") == "0.5"
     assert adjustment.find("param").get("value") == "0.8"
+
+
+LINEAR_RETIME_CLIP = '''
+<asset-clip ref="r2" start="4s" offset="0s" duration="6s">
+  <timeMap preservesPitch="1">
+    <timept time="4s" value="5s" interp="linear"/>
+    <timept time="6s" value="7s" interp="linear"/>
+    <timept time="8s" value="11s" interp="linear"/>
+    <timept time="10s" value="12s" interp="linear"/>
+  </timeMap>
+</asset-clip>
+'''
+
+
+@pytest.mark.parametrize("prop,values", [
+    ("position", [[0, 0], [10, 5], [-3, 4]]),
+    ("scale", [1, 1.2, 0.8]), ("rotation", [0, 15, -30]),
+    ("opacity", [0, 0.5, 1]), ("volume", [-24, -6, 0]),
+])
+def test_retimed_keyframes_keep_local_output_clock_and_report_source_mapping(make_editor, prop, values):
+    editor = make_editor(LINEAR_RETIME_CLIP, rate="1/30s")
+    clip = editor.list_keyframes()["clips"][0]
+    assert clip["supported"]
+    assert clip["time_mapping"] == "linear"
+    path = clip["clip_path"]
+    curve = editor.modifier.root.find(".//timeMap")
+    untouched_map = ET.tostring(curve)
+    result = editor.set_keyframes(path, prop, [
+        {"time": "0s", "value": values[0]},
+        {"frame": 75, "value": values[1]},
+        {"time": "5s", "value": values[2]},
+    ])
+    assert [point["local_time"] for point in result["keyframes"]] == ["4s", "13/2s", "9s"]
+    assert [point["source_time"] for point in result["keyframes"]] == ["4s", "13/2s", "9s"]
+    assert [point["mapped_source_time"] for point in result["keyframes"]] == ["5s", "8s", "23/2s"]
+    assert [point["time"] for point in result["keyframes"]] == ["0s", "5/2s", "5s"]
+    assert all(point["in_range"] for point in result["keyframes"])
+    assert editor.list_keyframes(path)["clips"][0]["properties"][prop]["keyframes"] == result["keyframes"]
+    updated = editor.set_keyframes(path, prop, [{"time": "75/30s", "value": values[2]}])
+    assert len(updated["keyframes"]) == 3
+    deleted = editor.delete_keyframes(path, prop, ["5/2s"])
+    assert deleted["removed"] == 1
+    assert [point["local_time"] for point in deleted["keyframes"]] == ["4s", "9s"]
+    assert ET.tostring(curve) == untouched_map
+
+
+def test_retimed_ntsc_frame_conversion_is_exact(make_editor):
+    editor = make_editor(
+        '<asset-clip ref="r2" start="4s" duration="6s"><timeMap>'
+        '<timept time="4s" value="5s" interp="linear"/>'
+        '<timept time="10s" value="17s" interp="linear"/>'
+        '</timeMap></asset-clip>', rate="1001/30000s",
+    )
+    result = editor.set_keyframes(path_for(editor), "position", [{"frame": 29, "value": [1, 2]}])
+    point = result["keyframes"][0]
+    assert point["time"] == "29029/30000s"
+    assert parse_seconds(point["local_time"]) == 4 + Fraction(29029, 30000)
+    assert parse_seconds(point["mapped_source_time"]) == 5 + Fraction(29029, 15000)
+    assert editor.delete_keyframes(path_for(editor), "position", [point["time"]])["removed"] == 1
+
+
+def test_retained_local_keys_without_map_coverage_have_no_invented_source_time(make_editor):
+    editor = make_editor(LINEAR_RETIME_CLIP.replace('</timeMap>', '''</timeMap>
+      <adjust-blend><param name="amount"><keyframeAnimation>
+        <keyframe time="3s" value="0" curve="linear"/>
+        <keyframe time="7s" value="0.5" curve="linear" auxValue="keep"/>
+        <keyframe time="13s" value="1" curve="linear"/>
+      </keyframeAnimation></param></adjust-blend>'''))
+    path = path_for(editor)
+    points = editor.list_keyframes(path)["clips"][0]["properties"]["opacity"]["keyframes"]
+    assert [point["time"] for point in points] == ["-1s", "3s", "9s"]
+    assert [point["mapped_source_time"] for point in points] == [None, "9s", None]
+    assert [point["in_range"] for point in points] == [False, True, False]
+    assert [point["local_time"] for point in points] == ["3s", "7s", "13s"]
+    result = editor.set_keyframes(path, "opacity", [{"time": "3s", "value": 0.7}])
+    assert len(result["keyframes"]) == 3
+    assert result["keyframes"][1]["attributes"]["auxValue"] == "keep"
+    result = editor.delete_keyframes(path, "opacity", ["3s"])
+    assert [point["local_time"] for point in result["keyframes"]] == ["3s", "13s"]
+    assert editor.delete_keyframes(path, "opacity")["removed"] == 2
+
+
+def test_keys_outside_visible_trim_but_inside_map_keep_exact_relative_time(make_editor):
+    editor = make_editor(LINEAR_RETIME_CLIP.replace('start="4s" offset="0s" duration="6s"', 'start="6s" offset="0s" duration="2s"').replace('</timeMap>', '''</timeMap>
+      <adjust-volume><param name="amount"><keyframeAnimation>
+        <keyframe time="5s" value="-24dB"/>
+        <keyframe time="7s" value="-12dB"/>
+        <keyframe time="12s" value="0dB"/>
+      </keyframeAnimation></param></adjust-volume>'''))
+    points = editor.list_keyframes()["clips"][0]["properties"]["volume"]["keyframes"]
+    assert [point["time"] for point in points] == ["-1s", "1s", "6s"]
+    assert [point["mapped_source_time"] for point in points] == ["6s", "9s", None]
+    assert [point["in_range"] for point in points] == [False, True, False]
+
+
+@pytest.mark.parametrize("time_map", [
+    '<timeMap><timept time="0s" value="0s" interp="linear"/></timeMap>',
+    '<timeMap><timept time="0s" value="0s" interp="smooth2"/><timept time="2s" value="4s" interp="linear"/></timeMap>',
+    '<timeMap><timept time="0s" value="4s" interp="linear"/><timept time="2s" value="0s" interp="linear"/></timeMap>',
+    '<timeMap><timept time="0s" value="0s" interp="linear"/><timept time="2s" value="0s" interp="linear"/></timeMap>',
+    '<timeMap><timept time="1s" value="0s" interp="linear"/><timept time="2s" value="4s" interp="linear"/></timeMap>',
+    '<timeMap><timept time="0s" value="0s" interp="linear"/><timept time="1s" value="4s" interp="linear"/></timeMap>',
+])
+def test_unsupported_retime_keeps_local_keys_inspectable_without_guessed_media_times(make_editor, time_map):
+    editor = make_editor(
+        f'<asset-clip ref="r2" start="0s" duration="2s">{time_map}'
+        '<adjust-volume><param name="amount"><keyframeAnimation>'
+        '<keyframe time="1s" value="-12dB" auxValue="kept"/>'
+        '</keyframeAnimation></param></adjust-volume></asset-clip>'
+    )
+    before = raw(editor)
+    clip = editor.list_keyframes()["clips"][0]
+    assert not clip["supported"]
+    assert clip["time_mapping"] == "unsupported"
+    point = clip["properties"]["volume"]["keyframes"][0]
+    assert point["time"] == "1s"
+    assert point["local_time"] == "1s"
+    assert point["source_time"] == "1s"
+    assert point["mapped_source_time"] is None
+    assert point["value"] == -12
+    assert point["in_range"] is True
+    with pytest.raises(ValueError, match="timeMap/conform-rate"):
+        editor.set_keyframes(clip["clip_path"], "volume", [{"time": "0s", "value": -6}])
+    with pytest.raises(ValueError, match="timeMap/conform-rate"):
+        editor.delete_keyframes(clip["clip_path"], "volume")
+    assert raw(editor) == before
+
+
+def test_connected_clip_can_use_own_linear_map_only_with_unretimed_host(make_editor):
+    connected = LINEAR_RETIME_CLIP.replace('offset="0s"', 'offset="3603s" lane="1"')
+    editor = make_editor(f'<gap start="3600s" offset="0s" duration="10s">{connected}</gap>')
+    result = editor.set_keyframes(path_for(editor), "rotation", [{"time": "3s", "value": 30}])
+    assert result["keyframes"][0]["local_time"] == "7s"
+    assert result["keyframes"][0]["mapped_source_time"] == "9s"
+    editor = make_editor(
+        '<asset-clip ref="r2" start="0s" duration="10s"><timeMap>'
+        '<timept time="0s" value="0s" interp="linear"/>'
+        '<timept time="10s" value="20s" interp="linear"/></timeMap>'
+        f'{connected}</asset-clip>'
+    )
+    path = path_for(editor, 1)
+    clip = editor.list_keyframes(path)["clips"][0]
+    assert not clip["supported"]
+    with pytest.raises(ValueError, match="connected host is retimed"):
+        editor.set_keyframes(path, "rotation", [{"time": "3s", "value": 30}])
+
+
+def test_retimed_five_properties_validate_against_apple_dtd(make_editor, tmp_path):
+    editor = make_editor(LINEAR_RETIME_CLIP, rate="1/30s")
+    path = path_for(editor)
+    for prop, value in [("volume", -12), ("opacity", 0.5), ("rotation", 10), ("scale", [1.1, 1.2]), ("position", [3, -4])]:
+        editor.set_keyframes(path, prop, [{"time": "0s", "value": value}, {"time": "3s", "value": value}])
+    destination = str(tmp_path / "retimed-keyframes.fcpxml")
+    editor.modifier.save(destination)
+    ok, detail = validate_against_dtd(destination)
+    if ok is None:
+        pytest.skip(detail)
+    assert ok is True, detail
+    reparsed = KeyframeEditor(FCPXMLModifier(destination))
+    assert reparsed.list_keyframes() == editor.list_keyframes()
+
+
+# Synthetic input verified in FCP 12.4 on 2026-10-07: at output 1.5 s,
+# position is (21.6, 10.8) px in 720p, scale 106%, rotation 4.5 degrees,
+# opacity 47.5%, volume -9.3 dB. These are 30% along the original local
+# 5..10 s keyframes, not 60% as a mistaken source-time lookup would give.
+NATIVE_FCP_12_4_RETIMED_CLIP = NATIVE_FCP_12_4_CLIP.replace(
+    'duration="6s">', 'duration="3s"><timeMap preservesPitch="1">'
+    '<timept time="5s" value="5s" interp="linear"/>'
+    '<timept time="8s" value="11s" interp="linear"/></timeMap>',
+)
+
+
+@pytest.mark.parametrize("prop,value", [
+    ("position", [3, 1.5]), ("scale", 1.06), ("rotation", 4.5),
+    ("opacity", 0.475), ("volume", -9.3),
+])
+def test_fcp_verified_retime_keeps_all_intrinsic_keys_on_output_clock(make_editor, prop, value):
+    editor = make_editor(NATIVE_FCP_12_4_RETIMED_CLIP, rate="1/30s")
+    listing = editor.list_keyframes()
+    assert listing["keyframe_clock"] == "clip-local-output"
+    path = listing["clips"][0]["clip_path"]
+    before = listing["clips"][0]["properties"][prop]["keyframes"]
+    assert [point["time"] for point in before] == ["0s", "5s"]
+    assert [point["mapped_source_time"] for point in before] == ["5s", None]
+    assert [point["in_range"] for point in before] == [True, False]
+    editor.set_keyframes(path, prop, [{"frame": 45, "value": value}])
+    points = editor.list_keyframes(path)["clips"][0]["properties"][prop]["keyframes"]
+    middle = points[1]
+    assert middle["time"] == "3/2s"
+    assert middle["local_time"] == "13/2s"
+    assert middle["source_time"] == "13/2s"  # legacy raw-XML alias
+    assert middle["mapped_source_time"] == "8s"
+    assert editor.delete_keyframes(path, prop, ["3/2s"])["keyframes"] == before
+
+
+@pytest.mark.parametrize("conform", [
+    '<conform-rate/>', '<conform-rate scaleEnabled="1"/>',
+    '<conform-rate scaleEnabled="0"/><conform-rate scaleEnabled="0"/>',
+])
+def test_retimed_keyframes_reject_active_or_ambiguous_conform(make_editor, conform):
+    editor = make_editor(LINEAR_RETIME_CLIP.replace('<timeMap', conform + '<timeMap', 1))
+    path = path_for(editor)
+    before = raw(editor)
+    with pytest.raises(ValueError, match="active or ambiguous rate conform"):
+        editor.set_keyframes(path, "position", [{"time": "0s", "value": [1, 2]}])
+    assert raw(editor) == before
+
+
+def test_native_disabled_conform_is_allowed_only_with_matching_frame_rates(make_editor):
+    clip = LINEAR_RETIME_CLIP.replace('<timeMap', '<conform-rate scaleEnabled="0"/><timeMap', 1)
+    editor = make_editor(clip, rate="1/30s")
+    result = editor.set_keyframes(path_for(editor), "opacity", [{"time": "1s", "value": 0.5}])
+    assert result["keyframes"][0]["local_time"] == "5s"
+    assert result["keyframes"][0]["mapped_source_time"] == "6s"
+    editor = make_editor(clip, rate="1/30s", source_rate="1/24s")
+    assert editor.list_keyframes()["clips"][0]["time_mapping"] == "unsupported"
+    with pytest.raises(ValueError, match="frame rates differ"):
+        editor.set_keyframes(path_for(editor), "opacity", [{"time": "1s", "value": 0.5}])
+
+
+def test_asset_wide_time_map_on_trimmed_clip_keeps_animation_on_local_clock(make_editor):
+    # Native FCP exports can extend a map beyond the visible trim to asset
+    # boundaries. This 2x map is not anchored at the visible clip start.
+    editor = make_editor(
+        '<asset-clip ref="r2" start="5s" duration="3s">'
+        '<conform-rate scaleEnabled="0"/><timeMap preservesPitch="1">'
+        '<timept time="0s" value="0s" interp="linear"/>'
+        '<timept time="100s" value="200s" interp="linear"/>'
+        '</timeMap></asset-clip>', rate="1/30s",
+    )
+    point = editor.set_keyframes(path_for(editor), "opacity", [{"frame": 45, "value": 0.475}])["keyframes"][0]
+    assert point["local_time"] == "13/2s"
+    assert point["mapped_source_time"] == "13s"
+    assert point["time"] == "3/2s"

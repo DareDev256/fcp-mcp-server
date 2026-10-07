@@ -1,8 +1,9 @@
 """Conservative intrinsic keyframe editing on the original FCPXML tree.
 
 Times in the public API are clip-relative rational seconds (or project frames).
-The XML curve uses the clip's source clock. Only a provable 1:1 time mapping is
-editable; unsupported structures remain inspectable and are never guessed.
+The XML curve uses the clip's local output clock, including its start offset.
+Identity and strictly increasing linear time maps are editable; mapped media
+source times are reported separately and never substituted for animation time.
 This module does not render or claim Final Cut import/playback verification.
 """
 
@@ -14,6 +15,7 @@ from collections import defaultdict
 from fractions import Fraction
 
 from .rational import parse_seconds
+from .retime import LinearTimeMap
 from .writer import FCPXMLModifier
 
 # Intrinsic adjustment params match the case-sensitive attribute name in their
@@ -28,8 +30,8 @@ _PROPERTIES = {
 }
 _CLIP_TAGS = {"asset-clip", "video", "audio", "clip", "ref-clip", "mc-clip", "sync-clip", "title"}
 _ORDINARY = {"asset-clip", "video", "audio"}
-# Apple 1.10-1.14 DTD order. Video's leading param* and the newer intrinsic
-# nodes matter: writer._dtd_insert's legacy ordering omits them.
+# Apple 1.10-1.14 DTD order, including video's leading param*. The shared
+# writer order targets asset-clip and does not include that video-only prefix.
 _PREFIX_ORDER = (
     "param", "note", "conform-rate", "timeMap", "object-tracker",
     "adjust-crop", "adjust-corners", "adjust-conform", "adjust-transform",
@@ -157,8 +159,17 @@ class KeyframeEditor:
             if not connected:
                 reasons.append("Only primary-storyline clips and one ordinary connected layer are supported")
         related = [clip] + ancestors[:ancestors.index(sequence)] if sequence in ancestors else [clip]
-        if any(node.find("timeMap") is not None or node.find("conform-rate") is not None for node in related):
-            reasons.append("timeMap/conform-rate on the clip or its host is unsupported")
+        time_mapping_known = True
+        if any(
+            len(node.findall("conform-rate")) > 1
+            or any(conform.get("scaleEnabled") != "0" for conform in node.findall("conform-rate"))
+            for node in related
+        ):
+            reasons.append("timeMap/conform-rate mapping unsupported: active or ambiguous rate conform on the clip or its host")
+            time_mapping_known = False
+        if any(node is not clip and node.find("timeMap") is not None for node in related):
+            reasons.append("timeMap/conform-rate mapping unsupported: the connected host is retimed")
+            time_mapping_known = False
         resources = self.modifier.root.find("resources")
         by_id = {node.get("id"): node for node in resources} if resources is not None else {}
         frame_duration = None
@@ -190,14 +201,17 @@ class KeyframeEditor:
                 for format_id in format_ids:
                     fmt = by_id.get(format_id)
                     if fmt is None or not fmt.get("frameDuration"):
-                        reasons.append("Source video frame rate is unknown; 1:1 time mapping cannot be proven")
+                        reasons.append("Source video frame rate is unknown; source timing cannot be proven")
+                        time_mapping_known = False
                         break
                     try:
                         if parse_seconds(fmt.get("frameDuration")) != frame_duration:
                             reasons.append("Source/clip and project frame rates differ; implicit rate conform is unsupported")
+                            time_mapping_known = False
                             break
                     except ValueError:
                         reasons.append("Source video frameDuration is invalid")
+                        time_mapping_known = False
                         break
         start = duration = None
         try:
@@ -209,9 +223,25 @@ class KeyframeEditor:
                 raise ValueError("Clip duration must be positive")
         except ValueError as exc:
             reasons.append(str(exc))
+        time_map = None
+        maps = clip.findall("timeMap")
+        if maps:
+            try:
+                if len(maps) != 1:
+                    raise ValueError("Multiple timeMap elements are ambiguous")
+                time_map = LinearTimeMap.from_element(maps[0])
+                if start is not None and duration is not None:
+                    # The timeMap domain uses the clip's local output clock,
+                    # including its nonzero start. Never extrapolate a trim.
+                    time_map.source_at(start)
+                    time_map.source_at(start + duration)
+            except ValueError as exc:
+                reasons.append(f"timeMap/conform-rate mapping unsupported: {exc}")
+                time_mapping_known = False
         return {
             "reasons": list(dict.fromkeys(reasons)), "sequence": sequence,
             "frame_duration": frame_duration, "asset": asset, "start": start, "duration": duration,
+            "time_map": time_map, "time_mapping_known": time_mapping_known,
         }
 
     @staticmethod
@@ -259,7 +289,7 @@ class KeyframeEditor:
         return adjustment, param, animations[0] if animations else None
 
     @staticmethod
-    def _points(animation, prop, start, duration):
+    def _points(animation, prop, context):
         if animation is None:
             return []
         points, seen = [], set()
@@ -268,19 +298,33 @@ class KeyframeEditor:
                 raise ValueError("Unexpected child in keyframeAnimation")
             if point.get("time") is None or point.get("value") is None:
                 raise ValueError("Existing keyframe is missing time or value")
-            source_time = parse_seconds(point.get("time"))
-            if source_time in seen:
+            local_time = parse_seconds(point.get("time"))
+            if local_time in seen:
                 raise ValueError("Existing curve has duplicate keyframe times")
-            seen.add(source_time)
-            relative = source_time - start
+            seen.add(local_time)
+            # FCP 12.4's 2x-speed import probe confirms intrinsic parameters
+            # stay on the clip's local OUTPUT clock. Applying timeMap here
+            # would double the animation speed incorrectly.
+            relative = local_time - context["start"]
+            mapped_source = None
+            if context["time_mapping_known"]:
+                try:
+                    mapped_source = context["time_map"].source_at(local_time) if context["time_map"] is not None else local_time
+                except ValueError:
+                    # Keep out-of-map animation points; media time is unknown.
+                    pass
             points.append({
-                "time": _format_seconds(relative), "source_time": point.get("time"),
+                "time": _format_seconds(relative),
+                # source_time is a compatibility alias for the raw XML time,
+                # predating retime support. local_time names that clock exactly.
+                "source_time": point.get("time"), "local_time": point.get("time"),
+                "mapped_source_time": _format_seconds(mapped_source) if mapped_source is not None else None,
                 "value": _decode_value(prop, point.get("value")),
                 "interp": point.get("interp"), "curve": point.get("curve"),
-                "in_range": 0 <= relative < duration,
+                "in_range": 0 <= relative < context["duration"],
                 "attributes": dict(point.attrib),
             })
-        return sorted(points, key=lambda point: parse_seconds(point["time"]))
+        return sorted(points, key=lambda point: parse_seconds(point["local_time"]))
 
     def _describe(self, path, clip, parents):
         context = self._context(clip, parents)
@@ -295,7 +339,7 @@ class KeyframeEditor:
                 if param is not None and param.get("value") is not None:
                     static = param.get("value")
                 if context["start"] is not None and context["duration"] is not None:
-                    points = self._points(animation, prop, context["start"], context["duration"])
+                    points = self._points(animation, prop, context)
             except ValueError as exc:
                 reasons.append(str(exc))
             properties[prop] = {
@@ -306,6 +350,7 @@ class KeyframeEditor:
             "clip_path": path, "name": clip.get("name", ""), "tag": clip.tag,
             "start": clip.get("start", "0s"), "duration": clip.get("duration"),
             "frame_duration": _format_seconds(context["frame_duration"]) if context["frame_duration"] else None,
+            "time_mapping": ("linear" if context["time_map"] is not None else "identity") if context["time_mapping_known"] else "unsupported",
             "supported": any(p["supported"] for p in properties.values()),
             "unsupported_reasons": context["reasons"], "properties": properties,
         }
@@ -329,6 +374,9 @@ class KeyframeEditor:
                     items.append((path, element))
         return {
             "time_basis": "clip-relative", "properties": list(_PROPERTIES),
+            "keyframe_clock": "clip-local-output",
+            "source_time_field": "legacy alias of local_time (raw XML keyframe time)",
+            "mapped_source_time_field": "media source time from the linear timeMap; null when unavailable",
             "clips": [self._describe(path, element, parents) for path, element in items],
         }
 
@@ -343,7 +391,7 @@ class KeyframeEditor:
         reasons = self._property_reasons(clip, context, prop)
         if reasons:
             raise ValueError("Unsupported keyframe target: " + "; ".join(reasons))
-        self._points(self._curve(clip, prop)[2], prop, context["start"], context["duration"])
+        self._points(self._curve(clip, prop)[2], prop, context)
         return clip, context
 
     @staticmethod
@@ -411,19 +459,19 @@ class KeyframeEditor:
             param.insert(index, animation)
         existing = {parse_seconds(point.get("time")): point for point in animation}
         retained = existing if mode == "merge" else {}
-        for source_time, value, incoming_point in incoming:
-            if source_time in existing:
-                point = copy.deepcopy(existing[source_time])
+        for local_time, value, incoming_point in incoming:
+            if local_time in existing:
+                point = copy.deepcopy(existing[local_time])
             else:
                 point = ET.Element("keyframe")
                 self._linear_attributes(point, property)
-            point.set("time", _format_seconds(source_time))
+            point.set("time", _format_seconds(local_time))
             point.set("value", value)
             if "interp" in incoming_point or "curve" in incoming_point:
                 self._linear_attributes(point, property)
-            retained[source_time] = point
+            retained[local_time] = point
         animation[:] = [retained[time] for time in sorted(retained)]
-        result = self._points(animation, property, context["start"], context["duration"])
+        result = self._points(animation, property, context)
         if original_adjustment is None:
             _insert_adjustment(clip, adjustment)
         else:
@@ -453,4 +501,4 @@ class KeyframeEditor:
         else:
             param.remove(animation)
             animation = None
-        return {"clip_path": clip_path, "property": property, "removed": removed, "keyframes": self._points(animation, property, context["start"], context["duration"])}
+        return {"clip_path": clip_path, "property": property, "removed": removed, "keyframes": self._points(animation, property, context)}

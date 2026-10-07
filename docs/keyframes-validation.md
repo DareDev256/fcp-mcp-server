@@ -4,6 +4,10 @@ Base: upstream `2b39ac071f851561d134206d16d2f26f1a8ee91b` (source version
 0.25.1), fork branch `codex/keyframe-animation`. No upstream release or PyPI
 publication is implied. The separate installed 0.16.0 MCP was not replaced.
 
+For the subsequent speed-curve extension and current full-suite counts, see
+[retiming validation](retiming-validation.md). The results below record the
+initial intrinsic-only milestone.
+
 ## Scope
 
 Five intrinsic parameters: position, scale, rotation, opacity and volume.

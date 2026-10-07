@@ -167,11 +167,11 @@ def _apply(editor: KeyframeEditor, operation: dict) -> dict:
                                    operation.get("times"))
 
 
-def _output_path(filepath: str, requested: str | None) -> Path:
+def _output_path(filepath: str, requested: str | None, *, suffix: str = "_keyframes") -> Path:
     srv = _common.tools.server_module()
     source = Path(filepath)
     if requested is None:
-        stem = source.stem + "_keyframes"
+        stem = source.stem + suffix
         candidate = source.with_name(stem + source.suffix)
         number = 2
         while os.path.lexists(candidate):
