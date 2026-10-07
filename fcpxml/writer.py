@@ -175,18 +175,46 @@ def _sanitize_xml_value(value: str, max_length: int = _MAX_MARKER_NAME_LENGTH) -
 # FCPXML DTD child element ordering for asset-clip / clip elements.
 # Elements MUST appear in this order for DTD validation.
 # See: https://developer.apple.com/documentation/professional-video-applications/fcpxml-reference
+#
+# This must mirror the DTD's asset-clip content model exactly. A tag missing
+# from this list falls back to "last priority" (len(_ASSET_CLIP_CHILD_ORDER)),
+# which is worse than not being ranked at all: it makes the missing tag look
+# like it belongs AFTER every ranked tag, including marker/keyword/etc. That
+# silently reordered a correctly-placed <adjust-colorConform> to *after* a
+# newly-inserted <marker>, producing a DTD validation failure on import into
+# Final Cut Pro (FCP 12.3 / FCPXML 1.14) — see CHANGELOG / issue for the repro.
+# _check_child_order() below reads this same table, so an incomplete list
+# also blinds the validator to the exact bug it introduces.
+#
+# Verified against xmllint's own reported content model for asset-clip
+# under Apple's FCPXMLv1_14.dtd:
+#   (note?, (conform-rate?, timeMap?),
+#    ((object-tracker?, adjust-crop?, adjust-corners?, adjust-conform?,
+#      adjust-transform?, adjust-blend?, adjust-stabilization?,
+#      adjust-rollingShutter?, adjust-360-transform?, adjust-reorient?,
+#      adjust-orientation?, adjust-cinematic?, adjust-colorConform?,
+#      adjust-stereo-3D?), adjust-volume?, adjust-panner?),
+#    (audio|video|clip|title|caption|mc-clip|ref-clip|sync-clip|asset-clip|
+#     audition|spine|live-drawing)*,
+#    (marker|chapter-marker|rating|keyword|analysis-marker|hidden-clip-marker)*,
+#    audio-channel-source*, (filter-video|filter-video-mask)*, filter-audio*,
+#    metadata?)
 _ASSET_CLIP_CHILD_ORDER = [
     'note',
     'conform-rate', 'timeMap',
+    'object-tracker',
     'adjust-crop', 'adjust-corners', 'adjust-conform', 'adjust-transform',
     'adjust-blend', 'adjust-stabilization', 'adjust-rollingShutter',
     'adjust-360-transform', 'adjust-reorient', 'adjust-orientation',
+    'adjust-cinematic', 'adjust-colorConform', 'adjust-stereo-3D',
     'adjust-volume', 'adjust-panner',
     # anchor items (connected clips, titles, etc.)
     'audio', 'video', 'clip', 'title', 'caption',
     'mc-clip', 'ref-clip', 'sync-clip', 'asset-clip', 'audition', 'spine',
+    'live-drawing',
     # marker items
     'marker', 'chapter-marker', 'rating', 'keyword', 'analysis-marker',
+    'hidden-clip-marker',
     # trailing
     'audio-channel-source',
     'filter-video', 'filter-video-mask',
@@ -3677,7 +3705,7 @@ class FCPXMLWriter:
             attrs['start'] = self._tc_to_rational(keyword.start)
         if keyword.duration:
             attrs['duration'] = self._tc_to_rational(keyword.duration)
-        ET.SubElement(parent, 'keyword', **attrs)
+        _dtd_insert(parent, ET.Element('keyword', **attrs))
 
 
 # ============================================================================
