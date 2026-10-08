@@ -6,7 +6,7 @@ from fractions import Fraction
 import pytest
 
 from fcpxml.dtd import validate_against_dtd
-from fcpxml.keyframes import KeyframeEditor
+from fcpxml.keyframes import KEYFRAME_CURVE_OPTIONS, KeyframeEditor
 from fcpxml.rational import parse_seconds
 from fcpxml.writer import FCPXMLModifier
 
@@ -86,8 +86,8 @@ def test_exact_fractional_frame_conversion(make_editor):
     [{"frame": True, "value": 0.5}], [{"frame": -1, "value": 0.5}],
     [{"time": "0s", "value": float("nan")}], [{"time": "0s", "value": float("inf")}],
     [{"time": "0s", "value": True}], [{"time": "0s", "value": "0.5"}],
-    [{"time": "0s", "value": 1.1}], [{"time": "0s", "value": 0.5, "interp": "ease"}],
-    [{"time": "0s", "value": 0.5, "curve": "smooth"}],
+    [{"time": "0s", "value": 1.1}], [{"time": "0s", "value": 0.5, "interp": "bezier"}],
+    [{"time": "0s", "value": 0.5, "curve": "bezier"}],
     [{"time": "1s", "value": 0.5}, {"time": "24/24s", "value": 0.6}],
     [{"time": "0s", "value": 0.5}, {"time": "1s", "value": 2}], [],
 ])
@@ -399,10 +399,14 @@ def test_edit_fcp_native_curve_preserves_serialization_and_color_conform(make_ed
         assert before[other] == after[other]
 
 
-@pytest.mark.parametrize("prop,expected_curve", [("position", "linear"), ("rotation", None), ("opacity", "linear"), ("volume", None)])
-def test_explicit_linear_normalizes_existing_attributes(make_editor, prop, expected_curve):
+@pytest.mark.parametrize("field", ["interp", "curve"])
+@pytest.mark.parametrize("prop,expected_curve", [
+    ("position", "linear"), ("scale", "linear"), ("rotation", None), ("opacity", "linear"), ("volume", None),
+])
+def test_explicit_linear_normalizes_existing_attributes(make_editor, prop, expected_curve, field):
     tag, name, value = {
         "position": ("adjust-transform", "position", "0 0"),
+        "scale": ("adjust-transform", "scale", "1 1"),
         "rotation": ("adjust-transform", "rotation", "0"),
         "opacity": ("adjust-blend", "amount", "0.5"),
         "volume": ("adjust-volume", "amount", "-6dB"),
@@ -413,10 +417,22 @@ def test_explicit_linear_normalizes_existing_attributes(make_editor, prop, expec
         f'</keyframeAnimation></param></{tag}></asset-clip>'
     )
     value = [1, 2] if prop == "position" else 0.5
-    point = editor.set_keyframes(path_for(editor), prop, [{"time": "0s", "value": value, "interp": "linear"}])["keyframes"][0]
+    point = editor.set_keyframes(path_for(editor), prop, [{"time": "0s", "value": value, field: "linear"}])["keyframes"][0]
     assert point["interp"] is None
     assert point["curve"] == expected_curve
     assert point["attributes"]["auxValue"] == "preserved"
+
+
+@pytest.mark.parametrize("prop,mode", [
+    (prop, mode) for prop, options in KEYFRAME_CURVE_OPTIONS.items() for mode in options["curve"]
+])
+def test_every_accepted_curve_mode_is_written_on_a_new_point(make_editor, prop, mode):
+    # Guards the writer against a curve mode added to the options table alone.
+    editor = make_editor()
+    value = [1, 2] if prop == "position" else 0.5
+    point = editor.set_keyframes(path_for(editor), prop, [{"time": "0s", "value": value, "curve": mode}])["keyframes"][0]
+    # FCP 12.4 exports no curve attribute on rotation or volume.
+    assert point["curve"] == (mode if prop in ("position", "scale", "opacity") else None)
 
 
 @pytest.mark.parametrize("disabled_element", ["adjustment", "param", "both"])
@@ -708,3 +724,149 @@ def test_asset_wide_time_map_on_trimmed_clip_keeps_animation_on_local_clock(make
     assert point["local_time"] == "13/2s"
     assert point["mapped_source_time"] == "13s"
     assert point["time"] == "3/2s"
+
+
+@pytest.mark.parametrize("interp", ["ease", "easeIn", "easeOut"])
+def test_sparse_native_opacity_easing_roundtrip_without_baking(make_editor, tmp_path, interp):
+    editor = make_editor()
+    path = path_for(editor)
+    result = editor.set_keyframes(path, "opacity", [
+        {"time": time, "value": value, "interp": interp}
+        for time, value in zip(("0s", "1s", "3/2s"), (0.2, 1, 0.2))
+    ])
+    assert len(editor.modifier.root.findall(".//keyframe")) == 3
+    assert [point["local_time"] for point in result["keyframes"]] == ["100s", "101s", "203/2s"]
+    assert [point["interp"] for point in result["keyframes"]] == [interp] * 3
+    assert all(point["curve"] is None for point in result["keyframes"])
+    destination = tmp_path / "sparse-opacity.fcpxml"
+    editor.modifier.save(str(destination))
+    reparsed = KeyframeEditor(FCPXMLModifier(str(destination)))
+    assert reparsed.list_keyframes(path)["clips"][0]["properties"]["opacity"]["keyframes"] == result["keyframes"]
+
+
+@pytest.mark.parametrize("prop,value", [("position", [1, 2]), ("scale", 1), ("rotation", 45), ("volume", -6)])
+@pytest.mark.parametrize("interp", ["ease", "easeIn", "easeOut"])
+def test_unverified_intrinsic_easing_rejects_without_partial_mutation(make_editor, prop, value, interp):
+    editor = make_editor()
+    before = raw(editor)
+    with pytest.raises(ValueError, match=f"{prop} interp"):
+        editor.set_keyframes(path_for(editor), prop, [
+            {"time": "0s", "value": value}, {"time": "1s", "value": value, "interp": interp},
+        ])
+    assert raw(editor) == before
+
+
+@pytest.mark.parametrize("prop,value", [
+    ("position", [1, 2]), ("scale", 1), ("rotation", 45), ("opacity", 0.5), ("volume", -6),
+])
+def test_native_smooth_mode_is_not_exposed_until_it_controls_playback(make_editor, prop, value):
+    editor = make_editor()
+    before = raw(editor)
+    with pytest.raises(ValueError, match=f"{prop} curve"):
+        editor.set_keyframes(path_for(editor), prop, [{"time": "0s", "value": value, "curve": "smooth"}])
+    assert raw(editor) == before
+
+
+@pytest.mark.parametrize("options", [
+    {"interp": None}, {"interp": []}, {"curve": {"x": 1}},
+    {"curve": "smooth2"}, {"auxValue": "arbitrary XML"}, {"curve": True},
+])
+def test_invalid_curve_options_reject_without_partial_mutation(make_editor, options):
+    editor = make_editor()
+    before = raw(editor)
+    with pytest.raises(ValueError):
+        editor.set_keyframes(path_for(editor), "opacity", [
+            {"time": "0s", "value": 0.2}, {"time": "1s", "value": 1, **options},
+        ])
+    assert raw(editor) == before
+
+
+def test_sparse_opacity_merge_delete_and_replace_preserve_existing_metadata(make_editor):
+    editor = make_editor(
+        '<asset-clip ref="r2" start="100s" duration="2s"><adjust-blend>'
+        '<param name="amount"><keyframeAnimation>'
+        '<keyframe time="100s" value="0.2" interp="easeIn" auxValue="left"/>'
+        '<keyframe time="101s" value="1" interp="ease" auxValue="middle"/>'
+        '<keyframe time="203/2s" value="0.2" interp="easeOut" auxValue="right"/>'
+        '</keyframeAnimation></param></adjust-blend></asset-clip>'
+    )
+    path = path_for(editor)
+    original = editor.list_keyframes(path)["clips"][0]["properties"]["opacity"]["keyframes"]
+    merged = editor.set_keyframes(path, "opacity", [{"time": "1s", "value": 0.8}])["keyframes"]
+    assert merged[0] == original[0]
+    assert merged[2] == original[2]
+    assert merged[1]["attributes"] == {**original[1]["attributes"], "value": "0.8"}
+    assert editor.delete_keyframes(path, "opacity", ["1s"])["keyframes"] == [original[0], original[2]]
+    replaced = editor.set_keyframes(path, "opacity", [{"time": "0s", "value": 0.3}], mode="replace")["keyframes"]
+    assert len(replaced) == 1
+    assert replaced[0]["attributes"] == {**original[0]["attributes"], "value": "0.3"}
+
+
+def test_explicit_opacity_easing_switches_preserve_linear_normalization_contract(make_editor):
+    editor = make_editor()
+    path = path_for(editor)
+
+    def update(**options):
+        return editor.set_keyframes(path, "opacity", [{"time": "0s", "value": 0.5, **options}])["keyframes"][0]
+
+    assert update()["attributes"] == {"time": "100s", "value": "0.5", "curve": "linear"}
+    assert update(interp="ease")["attributes"] == {"time": "100s", "value": "0.5", "interp": "ease"}
+    assert update()["interp"] == "ease"
+    assert update(interp="easeIn")["interp"] == "easeIn"
+    assert update(interp="linear")["attributes"] == {"time": "100s", "value": "0.5", "curve": "linear"}
+    assert update(interp="easeOut")["interp"] == "easeOut"
+    assert update(curve="linear")["interp"] is None
+
+
+def test_sparse_opacity_easing_ntsc_frames_use_nonzero_local_output_clock(make_editor):
+    editor = make_editor(rate="1001/30000s")
+    points = editor.set_keyframes(path_for(editor), "opacity", [
+        {"frame": frame, "value": value, "interp": "ease"}
+        for frame, value in zip((0, 29, 58), (0.2, 1, 0.2))
+    ])["keyframes"]
+    assert len(points) == 3
+    for point, frame in zip(points, (0, 29, 58)):
+        assert parse_seconds(point["time"]) == frame * Fraction(1001, 30000)
+        assert parse_seconds(point["local_time"]) == 100 + frame * Fraction(1001, 30000)
+
+
+def test_sparse_opacity_easing_keeps_local_output_clock_on_retimed_clip(make_editor):
+    editor = make_editor(LINEAR_RETIME_CLIP, rate="1/30s")
+    path = path_for(editor)
+    time_map = editor.modifier.root.find(".//timeMap")
+    before = ET.tostring(time_map)
+    points = editor.set_keyframes(path, "opacity", [
+        {"time": time, "value": value, "interp": "ease"}
+        for time, value in zip(("0s", "5/2s", "5s"), (0.2, 1, 0.2))
+    ])["keyframes"]
+    assert len(points) == 3
+    assert [point["local_time"] for point in points] == ["4s", "13/2s", "9s"]
+    assert [point["mapped_source_time"] for point in points] == ["5s", "8s", "23/2s"]
+    assert ET.tostring(time_map) == before
+
+
+@pytest.mark.parametrize("version", ["1.10", "1.11", "1.12", "1.13", "1.14"])
+def test_sparse_opacity_easing_conforms_to_apple_dtd(make_editor, tmp_path, version):
+    editor = make_editor(version=version)
+    editor.set_keyframes(path_for(editor), "opacity", [
+        {"time": time, "value": value, "interp": interp}
+        for time, value, interp in zip(("0s", "1s", "3/2s"), (0.2, 1, 0.2), ("ease", "easeIn", "easeOut"))
+    ])
+    destination = tmp_path / f"sparse-{version}.fcpxml"
+    editor.modifier.save(str(destination))
+    valid, detail = validate_against_dtd(str(destination))
+    if valid is None:
+        pytest.skip(detail)
+    assert valid, detail
+
+
+@pytest.mark.parametrize("interp", ["ease", "easeIn", "easeOut"])
+def test_opacity_easing_cannot_mix_explicit_curve_fields(make_editor, interp):
+    editor = make_editor()
+    before = raw(editor)
+    with pytest.raises(ValueError, match="cannot be combined"):
+        editor.set_keyframes(path_for(editor), "opacity", [
+            {"time": "0s", "value": 0.2},
+            {"time": "1s", "value": 1, "interp": interp, "curve": "linear"},
+        ])
+    assert raw(editor) == before

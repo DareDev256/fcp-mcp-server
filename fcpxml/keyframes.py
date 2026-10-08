@@ -9,12 +9,11 @@ This module does not render or claim Final Cut import/playback verification.
 
 import copy
 import math
-import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from fractions import Fraction
 
-from .rational import parse_seconds
+from .animation_curves import check_curve_property, sample_animation_curve
+from .rational import format_exact_seconds, parse_seconds, parse_strict_seconds
 from .retime import LinearTimeMap
 from .writer import FCPXMLModifier
 
@@ -28,6 +27,17 @@ _PROPERTIES = {
     "opacity": ("adjust-blend", "amount", "1"),
     "volume": ("adjust-volume", "amount", "0dB"),
 }
+# Keep native curve capabilities per property in one place. The general DTD
+# permits more combinations than Final Cut's intrinsic parameters support.
+# Final Cut 12.4 retains nonlinear opacity interpolation. Other intrinsic
+# properties reject or ignore it; no intermediate points are baked here.
+KEYFRAME_CURVE_OPTIONS = {
+    "position": {"interp": ("linear",), "curve": ("linear",)},
+    "scale": {"interp": ("linear",), "curve": ("linear",)},
+    "rotation": {"interp": ("linear",), "curve": ("linear",)},
+    "opacity": {"interp": ("linear", "ease", "easeIn", "easeOut"), "curve": ("linear",)},
+    "volume": {"interp": ("linear",), "curve": ("linear",)},
+}
 _CLIP_TAGS = {"asset-clip", "video", "audio", "clip", "ref-clip", "mc-clip", "sync-clip", "title"}
 _ORDINARY = {"asset-clip", "video", "audio"}
 # Apple 1.10-1.14 DTD order, including video's leading param*. The shared
@@ -40,20 +50,6 @@ _PREFIX_ORDER = (
     "adjust-cinematic", "adjust-colorConform", "adjust-stereo-3D",
     "adjust-volume", "adjust-panner",
 )
-_TIME = re.compile(r"\d+(?:/\d+)?s\Z")
-
-
-def _format_seconds(value: Fraction) -> str:
-    """Serialize exactly, without the frame snapping of rational.format_seconds."""
-    return f"{value.numerator}s" if value.denominator == 1 else f"{value.numerator}/{value.denominator}s"
-
-
-def _seconds(value: str) -> Fraction:
-    if not isinstance(value, str) or not _TIME.fullmatch(value):
-        raise ValueError("time must be nonnegative rational seconds, e.g. '1s' or '1001/30000s'")
-    return parse_seconds(value)
-
-
 def _number(value) -> str:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("keyframe values must be finite numbers (not strings or booleans)")
@@ -314,11 +310,11 @@ class KeyframeEditor:
                     # Keep out-of-map animation points; media time is unknown.
                     pass
             points.append({
-                "time": _format_seconds(relative),
+                "time": format_exact_seconds(relative),
                 # source_time is a compatibility alias for the raw XML time,
                 # predating retime support. local_time names that clock exactly.
                 "source_time": point.get("time"), "local_time": point.get("time"),
-                "mapped_source_time": _format_seconds(mapped_source) if mapped_source is not None else None,
+                "mapped_source_time": format_exact_seconds(mapped_source) if mapped_source is not None else None,
                 "value": _decode_value(prop, point.get("value")),
                 "interp": point.get("interp"), "curve": point.get("curve"),
                 "in_range": 0 <= relative < context["duration"],
@@ -349,7 +345,7 @@ class KeyframeEditor:
         return {
             "clip_path": path, "name": clip.get("name", ""), "tag": clip.tag,
             "start": clip.get("start", "0s"), "duration": clip.get("duration"),
-            "frame_duration": _format_seconds(context["frame_duration"]) if context["frame_duration"] else None,
+            "frame_duration": format_exact_seconds(context["frame_duration"]) if context["frame_duration"] else None,
             "time_mapping": ("linear" if context["time_map"] is not None else "identity") if context["time_mapping_known"] else "unsupported",
             "supported": any(p["supported"] for p in properties.values()),
             "unsupported_reasons": context["reasons"], "properties": properties,
@@ -404,7 +400,7 @@ class KeyframeEditor:
                 raise ValueError("frame must be a nonnegative integer in the project frame rate")
             relative = frame * context["frame_duration"]
         else:
-            relative = _seconds(point["time"])
+            relative = parse_strict_seconds(point["time"])
         if not 0 <= relative < context["duration"]:
             raise ValueError("Keyframe time must satisfy 0 <= time < clip duration")
         return relative
@@ -419,6 +415,17 @@ class KeyframeEditor:
         point.attrib.pop("curve", None)
         if prop in ("position", "scale", "opacity"):
             point.set("curve", "linear")
+
+    @classmethod
+    def _interpolation_attributes(cls, point, prop, incoming):
+        # Explicit linear (interp or curve) normalizes; KEYFRAME_CURVE_OPTIONS
+        # accepts no other curve. A nonlinear interp then overrides it.
+        if incoming.get("interp") == "linear" or incoming.get("curve") == "linear":
+            cls._linear_attributes(point, prop)
+        if incoming.get("interp", "linear") != "linear":
+            # FCP's native opacity easing export retains interp and omits curve.
+            point.attrib.pop("curve", None)
+            point.set("interp", incoming["interp"])
 
     def set_keyframes(self, clip_path: str, property: str, keyframes: list[dict], mode="merge") -> dict:
         """Merge points or replace one curve; validate everything before mutation."""
@@ -437,9 +444,11 @@ class KeyframeEditor:
             if relative in seen:
                 raise ValueError("Duplicate keyframe time in input")
             seen.add(relative)
-            for field in ("interp", "curve"):
-                if field in point and point[field] != "linear":
-                    raise ValueError(f"Only linear {field} is supported for new edits")
+            for field, supported in KEYFRAME_CURVE_OPTIONS[property].items():
+                if field in point and point[field] not in supported:
+                    raise ValueError(f"{property} {field} must be one of: {', '.join(supported)}")
+            if point.get("interp", "linear") != "linear" and "curve" in point:
+                raise ValueError("Nonlinear interp cannot be combined with curve; omit curve for native opacity easing")
             incoming.append((relative + context["start"], _encode_value(property, point["value"]), point))
 
         original_adjustment, _original_param, _original_animation = self._curve(clip, property)
@@ -465,10 +474,9 @@ class KeyframeEditor:
             else:
                 point = ET.Element("keyframe")
                 self._linear_attributes(point, property)
-            point.set("time", _format_seconds(local_time))
+            point.set("time", format_exact_seconds(local_time))
             point.set("value", value)
-            if "interp" in incoming_point or "curve" in incoming_point:
-                self._linear_attributes(point, property)
+            self._interpolation_attributes(point, property, incoming_point)
             retained[local_time] = point
         animation[:] = [retained[time] for time in sorted(retained)]
         result = self._points(animation, property, context)
@@ -479,6 +487,25 @@ class KeyframeEditor:
             clip.remove(original_adjustment)
             clip.insert(index, adjustment)
         return {"clip_path": clip_path, "property": property, "mode": mode, "updated": len(incoming), "keyframes": result}
+
+    def set_animation_curve(self, clip_path: str, property: str, points: list[dict], tolerance=None) -> dict:
+        """Replace one property with a frame-error-bounded cubic approximation."""
+        # Before clip checks: a video-only clip would otherwise blame missing
+        # audio when volume was asked for, hiding that curves never take volume.
+        check_curve_property(property)
+        clip, context = self._editable(clip_path, property)
+        sampled = sample_animation_curve(
+            property, points, context["frame_duration"], context["duration"], tolerance,
+        )
+        generated = sampled.pop("keyframes")
+        self.set_keyframes(clip_path, property, generated, mode="replace")
+        # This action authors a fresh approximation. Unlike set_keyframes, it
+        # must not inherit unknown tangent/auxiliary data at coincident times.
+        animation = self._curve(clip, property)[2]
+        for point in animation:
+            point.attrib.pop("auxValue", None)
+        return {"clip_path": clip_path, "property": property, "mode": "replace",
+                **sampled, "keyframes": self._points(animation, property, context)}
 
     def delete_keyframes(self, clip_path: str, property: str, times: list[str] | None = None) -> dict:
         """Delete selected relative times or clear the curve, preserving static values."""

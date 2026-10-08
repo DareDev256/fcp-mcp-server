@@ -332,3 +332,114 @@ async def test_bundle_publication_failure_removes_only_our_incomplete_output(pro
     assert sidecar.read_bytes() == b"preserve me"
     assert (bundle / "Info.fcpxml").read_bytes() == project.read_bytes()
     assert journal.records(str(bundle)) == []
+
+
+def test_curve_schemas_are_valid_draft7_and_have_no_destructive_defaults():
+    validator = pytest.importorskip("jsonschema").Draft7Validator
+    for tool in server._legacy_tool_list():
+        if tool.name in kt.ACTION_SCHEMAS:
+            validator.check_schema(tool_input_schema(tool))
+    for name in server.TOOL_GROUPS:
+        validator.check_schema(tool_input_schema(server._group_tool(name)))
+    point = kt.ACTION_SCHEMAS["set_keyframes"]["properties"]["keyframes"]["items"]["properties"]
+    assert "default" not in point["interp"]
+    assert "default" not in point["curve"]
+
+
+@pytest.mark.parametrize("prop,options,valid", [
+    ("position", {}, True),
+    ("position", {"curve": "smooth"}, False),
+    ("position", {"interp": "easeIn"}, False),
+    ("scale", {"interp": "easeOut"}, False),
+    ("rotation", {"interp": "ease"}, False),
+    ("rotation", {"curve": "smooth"}, False),
+    ("opacity", {"interp": "ease"}, True),
+    ("opacity", {"interp": "ease", "curve": "linear"}, False),
+    ("opacity", {"interp": "easeIn", "curve": "linear"}, False),
+    ("opacity", {"interp": "easeOut", "curve": "linear"}, False),
+    ("opacity", {"curve": "smooth"}, False),
+    ("volume", {}, True),
+    ("volume", {"interp": "linear", "curve": "linear"}, True),
+    ("volume", {"interp": "ease"}, False),
+    ("volume", {"interp": "easeIn"}, False),
+    ("volume", {"interp": "easeOut"}, False),
+    ("volume", {"curve": "smooth"}, False),
+    ("position", {"interp": "bezier"}, False),
+    ("position", {"curve": "smooth2"}, False),
+    ("position", {"auxValue": "raw XML"}, False),
+])
+def test_curve_constraints_match_flat_grouped_and_batch_surfaces(prop, options, valid):
+    validator = pytest.importorskip("jsonschema").Draft7Validator
+    value = [1, 2] if prop in ("position", "scale") else 0.5
+    args = {"filepath": "/tmp/source.fcpxml", "clip_path": "/clip", "property": prop,
+            "keyframes": [{"time": "0s", "value": value, **options}]}
+    operation = {"action": "set", **{key: value for key, value in args.items() if key != "filepath"}}
+    batch = {"filepath": args["filepath"], "operations": [operation]}
+    flat = {tool.name: tool_input_schema(tool) for tool in server._legacy_tool_list()}
+    group = tool_input_schema(server._group_tool("edit"))
+    for schema, payload in [
+        (flat["set_keyframes"], args),
+        (group, {"action": "set_keyframes", "args": args}),
+        (flat["batch_keyframes"], batch),
+        (group, {"action": "batch_keyframes", "args": batch}),
+    ]:
+        assert validator(schema).is_valid(payload) is valid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["flat", "grouped", "batch"])
+async def test_native_sparse_opacity_easing_passes_mcp_roundtrip_without_baking(project, surface):
+    before = project.read_bytes()
+    args = await set_args(project, property="opacity", keyframes=[
+        {"frame": frame, "value": value, "interp": "ease"}
+        for frame, value in zip((0, 50, 100), (0.2, 1, 0.2))
+    ])
+    if surface == "flat":
+        response = (await server.call_tool("set_keyframes", args))[0].text
+    elif surface == "grouped":
+        response = await call("edit", "set_keyframes", args)
+    else:
+        response = await call("edit", "batch_keyframes", {
+            "filepath": str(project), "operations": [
+                {"action": "set", **{key: value for key, value in args.items() if key != "filepath"}},
+            ],
+        })
+    result = json.loads(response)
+    output = Path(result["output_path"])
+    assert len(ET.parse(output).findall(".//keyframe")) == 3
+    points = (await listing(output))["clips"][1]["properties"]["opacity"]["keyframes"]
+    assert [point["time"] for point in points] == ["0s", "2s", "4s"]
+    assert [point["local_time"] for point in points] == ["20s", "22s", "24s"]
+    assert [point["interp"] for point in points] == ["ease"] * 3
+    assert all(point["curve"] is None for point in points)
+    assert project.read_bytes() == before
+    assert len(journal.records(str(project))) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prop,options", [
+    ("volume", {"interp": "ease"}),
+    ("volume", {"curve": "smooth"}),
+    ("rotation", {"curve": "smooth"}),
+    ("opacity", {"interp": "ease", "curve": "linear"}),
+])
+async def test_nonlinear_batch_failure_preserves_input_and_publishes_nothing(project, prop, options):
+    before = project.read_bytes()
+    clip = await selection(project)
+    output = project.with_name("rejected-native-curve.fcpxml")
+    response = await call("edit", "batch_keyframes", {
+        "filepath": str(project), "output_path": str(output), "operations": [
+            {"action": "set", "clip_path": clip, "property": "opacity", "keyframes": [
+                {"time": "0s", "value": 0.2, "interp": "ease"},
+                {"time": "1s", "value": 1, "interp": "ease"},
+            ]},
+            {"action": "set", "clip_path": clip, "property": prop,
+             "keyframes": [{"time": "0s", "value": 0, **options}]},
+        ],
+    })
+    assert "Validation error" in response
+    assert prop in response
+    assert not output.exists()
+    assert project.read_bytes() == before
+    assert journal.records(str(project)) == []
+    assert not list(project.parent.glob(".keyframes-*"))

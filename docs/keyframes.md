@@ -1,7 +1,8 @@
 # Video and audio keyframes
 
 Use `inspect.list_keyframes` to read animation, and `edit.set_keyframes`,
-`edit.delete_keyframes` or `edit.batch_keyframes` to change it. These actions
+`edit.delete_keyframes`, `edit.batch_keyframes` or `edit.set_animation_curve`
+to change it. These actions
 belong to the existing `inspect` and `edit` tool groups.
 
 ## Run this source version
@@ -56,14 +57,18 @@ a 2x time map, and animation keys at local times 5 and 10 seconds. At output
 while the media has reached source time 8 seconds. Both video and volume use
 this local output clock.
 
-New curves use native linear behavior. Optional `interp` / `curve` inputs
-accept only `"linear"`; omit them to preserve an existing point's attributes
-when changing its value. The XML representation differs by parameter:
-position/scale/opacity write `curve="linear"`; rotation/volume omit these
-attributes, as verified in Final Cut Pro 12.4 exports. Volume interpolation
-is linear in gain, **not in dB**: halfway from -24 dB to 0 dB reads about
--5.5 dB in FCP. Automatic speech detection/ducking is not included; provide
-the times and levels for the desired envelope.
+New points default to native linear behavior. `interp` accepts `linear` on all
+properties and native `ease`, `easeIn`, `easeOut` on **opacity only**. Native
+opacity easing keeps the authored point count. Do not combine nonlinear
+`interp` with `curve`. Optional `curve` accepts only `linear`; `smooth` is not
+exposed because a smooth tag alone did not produce curved motion in FCP 12.4.
+Omit both fields to preserve existing attributes when changing a point's value.
+Explicit linear normalizes them: position/scale/opacity use `curve="linear"`;
+rotation/volume omit both fields. Native opacity easing uses `interp` alone.
+
+Volume interpolation is linear in gain, **not in dB**: halfway from -24 dB to
+0 dB reads about -5.5 dB in FCP. Audio automation remains on `set_keyframes`;
+automatic speech detection/ducking is not included.
 
 ## Select the exact clip
 
@@ -103,6 +108,73 @@ lossy parser models. Other adjustments, markers, effects and bundle sidecars
 are retained. Existing disabled/ambiguous parameters or unsupported curve
 payloads are reported instead of silently rewritten.
 
+## Bezier paths and temporal easing
+
+Use `edit.set_animation_curve` for a curved motion path or eased transform.
+It accepts 2–100 authored `points` and **replaces the selected property's whole
+animation**, including old out-of-range keys. Other properties remain intact.
+Each point has `value` and exactly one project-aligned `time` or `frame`; times
+must be strictly increasing and inside the visible clip. Unlike ordinary audio
+keyframes, this action does not accept subframe times.
+
+Optional `control_out` and `control_in` describe a cubic Bezier segment using
+**absolute property values**, not offsets or time coordinates. Missing handles
+are placed at one-third and two-thirds along the straight chord. Supply handles
+to bend a position path. First `control_in`, last `control_out` and last `easing`
+are rejected because they do not belong to a segment. Controls use the same
+shape and limits as values (including positive scale and opacity in `[0,1]`).
+Values and tolerances must be finite, with absolute value at most `1e12`.
+
+Each segment starts at a point whose optional `easing` transforms normalized
+time `u`: `linear` = `u`; `ease` = `3u²−2u³`; `easeIn` = `u²`; `easeOut` =
+`2u−u²`. This controls travel along the cubic, so easing changes motion even
+when the spatial path is straight. These are sampler formulas, not claims that
+FCP's native opacity presets use the same formulas.
+
+Example: a five-second arch in a clip longer than five seconds:
+
+```json
+{
+  "action": "set_animation_curve",
+  "args": {
+    "filepath": "/path/project.fcpxml",
+    "clip_path": "/fcpxml[1]/library[1]/event[1]/project[1]/sequence[1]/spine[1]/asset-clip[1]",
+    "property": "position",
+    "points": [
+      {"time": "0s", "value": [-40, 0], "control_out": [-20, 40], "easing": "ease"},
+      {"time": "5s", "value": [40, 0], "control_in": [20, 40]}
+    ],
+    "tolerance": 0.05
+  }
+}
+```
+
+The action evaluates the cubic at project frames, then selects keys two
+ways: reaching forward from each kept key as far as the straight segment
+stays within tolerance, and repeatedly adding the worst frame of each
+segment. It keeps whichever selection needs fewer keys. Both check
+**same-time** interpolation error at every evaluated frame and preserve
+every authored knot. It reports `authored_point_count`,
+`sampled_frame_count`, `generated_keyframe_count`, `tolerance`, `max_error` and
+`representation: "adaptive_linear"`. The key count is usually at or near the
+minimum for the requested accuracy, but the minimum is not guaranteed.
+Straight uniform motion can use just its endpoints.
+
+`tolerance` is absolute scalar error or Euclidean vector error in property
+units. Defaults are position `0.05`, scale `0.001`, rotation `0.1`, opacity
+`0.001`. At 720p, position `0.05` corresponds to `0.36` pixels. Smaller tolerances
+usually retain more keys. The guarantee covers project frame times between
+authored endpoints, before FCP serialization; it does not cover between-frame
+samples, media retiming, or native export rounding. Limits are 18,000 evaluated
+frames and 1,000 generated keys; exceeding a limit fails without publishing.
+
+The output contains ordinary **linear FCP keyframes approximating the authored
+curve**, not native Bezier handles. Save the request's control points to reauthor
+the curve; XML readback describes the generated keys and cannot reconstruct
+those controls. `set_animation_curve` supports position, scale, rotation and
+opacity, not volume or `timeMap` speed curves. For sparse native opacity easing,
+prefer `set_keyframes` with the opacity `interp` presets.
+
 ## Delete or batch
 
 `delete_keyframes` takes `filepath`, `clip_path`, `property` and optional
@@ -126,8 +198,8 @@ Reverse/freeze/smooth time maps, retimed hosts, active rate conform, uncertain f
 conversion, compound/ref/multicam/sync/title structures and arbitrary effect
 parameters are rejected for editing and exposed with reasons. Unsupported
 maps remain inspectable: local keyframe times and values are retained, while
-`mapped_source_time` is unavailable. No custom Bezier editor or tracking is
-provided. After trimming, splitting or changing speed, re-inspect the visible
+`mapped_source_time` is unavailable. Native spatial Bezier handles and tracking
+are not exposed. After trimming, splitting or changing speed, re-inspect the visible
 range and verify in FCP. See [speed curve editing](retiming.md).
 
 Outputs are new numbered `_keyframes` siblings by default. Explicit
@@ -143,6 +215,9 @@ DTD validity proves XML structure, not FCP behavior. The proxy renderer does
 not evaluate these animations. Import into a separate FCP test library,
 inspect start/middle/end values, then export XML and compare time/value
 curves. See [validation evidence](keyframes-validation.md).
+
+See [curve-specific validation](animation-curves-validation.md) for native easing
+and adaptive Bezier import/export evidence.
 
 ## Sources
 

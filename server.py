@@ -3548,6 +3548,7 @@ from tools.keyframes import (  # noqa: E402
     handle_batch_keyframes,
     handle_delete_keyframes,
     handle_list_keyframes,
+    handle_set_animation_curve,
     handle_set_keyframes,
 )
 from tools.media import (  # noqa: E402
@@ -3746,6 +3747,7 @@ TOOL_HANDLERS = {
     "reset_speed": handle_reset_speed,
     "list_keyframes": handle_list_keyframes,
     "set_keyframes": handle_set_keyframes,
+    "set_animation_curve": handle_set_animation_curve,
     "delete_keyframes": handle_delete_keyframes,
     "batch_keyframes": handle_batch_keyframes,
     # Read
@@ -3879,7 +3881,7 @@ TOOL_GROUPS: dict[str, dict] = {
             "reorder_clips", "change_speed", "rapid_trim", "add_transition",
             "add_audio", "add_connected_clip", "assign_role", "fill_gaps",
             "fix_flash_frames", "remove_silence_candidates", "remove_media_silence",
-            "set_keyframes", "delete_keyframes", "batch_keyframes",
+            "set_keyframes", "delete_keyframes", "batch_keyframes", "set_animation_curve",
             "set_speed_curve", "reset_speed",
         ],
     },

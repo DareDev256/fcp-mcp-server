@@ -11,13 +11,21 @@ from pathlib import Path
 from mcp.types import Tool
 
 from fcpxml import dtd
-from fcpxml.keyframes import KeyframeEditor
+from fcpxml.animation_curves import (
+    CURVE_PROPERTIES,
+    DEFAULT_TOLERANCE,
+    EASINGS,
+    MAX_AUTHORED_POINTS,
+    MAX_GENERATED_KEYFRAMES,
+    MAX_SAMPLED_FRAMES,
+)
+from fcpxml.keyframes import KEYFRAME_CURVE_OPTIONS, KeyframeEditor
 from tools import _common
 
 MAX_OPERATIONS = 100
 MAX_KEYFRAMES = 1000
 MAX_BATCH_KEYFRAMES = 10000
-PROPERTIES = ["position", "scale", "rotation", "opacity", "volume"]
+PROPERTIES = list(KEYFRAME_CURVE_OPTIONS)
 
 _FILE = {"type": "string", "description": "Input FCPXML or .fcpxmld bundle."}
 _CLIP = {
@@ -36,6 +44,12 @@ _TIME = {
     "type": "string", "pattern": r"^\d+(?:/[1-9]\d*)?s$",
     "description": "Rational seconds relative to the visible clip start, e.g. 24/25s.",
 }
+
+
+def _curve_modes(field: str) -> list[str]:
+    return list(dict.fromkeys(mode for options in KEYFRAME_CURVE_OPTIONS.values() for mode in options[field]))
+
+
 _KEYFRAMES = {
     "type": "array", "minItems": 1, "maxItems": MAX_KEYFRAMES,
     "items": {
@@ -46,15 +60,66 @@ _KEYFRAMES = {
             "value": {"oneOf": [{"type": "number"}, {
                 "type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2,
             }]},
-            "interp": {"type": "string", "enum": ["linear"], "default": "linear",
-                       "description": "Native linear interpolation; XML attributes are normalized per property."},
-            "curve": {"type": "string", "enum": ["linear"], "default": "linear",
-                      "description": "Native linear curve; XML attributes are normalized per property."},
+            "interp": {"type": "string", "enum": _curve_modes("interp"),
+                       "description": (
+                           "Native temporal interpolation: opacity supports ease/easeIn/easeOut; other properties accept linear only. "
+                           "Serialized without per-frame baking. "
+                           "Omit to preserve an existing point; new points default to linear. "
+                           "Explicit linear normalizes interpolation attributes per property. "
+                           "For nonlinear opacity interp, omit curve; its native encoding removes that attribute."
+                       )},
+            "curve": {"type": "string", "enum": _curve_modes("curve"),
+                      "description": (
+                          "Compatibility input for native linear normalization; only linear is accepted. "
+                          "Omit to preserve an existing point; new points default to linear. "
+                          "Native spatial smooth/Bezier handles are not exposed by this action."
+                      )},
         },
         "required": ["value"],
         "oneOf": [{"required": ["time"]}, {"required": ["frame"]}],
     },
 }
+_CURVE_POINTS = {
+    "type": "array", "minItems": 2, "maxItems": MAX_AUTHORED_POINTS,
+    "items": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "time": _TIME,
+            "frame": {"type": "integer", "minimum": 0},
+            "value": _KEYFRAMES["items"]["properties"]["value"],
+            "control_in": {**_KEYFRAMES["items"]["properties"]["value"],
+                           "description": "Incoming cubic Bezier control in absolute property units, not an offset. Omit on the first point."},
+            "control_out": {**_KEYFRAMES["items"]["properties"]["value"],
+                            "description": "Outgoing cubic Bezier control in absolute property units, not an offset. Omit on the last point."},
+            "easing": {"type": "string", "enum": list(EASINGS),
+                       "description": "Outgoing segment parameter: linear u; ease 3u^2-2u^3; easeIn u^2; easeOut 2u-u^2. Omit on last point. Defaults to linear."},
+        },
+        "required": ["value"],
+        "oneOf": [{"required": ["time"]}, {"required": ["frame"]}],
+    },
+}
+_ANIMATION_CURVE = {
+    "clip_path": _CLIP,
+    "property": {
+        "type": "string", "enum": list(CURVE_PROPERTIES),
+        "description": (
+            "position uses native FCPXML [x,y] coordinates; scale uses positive multipliers "
+            "(one number or [x,y]); rotation degrees; opacity 0..1. "
+            "Volume is not supported; use set_keyframes for audio levels."
+        ),
+    },
+    "points": _CURVE_POINTS,
+    "tolerance": {
+        "type": "number", "exclusiveMinimum": 0,
+        "description": (
+            "Maximum Euclidean vector / absolute scalar error at project frames, in property units. "
+            f"Defaults: {', '.join(f'{prop} {value:g}' for prop, value in DEFAULT_TOLERANCE.items())}. "
+            f"Smaller values emit more keys; limits {MAX_SAMPLED_FRAMES} evaluated frames and "
+            f"{MAX_GENERATED_KEYFRAMES} output keys. Not a pixel or between-frame bound."
+        ),
+    },
+}
+
 _TIMES = {
     "type": ["array", "null"], "minItems": 1, "maxItems": MAX_KEYFRAMES,
     "items": _TIME,
@@ -75,15 +140,34 @@ def _schema(properties: dict, required: list[str]) -> dict:
             "additionalProperties": False}
 
 
+def _point_mode_schema(options: dict) -> dict:
+    schema = {"properties": {field: {"enum": list(modes)} for field, modes in options.items()}}
+    nonlinear = [mode for mode in options["interp"] if mode != "linear"]
+    if nonlinear:
+        schema["not"] = {"properties": {"interp": {"enum": nonlinear}}, "required": ["interp", "curve"]}
+    return schema
+
+
+def _set_schema(properties: dict, required: list[str]) -> dict:
+    schema = _schema(properties, required)
+    schema["allOf"] = [{
+        "if": {"properties": {"property": {"const": prop}}, "required": ["property"]},
+        "then": {"properties": {"keyframes": {"items": _point_mode_schema(options)}}},
+    } for prop, options in KEYFRAME_CURVE_OPTIONS.items()]
+    return schema
+
+
 _SET = {"clip_path": _CLIP, "property": _PROPERTY, "keyframes": _KEYFRAMES, "mode": _MODE}
 _DELETE = {"clip_path": _CLIP, "property": _PROPERTY, "times": _TIMES}
 _OPERATION = {"oneOf": [
-    _schema({"action": {"const": "set"}, **_SET}, ["action", "clip_path", "property", "keyframes"]),
+    _set_schema({"action": {"const": "set"}, **_SET}, ["action", "clip_path", "property", "keyframes"]),
     _schema({"action": {"const": "delete"}, **_DELETE}, ["action", "clip_path", "property"]),
 ]}
 ACTION_SCHEMAS = {
+    "set_animation_curve": _schema({"filepath": _FILE, **_ANIMATION_CURVE, "output_path": _OUTPUT},
+                                   ["filepath", "clip_path", "property", "points"]),
     "list_keyframes": _schema({"filepath": _FILE, "clip_path": _CLIP}, ["filepath"]),
-    "set_keyframes": _schema({"filepath": _FILE, **_SET, "output_path": _OUTPUT},
+    "set_keyframes": _set_schema({"filepath": _FILE, **_SET, "output_path": _OUTPUT},
                              ["filepath", "clip_path", "property", "keyframes"]),
     "delete_keyframes": _schema({"filepath": _FILE, **_DELETE, "output_path": _OUTPUT},
                                 ["filepath", "clip_path", "property"]),
@@ -94,8 +178,9 @@ ACTION_SCHEMAS = {
     }, ["filepath", "operations"]),
 }
 _DESCRIPTIONS = {
+    "set_animation_curve": f"Replace one {'/'.join(CURVE_PROPERTIES)} animation using cubic Bezier controls and easing. Emits an adaptive linear approximation within the requested project-frame error, usually fewer keys than frame-by-frame baking. Controls use absolute property values; missing handles follow the straight chord. Not native Bezier handles, audio automation, or a speed/timeMap curve. All authored times must be increasing project-frame positions within the clip. Saves a new file after available Apple DTD validation.",
     "list_keyframes": "Read intrinsic animation and unique clip paths, including unsupported structures; no writes.",
-    "set_keyframes": "Set native linear position, scale, rotation, opacity or volume keyframes on one uniquely selected clip. Volume values are dB; FCP interpolates gain. Writes a new file after available Apple DTD validation.",
+    "set_keyframes": "Set native position, scale, rotation, opacity or volume keyframes on one uniquely selected clip. Only opacity supports native ease/easeIn/easeOut interpolation; it retains sparse points without per-frame baking. Other properties remain linear, and volume interpolates gain with dB values. Writes a new file after available Apple DTD validation.",
     "delete_keyframes": "Delete selected keyframes or one property's animation, preserving other XML. Writes a new file.",
     "batch_keyframes": "Apply up to 100 set/delete operations to one input, then save once. Any invalid operation aborts without an output. Proxy previews do not verify animation; inspect the imported result in FCP.",
 }
@@ -264,3 +349,16 @@ async def handle_delete_keyframes(arguments: dict) -> list:
 
 async def handle_batch_keyframes(arguments: dict) -> list:
     return await _write(arguments, "batch_keyframes")
+
+
+async def handle_set_animation_curve(arguments: dict) -> list:
+    _check_fields(arguments, ACTION_SCHEMAS["set_animation_curve"])
+    filepath, editor = _editor(arguments)
+    result = editor.set_animation_curve(
+        arguments["clip_path"], arguments["property"], arguments["points"],
+        arguments.get("tolerance"),
+    )
+    output = _output_path(filepath, arguments.get("output_path"))
+    validation = _publish(editor, filepath, output)
+    return _result({"output_path": str(output), "operations": [result], "validation": validation,
+                    "verification": "Adaptive linear approximation; no native Bezier handles. Error is bounded at project frames before FCP serialization. Import/playback of this output remains unverified."})

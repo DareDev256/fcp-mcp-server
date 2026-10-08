@@ -6,13 +6,12 @@ this deliberately does not invent Final Cut's undocumented smooth2 handles.
 """
 
 import math
-import re
 import xml.etree.ElementTree as ET
 from bisect import bisect_right
 from collections import defaultdict
 from fractions import Fraction
 
-from .rational import parse_seconds
+from .rational import format_exact_seconds, parse_seconds, parse_strict_seconds
 from .writer import FCPXMLModifier
 
 MAX_MAP_POINTS = 10_000
@@ -26,11 +25,6 @@ _STATIC_INTRINSICS = {
     "adjust-colorConform", "adjust-360-transform", "adjust-reorient",
     "adjust-orientation", "adjust-stereo-3D",
 }
-_TIME = re.compile(r"\d+(?:/\d+)?s\Z")
-
-
-def _format(value: Fraction) -> str:
-    return f"{value.numerator}s" if value.denominator == 1 else f"{value.numerator}/{value.denominator}s"
 
 
 def _native_time(value: Fraction) -> Fraction:
@@ -222,18 +216,18 @@ class RetimeEditor:
                 if index + 1 < len(mapping.points):
                     next_time, next_value = mapping.points[index + 1]
                     speed = (next_value - value) / (next_time - time)
-                points.append({"time": _format(time - context["start"]), "local_time": _format(time),
-                               "source_time": _format(value), "speed": float(speed) if speed is not None else None,
+                points.append({"time": format_exact_seconds(time - context["start"]), "local_time": format_exact_seconds(time),
+                               "source_time": format_exact_seconds(value), "speed": float(speed) if speed is not None else None,
                                "speed_ratio": str(speed) if speed is not None else None})
         raw_maps = [{"attributes": dict(node.attrib), "points": [dict(point.attrib) for point in node]}
                     for node in clip.findall("timeMap")]
         return {"clip_path": path, "name": clip.get("name", ""), "tag": clip.tag,
                 "start": clip.get("start", "0s"), "duration": clip.get("duration"),
-                "frame_duration": _format(context["frame_duration"]) if context["frame_duration"] else None,
+                "frame_duration": format_exact_seconds(context["frame_duration"]) if context["frame_duration"] else None,
                 "supported": not context["reasons"], "unsupported_reasons": context["reasons"],
                 "has_time_map": bool(raw_maps), "speed_points": points, "raw_time_maps": raw_maps,
-                "source_start": _format(context["source_start"]) if context["source_start"] is not None else None,
-                "source_end": _format(context["source_end"]) if context["source_end"] is not None else None,
+                "source_start": format_exact_seconds(context["source_start"]) if context["source_start"] is not None else None,
+                "source_end": format_exact_seconds(context["source_end"]) if context["source_end"] is not None else None,
                 "preserve_pitch": clip.find("timeMap").get("preservesPitch", "1") != "0" if raw_maps else True}
 
     def list_speed_points(self, clip_path=None):
@@ -269,10 +263,7 @@ class RetimeEditor:
                     raise ValueError("frame must be a nonnegative integer")
                 time = index * frame
             else:
-                value = point["time"]
-                if not isinstance(value, str) or not _TIME.fullmatch(value):
-                    raise ValueError("time must be nonnegative rational seconds")
-                time = parse_seconds(value)
+                time = parse_strict_seconds(point["time"])
             time = _native_time(time)
             if (time / frame).denominator != 1:
                 raise ValueError("Speed keyframe times must align to project-frame boundaries; use frame")
@@ -356,25 +347,25 @@ class RetimeEditor:
         plan, sequence_duration, delta = self._ripple_plan(clip, context, new_duration, ripple)
         time_map = ET.Element("timeMap", preservesPitch="1" if preserve_pitch else "0", frameSampling=frame_sampling)
         for time, value in mapping.points:
-            ET.SubElement(time_map, "timept", time=_format(time), value=_format(value), interp="linear")
+            ET.SubElement(time_map, "timept", time=format_exact_seconds(time), value=format_exact_seconds(value), interp="linear")
         # All input, map, source-range and ripple validation completes before mutation.
         for old in clip.findall("timeMap"):
             clip.remove(old)
         index = next((i for i, child in enumerate(clip) if child.tag not in ("param", "note", "conform-rate")), len(clip))
         clip.insert(index, time_map)
-        clip.set("duration", _format(new_duration))
+        clip.set("duration", format_exact_seconds(new_duration))
         for sibling, offset in plan:
-            sibling.set("offset", _format(offset))
+            sibling.set("offset", format_exact_seconds(offset))
         if sequence_duration is not None:
-            context["sequence"].set("duration", _format(sequence_duration))
-        return {"clip_path": clip_path, "duration": _format(new_duration), "previous_duration": _format(context["duration"]),
-                "duration_change": _format(delta), "source_start": _format(context["source_start"]),
-                "source_end": _format(source_end), "source_consumed": _format(source_end - context["source_start"]),
-                "source_trim_change": _format(source_end - context["source_end"]),
+            context["sequence"].set("duration", format_exact_seconds(sequence_duration))
+        return {"clip_path": clip_path, "duration": format_exact_seconds(new_duration), "previous_duration": format_exact_seconds(context["duration"]),
+                "duration_change": format_exact_seconds(delta), "source_start": format_exact_seconds(context["source_start"]),
+                "source_end": format_exact_seconds(source_end), "source_consumed": format_exact_seconds(source_end - context["source_start"]),
+                "source_trim_change": format_exact_seconds(source_end - context["source_end"]),
                 "rippled_clips": len(plan), "preserve_pitch": preserve_pitch, "frame_sampling": frame_sampling,
                 "emitted_points": len(mapping.points), "ramp_sampling": "frame-baked linear ramp at project-frame boundaries",
                 "animation_policy": "preserve clip-relative keyframe times; shortening can hide retained keys",
-                "speed_keyframes": [{"time": _format(time), "speed": float(speed), "transition": transition}
+                "speed_keyframes": [{"time": format_exact_seconds(time), "speed": float(speed), "transition": transition}
                                     for time, speed, transition in points]}
 
     def reset_speed(self, clip_path, ripple=True):
@@ -415,20 +406,20 @@ class RetimeEditor:
         for old in clip.findall("timeMap"):
             clip.remove(old)
         for key, time in animation_plan:
-            key.set("time", _format(time))
-        clip.set("start", _format(source_start))
-        clip.set("duration", _format(consumed))
+            key.set("time", format_exact_seconds(time))
+        clip.set("start", format_exact_seconds(source_start))
+        clip.set("duration", format_exact_seconds(consumed))
         for sibling, offset in plan:
-            sibling.set("offset", _format(offset))
+            sibling.set("offset", format_exact_seconds(offset))
         if sequence_duration is not None:
-            context["sequence"].set("duration", _format(sequence_duration))
-        return {"clip_path": clip_path, "changed": changed, "duration": _format(consumed),
-                "previous_duration": _format(context["duration"]), "duration_change": _format(delta),
-                "source_start": _format(source_start), "source_end": _format(source_end),
-                "source_consumed": _format(consumed), "rippled_clips": len(plan),
-                "source_start_adjustment": _format(start_adjustment),
-                "source_end_adjustment": _format(end_adjustment),
-                "source_trim_change": _format(consumed - (context["source_end"] - context["source_start"])),
+            context["sequence"].set("duration", format_exact_seconds(sequence_duration))
+        return {"clip_path": clip_path, "changed": changed, "duration": format_exact_seconds(consumed),
+                "previous_duration": format_exact_seconds(context["duration"]), "duration_change": format_exact_seconds(delta),
+                "source_start": format_exact_seconds(source_start), "source_end": format_exact_seconds(source_end),
+                "source_consumed": format_exact_seconds(consumed), "rippled_clips": len(plan),
+                "source_start_adjustment": format_exact_seconds(start_adjustment),
+                "source_end_adjustment": format_exact_seconds(end_adjustment),
+                "source_trim_change": format_exact_seconds(consumed - (context["source_end"] - context["source_start"])),
                 "source_snap_policy": "nearest source frame, at most half a frame per endpoint",
                 "warnings": (["Source in/out were snapped to the nearest source-frame boundaries; see adjustment fields"]
                              if start_adjustment or end_adjustment else [])}

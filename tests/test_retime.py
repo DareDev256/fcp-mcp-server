@@ -130,6 +130,8 @@ def test_reject_ambiguous_native_map(body):
     [{"time": "0s", "speed": 1}, {"time": "1/100s", "speed": 2}],
     [{"time": "0s", "speed": 1}, {"time": "1.0s", "speed": 2}],
     [{"time": "0s", "speed": 1}, {"time": "1/0s", "speed": 2}],
+    [{"time": "0s", "speed": 1}, {"time": "-1s", "speed": 2}],
+    [{"time": "0s", "speed": 1}, {"time": 1, "speed": 2}],
     [{"time": "0s", "speed": 1}, {"time": "1s", "frame": 30, "speed": 2}],
     [{"frame": 0, "speed": 1, "transition": "smooth"}, {"frame": 30, "speed": 2}],
     [{"frame": 0, "speed": 1, "unknown": 2}, {"frame": 30, "speed": 2}],
