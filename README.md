@@ -596,7 +596,7 @@ which are never mixed. The reported duration accounts for the overlaps, and
 | Final Cut Pro | 10.4+ through 12.x · flat `.fcpxml` and `.fcpxmld` bundles (sidecars preserved) |
 | Python | 3.10, 3.11, 3.12 |
 | MCP protocol | 1.0 |
-| `mcp` SDK | 1.3.0 through 2.x — both the decorator API and the `add_request_handler` API that replaced it. CI tests the declared floor and 2.x on every push |
+| `mcp` SDK | 1.21.1 through 2.x — both the decorator API and the `add_request_handler` API that replaced it. CI tests the declared floor and 2.x on every push |
 | **Export targets** | |
 | → DaVinci Resolve | FCPXML v1.9 |
 | → Premiere Pro / Avid | FCP7 XMEML v5 |
@@ -831,7 +831,7 @@ Several of those are **mutation checks** — they exist to prove an instrument c
 ## Requirements
 
 - **Python 3.10+** · **Final Cut Pro 10.4+** (FCPXML 1.8+) · **Claude Desktop** or any MCP client
-- **Dependencies** (auto-installed): `mcp` (1.3.0+, including 2.x), `defusedxml`
+- **Dependencies** (auto-installed): `mcp` (1.21.1+, including 2.x), `defusedxml`
 - **ffmpeg** (optional) — needed for silence analysis (`detect_media_silence`, `remove_media_silence`)
 - **`[scenes]` extra** (optional) — adds PySceneDetect for `scenes` detection that can see a cut between similar colours; without it the group falls back to ffmpeg's coarser scene filter and says so.
 - **`[find]` extra** (optional, Apple Silicon) — adds `mlx-vlm` + `numpy` so `find` can caption shots offline; without it `find` answers from transcript and metadata and says vision is unavailable.

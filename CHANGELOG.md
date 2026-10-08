@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Raised the `mcp` floor from 1.3.0 to 1.21.1.** pydantic 2.14.0 (2026-10-08)
+  removed the private `eval_type_backport` that mcp 1.3.0-1.21.0 import at
+  startup, so a fresh install of any of those SDKs failed before the server
+  could start. 1.21.1 is the first release without that import; the full suite
+  passes on it with pydantic 2.14.0. Installs that resolve the latest `mcp`
+  were never affected.
+
 ## [0.25.2] - 2026-10-07
 
 First release on PyPI since 0.25.0. 0.25.1 was tagged in the manifests but never
