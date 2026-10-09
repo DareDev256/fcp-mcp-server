@@ -138,14 +138,17 @@ class TestGroupCoverage:
         assert not missing, f"handlers in no group: {sorted(missing)}"
 
     def test_group_count_is_a_real_reduction(self):
-        """Fourteen verbs is still a reduction from 62 flat tools.
+        """Fifteen verbs is still a reduction from 62 flat tools.
 
         The cap exists so grouping does not quietly un-group itself one new
         verb at a time. It is not a limit on capability: TOOL_HANDLERS grows
         freely underneath. Raised 12 -> 14 in v0.19.0 for organize + find,
-        each of which carries several actions — a verb, not a tool.
+        each of which carries several actions — a verb, not a tool. Raised
+        14 -> 15 in v0.26.0: `view` has to be its own tool because MCP Apps
+        binds the UI to a TOOL's `_meta`, and `gen` is the money-gated verb
+        a model must choose on purpose rather than a flavour of `generate`.
         """
-        assert len(server.TOOL_GROUPS) <= 14
+        assert len(server.TOOL_GROUPS) <= 15
         assert len(server.TOOL_HANDLERS) >= 62
 
 
@@ -211,7 +214,11 @@ class TestLegacyGating:
                 [{"n": t.name, "d": t.description, "s": tool_input_schema(t)} for t in ts]
             ))
 
-        assert size(grouped) < size(legacy) * 0.35, (
+        # 0.35 held until v0.26.0, when `edit` took the keyframe/retime
+        # schemas (#26, ~16 KB on its own) and `view`/`gen` joined. 0.40
+        # still means the grouped list is well under half the flat one; if
+        # this trips again, trim the `edit` schema before moving the line.
+        assert size(grouped) < size(legacy) * 0.40, (
             f"grouped={size(grouped)} legacy={size(legacy)}"
         )
 

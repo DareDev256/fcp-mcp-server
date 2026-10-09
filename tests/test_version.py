@@ -58,3 +58,21 @@ def test_server_json_description_states_measured_counts():
     desc = _server_json()["description"]
     assert f"{len(server.TOOL_GROUPS)} grouped tools" in desc
     assert f"{len(server.TOOL_HANDLERS)} operations" in desc
+
+
+def _plugin_json():
+    import json
+
+    return json.loads(
+        (Path(__file__).resolve().parent.parent / ".claude-plugin" / "plugin.json").read_text()
+    )
+
+
+def test_plugin_json_version_and_counts_match():
+    """The plugin bundle is the fourth version location (v0.25.2), and its
+    description states the same counts as server.json. Nothing read it until
+    v0.26.0, which is exactly how server.json sat eight releases stale."""
+    d = _plugin_json()
+    assert d["version"] == server.__version__
+    assert f"{len(server.TOOL_GROUPS)} grouped tools" in d["description"]
+    assert f"{len(server.TOOL_HANDLERS)} operations" in d["description"]

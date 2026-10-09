@@ -60,18 +60,30 @@ EXTRA_GROUPS: dict[str, dict[str, Any]] = {}
 EXTRA_HANDLERS: dict[str, Handler] = {}
 
 
-def register_group(name: str, description: str, actions: dict[str, Handler]) -> None:
+def register_group(
+    name: str, description: str, actions: dict[str, Handler], *, meta: Optional[dict] = None
+) -> None:
     """Register a tool group and its action handlers.
 
     Raises on a duplicate group or action name. A silent overwrite would shadow
     a working tool and produce a bug with no symptom at import time.
+
+    ``meta`` is stamped on the advertised Tool as ``_meta`` — how an MCP Apps
+    group binds its ``ui://`` resource. A ``_meta.ui.resourceUri`` must name
+    a ``ui://`` URI, or the host has nothing to open.
     """
     if name in EXTRA_GROUPS:
         raise ValueError(f"tool group already registered: {name}")
     for action in actions:
         if action in EXTRA_HANDLERS:
             raise ValueError(f"tool action already registered: {action}")
-    EXTRA_GROUPS[name] = {"description": description, "actions": list(actions)}
+    uri = ((meta or {}).get("ui") or {}).get("resourceUri")
+    if uri is not None and not str(uri).startswith("ui://"):
+        raise ValueError(f"{name}: _meta.ui.resourceUri must be a ui:// URI, got {uri!r}")
+    spec: dict[str, Any] = {"description": description, "actions": list(actions)}
+    if meta:
+        spec["meta"] = meta
+    EXTRA_GROUPS[name] = spec
     EXTRA_HANDLERS.update(actions)
 
 
@@ -81,10 +93,12 @@ def _register_all() -> None:
     Called at import. Group modules are added here as they land.
     """
     from tools import find as _find
+    from tools import gen as _gen
     from tools import index as _idx
     from tools import organize as _organize
     from tools import preview as _preview
     from tools import scenes as _scenes
+    from tools import view as _view
     from tools import watch as _watch
 
     register_group("preview", _preview.DESCRIPTION, _preview.ACTIONS)
@@ -93,6 +107,8 @@ def _register_all() -> None:
     register_group("scenes", _scenes.DESCRIPTION, _scenes.ACTIONS)
     register_group("organize", _organize.DESCRIPTION, _organize.ACTIONS)
     register_group("find", _find.DESCRIPTION, _find.ACTIONS)
+    register_group("view", _view.DESCRIPTION, _view.ACTIONS, meta=_view.UI_META)
+    register_group("gen", _gen.DESCRIPTION, _gen.ACTIONS)
 
 
 _register_all()

@@ -2,17 +2,43 @@
 
 ## What This Is
 
-MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 13 grouped tools (`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`, `preview`, `watch`, `index`, `scenes`, `organize`, `find`) are advertised by default, dispatching into 96 underlying operations for timeline analysis, batch editing, QC, generation, multi-track support, media relink, NLE export, transcript-based editing (local Whisper, or ElevenLabs Scribe opt-in for speakers), shot-boundary detection, bulk library organization with a journal-backed `undo`, tiered shot search (transcript → metadata → offline MLX captions), a review gate on `deliver`, and LIVE FCP control (push_to_fcp / list_fcp_libraries via Apple events). Set `FCP_MCP_LEGACY_TOOLS=1` to also advertise the 71 flat tool schemas (84 advertised in total; the 25 operations born as group actions — preview, watch, index, scenes, organize, find, import_edl_json — have no flat schema). Reads FCPXML 1.8–1.14 (incl. `.fcpxmld` bundles with sidecar preservation), writes 1.13 by default. Dual-mode (XML + Live) direction: `docs/CAPABILITY-AUDIT-2026-06.md`.
+MCP server that reads/writes Final Cut Pro XML (FCPXML) files. 15 grouped tools (`inspect`, `diagnose`, `edit`, `mark`, `generate`, `transcript`, `deliver`, `preview`, `watch`, `index`, `scenes`, `organize`, `find`, `view`, `gen`) are advertised by default, dispatching into 102 underlying operations for timeline analysis, batch editing, QC, generation, multi-track support, media relink, NLE export, transcript-based editing (local Whisper, or ElevenLabs Scribe opt-in for speakers), shot-boundary detection, bulk library organization with a journal-backed `undo`, tiered shot search (transcript → metadata → offline MLX captions), a review gate on `deliver`, an MCP Apps timeline the host renders inline (`view`), generative fill behind a quote-then-confirm money gate (`gen`), an `expected_sha256` project guard on every filepath action, and LIVE FCP control (push_to_fcp / list_fcp_libraries via Apple events). Set `FCP_MCP_LEGACY_TOOLS=1` to also advertise the 71 flat tool schemas (86 advertised in total; the 31 operations born as group actions — preview, watch, index, scenes, organize, find, view, gen, import_edl_json — have no flat schema). Reads FCPXML 1.8–1.14 (incl. `.fcpxmld` bundles with sidecar preservation), writes 1.13 by default. Dual-mode (XML + Live) direction: `docs/CAPABILITY-AUDIT-2026-06.md`.
 
 ## Architecture
 
 ```
 server.py           — MCP server entry point. 71 flat tool definitions, handlers, resources, prompts.
                       Dispatch dict pattern: TOOL_HANDLERS maps tool names → async handler functions.
-TOOL_GROUPS         — 13 grouped verbs advertised by default. Dispatch into
-                      TOOL_HANDLERS, which holds all 96 handlers. New groups are
+TOOL_GROUPS         — 15 grouped verbs advertised by default. Dispatch into
+                      TOOL_HANDLERS, which holds all 102 handlers. New groups are
                       defined in tools/ and merged in by _merge_extra_tools().
                       Hiding a tool from list_tools does NOT stop it dispatching.
+                      _journaled is the one seam every call crosses: the
+                      expected_sha256 project guard, then the review gate,
+                      then the journal ledger, then the sha256 footer on
+                      every write. A guard added anywhere else is a guard
+                      some action skips.
+fcpxml/timeline_app.py — The MCP Apps timeline: a PURE payload builder (every
+                      time an exact "n/d" string; thumbnails and transcripts
+                      are injected callables, so the fixtures round-trip with
+                      no ffmpeg) and the self-contained ui://fcp/timeline
+                      shell (no CDN, no fetch). tools/view.py is the group:
+                      its own tool because _meta.ui binds the UI to a TOOL.
+                      The in-iframe method names follow the SEP-1865 spec
+                      text; only the server-side field names are verified
+                      against the 2.x SDK (mcp/server/apps.py).
+fcpxml/gen.py       — Generative fill. quote() -> confirm_quote() is the money
+                      gate: the quote is RECOMPUTED from the job, never trusted
+                      from the register, and _build_quote must not register or
+                      an expired quote is refreshed by the call checking it.
+                      Keys travel in one header; _http refuses a key in a URL
+                      or body and redact() scrubs every reply. probe_media()
+                      is the only source of fps. insert_generated() writes
+                      every time attribute through format_seconds in the
+                      sequence's timebase (the asset in the media's own) and
+                      appends a <gap> when the position is past the spine.
+                      tools/gen.py is the group; one runner for the three
+                      write actions so the gate cannot be skipped by one.
 fcpxml/journal.py   — Append-only operation ledger under ~/.fcp-mcp/journal/
                       (FCP_MCP_JOURNAL relocates; `off` disables). One ledger per
                       INPUT DIRECTORY — the project is the folder. Records hold
@@ -171,7 +197,7 @@ CI runs both on every push to main. If either fails, the commit gets an X on Git
 
 ## Testing
 
-2234 tests across 77 files. See `docs/animation-curves-validation.md` and `docs/retiming-validation.md` for SDK results and FCP round-trip evidence; CI also checks `FCP_MCP_INDEX=off` (tests of the cache are skipped). v0.24.0 adds `test_gap_reporting.py` (the reporting tools and the preview on a gap-based edit, each with a spine-based control, plus the sub-frame silence floor). v0.23.0 adds `test_gap_multicam.py` (issue #23: mc-clip/caption under a gap spine, `<media>` angle resolution via `mc-source`, timeline_start against the gap's local clock, the `media_clips()` view, and that `detect_media_silence`/`detect_scenes` open the angle files). v0.20.0 adds transition and lane coverage to `test_filtergraph.py` (xfade placement, the unplaceable/missing/occupied/shortened reports, the crossfade-shifted overlay window, lane stacking order) and to `test_render.py` (real ffmpeg accepts both chains; the overlaid frame is compared against the same frame of a spine-only render, so a graph that composites nothing fails). v0.19.0 adds `test_journal.py` + `test_journal_wiring.py` (hash-checked undo, never-deletes, one ledger per folder), `test_review_gate.py`, `test_organize.py` + `test_organize_group.py` (DTD order of inserted `<keyword>`/`<rating>`, organize_auto never computes), `test_diversity_constraint.py` (with its mutation check), `test_find.py`, `test_vlm.py` (fake `mlx_vlm` records the env at import; sockets patched to raise) and `test_find_group.py` (never transcribes, never downloads, live captions stored once). v0.18.0 adds `test_index.py` (schema, invalidation on a touched source, corrupt-file rebuild, dir mode 700), `test_index_wiring.py` (second call skips ffmpeg/whisper; index off hits them every time), `test_index_group.py`, `test_progress.py` (both SDKs), `test_scenes.py` + `test_scenes_group.py` (synthesised colour-bar clips; real PySceneDetect when installed), `test_transcript_pack.py` + `test_transcript_pack_handler.py`, `test_transcribe_scribe.py` (urlopen patched throughout; the key-leak guard is mutation-checked), and `test_version.py`. Beyond the pre-existing suites, v0.17.0 added: `test_filtergraph.py` (Timeline -> ffmpeg graph, exact Fractions at NTSC rates, the Clip/.start vs ConnectedClip/.offset distinction, transition substitution reporting), `test_render.py` (proxy render plus the artifact duration read-back and its mutation check), `test_visual.py` (filmstrip+waveform from source media, silent-source fallback, and the mutation check that caught the invisible white-on-white waveform), `test_watchfolder.py` (export detection, content digesting, bundle handling), `test_bridges.py` (loopback-only probing, session caching, describe() honesty), `test_preview_group.py` and `test_watch_group.py` (MCP wiring, UNVERIFIED labelling), `test_edl_import.py` (the real video-use schema, round-tripped against the literal from their own test file), `test_autopush.py`, and `test_tool_seam.py` (the tools/ registry, the merge guard, and the server binding). Tests use `examples/sample.fcpxml` and `examples/music-video.fcpxml` as fixture data plus inline XML and synthesised ffmpeg media. Tests create temp files and clean up after.
+2334 tests across 82 files (2329 pass, 5 skip at the mcp 1.21.1 floor with ffmpeg and Final Cut Pro present; on mcp 2.x it is 2328 pass / 6 skip; with `FCP_MCP_INDEX=off` it is 2304 pass / 30 skip — the skips being tests OF the cache). v0.26.0 adds `test_timeline_app.py` (the `ui://` resource's MIME type through the real handler on both SDKs, `_meta.ui.resourceUri` on the wire, the payload round-tripping both fixtures as Fractions, marker clocks, word clipping, thumbnail bounds, no external URLs in the shell), `test_view_group.py`, `test_gen.py` (prices, the gate and its refusals, the key guards with mutation checks, both adapters against a fake transport, the probe on synthesized media, the insert on a DTD-valid fixture validated with xmllint when the DTD is present), `test_gen_group.py` (end to end with a fake provider: journal rows, redaction with its mutation check, sandboxed writes) and `test_project_guard.py` (mismatch refuses before the review gate, the sha256 footer, `analyze_timeline` and `history` report it, mutation check). v0.24.0 adds `test_gap_reporting.py` (the reporting tools and the preview on a gap-based edit, each with a spine-based control, plus the sub-frame silence floor). v0.23.0 adds `test_gap_multicam.py` (issue #23: mc-clip/caption under a gap spine, `<media>` angle resolution via `mc-source`, timeline_start against the gap's local clock, the `media_clips()` view, and that `detect_media_silence`/`detect_scenes` open the angle files). v0.20.0 adds transition and lane coverage to `test_filtergraph.py` (xfade placement, the unplaceable/missing/occupied/shortened reports, the crossfade-shifted overlay window, lane stacking order) and to `test_render.py` (real ffmpeg accepts both chains; the overlaid frame is compared against the same frame of a spine-only render, so a graph that composites nothing fails). v0.19.0 adds `test_journal.py` + `test_journal_wiring.py` (hash-checked undo, never-deletes, one ledger per folder), `test_review_gate.py`, `test_organize.py` + `test_organize_group.py` (DTD order of inserted `<keyword>`/`<rating>`, organize_auto never computes), `test_diversity_constraint.py` (with its mutation check), `test_find.py`, `test_vlm.py` (fake `mlx_vlm` records the env at import; sockets patched to raise) and `test_find_group.py` (never transcribes, never downloads, live captions stored once). v0.18.0 adds `test_index.py` (schema, invalidation on a touched source, corrupt-file rebuild, dir mode 700), `test_index_wiring.py` (second call skips ffmpeg/whisper; index off hits them every time), `test_index_group.py`, `test_progress.py` (both SDKs), `test_scenes.py` + `test_scenes_group.py` (synthesised colour-bar clips; real PySceneDetect when installed), `test_transcript_pack.py` + `test_transcript_pack_handler.py`, `test_transcribe_scribe.py` (urlopen patched throughout; the key-leak guard is mutation-checked), and `test_version.py`. Beyond the pre-existing suites, v0.17.0 added: `test_filtergraph.py` (Timeline -> ffmpeg graph, exact Fractions at NTSC rates, the Clip/.start vs ConnectedClip/.offset distinction, transition substitution reporting), `test_render.py` (proxy render plus the artifact duration read-back and its mutation check), `test_visual.py` (filmstrip+waveform from source media, silent-source fallback, and the mutation check that caught the invisible white-on-white waveform), `test_watchfolder.py` (export detection, content digesting, bundle handling), `test_bridges.py` (loopback-only probing, session caching, describe() honesty), `test_preview_group.py` and `test_watch_group.py` (MCP wiring, UNVERIFIED labelling), `test_edl_import.py` (the real video-use schema, round-tripped against the literal from their own test file), `test_autopush.py`, and `test_tool_seam.py` (the tools/ registry, the merge guard, and the server binding). Tests use `examples/sample.fcpxml` and `examples/music-video.fcpxml` as fixture data plus inline XML and synthesised ffmpeg media. Tests create temp files and clean up after.
 
 ## Releasing — the tag is not the release
 
@@ -182,9 +208,12 @@ shipped, and the packaging bug that made four consecutive releases uninstall-
 able was found by a user, not by us. So the release is one unbroken sequence,
 and it is not done in the middle.
 
-1. **Bump all three version locations.** `pyproject.toml`, `server.py`
-   `__version__`, and `server.json` (twice). `tests/test_version.py` is the
-   only thing that catches the third; run it, do not eyeball it.
+1. **Bump all four version locations.** `pyproject.toml`, `server.py`
+   `__version__`, `server.json` (twice) and `.claude-plugin/plugin.json`.
+   `tests/test_version.py` is the only thing that catches the last two; run
+   it, do not eyeball it. The counts in `server.json`'s and `plugin.json`'s
+   descriptions are measured from `TOOL_GROUPS` / `TOOL_HANDLERS` by the
+   same tests.
 2. **Write the CHANGELOG entry before tagging**, and mark it for an editor
    mid-cut: `Added` means new operations only and is safe to take at any
    point; `Changed`/`Fixed` means the output of an existing operation moved.

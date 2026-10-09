@@ -45,3 +45,4 @@ uv.lock
 
 # Local FCP validation media and libraries
 .local-validation/
+demo/hero/.work/

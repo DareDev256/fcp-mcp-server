@@ -2,13 +2,103 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-09
+
+"See the cut." An interactive timeline a host renders inline, generative fill
+behind a money gate, and a hash guard so a model cannot edit a file that
+changed under it. Also ships @travisoa's keyframes and speed curves (#26)
+and the mcp floor fix (#27). 15 grouped tools, 102 operations. Full idea set, including
+what was deliberately left out: `docs/ROADMAP-2026-10.md`.
+
+### Added
+- **`view` group — an MCP Apps timeline (SEP-1865).** `view_timeline` returns
+  the timeline as an exact rational-time JSON payload (every position and
+  duration a `numerator/denominator` string; the tests round-trip both
+  fixtures with Fractions) that hosts with MCP Apps render inline from the
+  `ui://fcp/timeline` resource (`text/html;profile=mcp-app`): lanes, clips
+  sized to duration with names and roles, markers, gaps, a timecode ruler
+  with playhead and range selection, cached transcript words under the clip
+  they belong to, and bounded per-clip filmstrip thumbnails (coloured blocks
+  when ffmpeg or the media is absent). Clicking a clip shows its details; the
+  buttons call back through the host — `view_clip` and `find_shots` for
+  reads, `mark.add_marker` and `edit.delete_clips` for edits, so the journal,
+  the project guard and the review gate apply — and the app re-renders from
+  the new output file after an edit. Hosts without Apps get the summary and
+  the JSON as text. `view_clip` is the inspect button. The shell is
+  self-contained (no CDN, no fetch), true-black with one cyan accent, and was
+  rendered through a stub host at 1280 and 390 px
+  (`docs/screenshots/2026-10-09_timeline-app-*.png`). Works on `mcp` 1.x
+  and 2.x through `fcpxml/mcp_compat.py` (`build_tool` carries `_meta` on
+  both; the extension capability is advertised on 2.x only, since 1.x's
+  `ServerCapabilities` has no `extensions` slot). The in-iframe postMessage
+  method names come from the spec text and could not be verified against
+  installed source; the field names on the server side were verified
+  against the 2.x SDK.
+- **`gen` group — generative fill, quote-then-confirm.** `gen_quote`
+  prices a job from a dated table (`prices_as_of`, `price_verified: false`;
+  fal Kling 2.5 / Wan 2.5, Gemini Veo 3.1; Runway Aleph and Luma Ray Modify
+  quote but refuse as "not implemented" — they are video-to-video) and
+  returns a quote id. `gen_fill_gap`, `gen_broll` and `gen_extend_clip`
+  refuse without `confirm=true`, a quote id whose job still matches, the
+  provider's key in the environment (`FAL_KEY`, `GEMINI_API_KEY`,
+  `RUNWAY_API_KEY`, `LUMA_API_KEY`; sent only in the auth header, never
+  logged, every reply redacted — both guards mutation-checked) and a price
+  under `FCP_MCP_GEN_MAX_USD` (default 5). The result is ffprobed for its
+  real duration and frame rate (never guessed), written to `generated/`
+  beside the project through the sandboxed output path, attached as a
+  connected clip with `videoRole="generated"` and a marker naming prompt and
+  provider, snapped to the sequence frame grid, DTD-validated and journaled.
+  A position past the end of the spine gets a `<gap>` appended to hang off.
+- **Project guard.** Every action that takes a `filepath` accepts
+  `expected_sha256` and refuses, naming both hashes, when the file no longer
+  matches. Mutation-checked.
+- **Keyframes, speed curves and adaptive animation curves** (#26, thanks
+  @travisoa). Eight actions inside the existing `inspect` and `edit` groups:
+  read, set, delete and batch-edit position, scale, rotation, opacity and
+  volume keyframes by structural `clip_path`; `set_animation_curve` approximates
+  authored cubic Bezier segments with linear keys inside a per-frame error
+  bound (FCPXML has no field for Bezier handles); read, set and reset variable
+  speed with exact rational integration and ripple. Imported into Final Cut
+  Pro 12.4 without warnings. Usage and limits: `docs/keyframes.md`,
+  `docs/retiming.md`.
+- `docs/ROADMAP-2026-10.md`: the October idea set with status, rationale and
+  source for each item.
+
+### Changed
+- **README hero: "watch Claude cut".** The first screen is one line, one
+  28 s recording and three pillars; the live Final Cut demo moved under
+  "Proof". The recording (`docs/assets/hero-watch-claude-cut.{mp4,gif}`) is
+  the real `ui://fcp/timeline` app driven by a stub MCP Apps host, re-drawn
+  after each real handler call (`import_edl_json`, `remove_media_silence`,
+  `batch_add_markers`, `gen_quote`, `gen_broll` with the provider mocked as
+  the tests mock it, `history`), and is re-recorded with one command:
+  `uv run --with pillow demo/hero/build.py` (generator and stub host in
+  `demo/hero/`). The timeline app now labels clip markers (chapter markers
+  live on their clip in FCPXML) on the ruler beside sequence markers, so
+  "mark every section" is visible; the payload is unchanged.
+- **Every write now ends with `sha256 (<output>): …`** for each FCPXML it
+  wrote, so the model has the hash to pass back as `expected_sha256`.
+  A write that answers with one JSON object (the keyframe and speed
+  actions) carries the hashes as a `sha256` field inside it instead, so the
+  reply still parses.
+  `analyze_timeline` reports the input's sha256; `history` prints the full
+  output sha256 instead of a 12-character prefix (a prefix cannot be passed
+  back). Output of existing operations moved: hence a minor version.
+- `list_resources` now lists `ui://fcp/timeline` ahead of the project files.
+  `preview://` is unchanged.
+- The grouped-schema size ceiling in `tests/test_tool_groups.py` moves from
+  35% to 40% of the flat list: `edit` now carries the keyframe and speed
+  schemas (~16 KB).
+- The verb cap in `tests/test_tool_groups.py` moves 14 → 15: `view` must be
+  its own tool because MCP Apps binds the UI to a tool's `_meta`, and `gen`
+  is the money-gated verb a model should choose on purpose.
+
 ### Fixed
-- **Raised the `mcp` floor from 1.3.0 to 1.21.1.** pydantic 2.14.0 (2026-10-08)
-  removed the private `eval_type_backport` that mcp 1.3.0-1.21.0 import at
-  startup, so a fresh install of any of those SDKs failed before the server
-  could start. 1.21.1 is the first release without that import; the full suite
-  passes on it with pydantic 2.14.0. Installs that resolve the latest `mcp`
-  were never affected.
+- **Raised the `mcp` floor from 1.3.0 to 1.21.1** (#27, thanks @travisoa).
+  pydantic 2.14.0 (2026-10-08) removed the private `eval_type_backport` that
+  mcp 1.3.0-1.21.0 import at startup, so a fresh install of any of those SDKs
+  failed before the server could start. 1.21.1 is the first release without
+  that import. Installs that resolve the latest `mcp` were never affected.
 
 ## [0.25.2] - 2026-10-07
 

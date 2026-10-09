@@ -1,16 +1,45 @@
 # FCPXML MCP
 
-**The bridge between Final Cut Pro and AI. 13 grouped tools (96 underlying operations) that turn timeline XML into structured data Claude can read, edit, generate, SEE, find — and undo.**
+**Edit Final Cut Pro by talking to Claude, and watch the cut change.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![MCP Compatible](https://img.shields.io/badge/MCP%20SDK-1.3%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
-[![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![MCP Marketplace](https://img.shields.io/badge/MCP%20Marketplace-Indexed-blueviolet)](https://getlulu.dev/mcps/fcpxml-mcp-server)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.21.1%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
+[![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Hardened for real libraries:** 182 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
+[![Watch Claude cut: one prompt on the left, and on the right the ui://fcp/timeline app re-rendering after each real tool call — the interview take loses its dead air, four section markers appear on the ruler, and a B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+
+*One prompt, seven tool calls, and the timeline re-rendered inline after each
+write. Every frame is the real `ui://fcp/timeline` app drawing a real
+`view_timeline` result; the B-roll provider is mocked and the recording says
+so on screen. [Full-size mp4](docs/assets/hero-watch-claude-cut.mp4), re-recorded
+with [`demo/hero/build.py`](demo/hero/build.py).*
+
+**See it.** `view` returns the timeline as exact rational-time JSON, and a
+host with MCP Apps draws it inline: lanes, thumbnails, markers, transcript
+words, a playhead, buttons that call the other tools.
+
+**Cut it.** 15 grouped tools, 102 operations: trims, splits, silence removal,
+markers from transcripts and beats, rough cuts, keyframes and speed ramps,
+transcript edits, cross-NLE export, and a push into a running Final Cut Pro.
+
+**Trust it.** Every write is journaled with its sha256 and can be undone.
+`deliver` refuses an unreviewed cut, `expected_sha256` refuses a file that
+changed under the model, and generation is quote-then-confirm under a
+per-call cap. 182 adversarial-input security tests, `defusedxml` everywhere,
+sandboxed writes, no private APIs, and a [disclosure channel](SECURITY.md).
+
+```bash
+claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server
+```
+
+Then `File → Export XML…` in Final Cut Pro, and ask Claude to work on the file.
+
+---
+
+## Proof
 
 ![FCPXML MCP demo: Final Cut Pro on the left, a terminal on the right. A timeline is read back, a marker is placed on every cut, and roles are assigned across ten clips, with Final Cut open the whole time](docs/assets/demo-live-fcp.gif)
 
@@ -25,12 +54,12 @@ The earlier terminal only demo is still at `docs/assets/demo.gif`.
 Re-record it with `vhs demo/demo.tape`; the media is synthesised by ffmpeg at
 run time, so there is no fixture to keep.*
 
----
-
 ## Keyframes and speed curves
 
-The `inspect` and `edit` groups include five video/audio animation actions
-and three speed curve actions. See
+Contributed by [@travisoa](https://github.com/travisoa) in
+[#26](https://github.com/DareDev256/fcp-mcp-server/pull/26): the `inspect`
+and `edit` groups include five video/audio animation actions and three speed
+curve actions, imported into Final Cut Pro 12.4 without warnings. See
 [keyframe usage](docs/keyframes.md) for installation and animation, and
 [speed curves](docs/retiming.md) for holds, sampled ramps, ripple and reset.
 
@@ -375,8 +404,8 @@ operation goes in `action`:
 
 ## Tools
 
-As of v0.19.0, the MCP tool list Claude sees by default is **13 grouped
-verbs**, not 96 flat tool names:
+As of v0.19.0, the MCP tool list Claude sees by default is **15 grouped
+verbs**, not 102 flat tool names:
 
 | Group | Covers |
 |-------|--------|
@@ -393,16 +422,18 @@ verbs**, not 96 flat tool names:
 | `scenes` | Shot boundaries from the pixels — list cuts per clip in source and timeline time, drop a marker on each, or split the clips there. PySceneDetect when installed, ffmpeg otherwise |
 | `organize` | Library housekeeping — bulk keywords, ratings and roles over a clip selection; `organize_auto` proposes keywords from captions and transcripts; `history` reads the operation ledger and `undo` moves the last outputs aside (never deletes) |
 | `find` | "Find the shot where…" — a router over transcript words, metadata and offline vision captions that names the tier on every hit; `find_index` warms every source; `find_to_timeline` assembles the hits into a selects reel |
+| `view` | **See the cut inline** — `view_timeline` returns the timeline as an exact rational-time payload that MCP Apps hosts render as an interactive timeline (`ui://fcp/timeline`); `view_clip` is the inspect button. Read-only |
+| `gen` | **Generative fill behind a money gate** — `gen_quote` prices a job (fal Kling/Wan, Gemini Veo; Runway/Luma honest stubs); `gen_fill_gap` / `gen_broll` / `gen_extend_clip` refuse without `quote_id` + `confirm=true`, a key, and a price under `FCP_MCP_GEN_MAX_USD`; the result is ffprobed, attached as a `generated` lane clip with a marker, DTD-checked and journaled |
 
 Each call has the same shape: `{"action": "trim_clip", "args": {...}}`. The
-`action` is one of the 96 operation names below; `args` is whatever that
+`action` is one of the 102 operation names below; `args` is whatever that
 tool always took. The group dispatches straight into the same handler — the
 behavior is identical, only the schema Claude sees up front is smaller. An
 unknown or cross-group action returns an error listing the valid actions for
 that group, so a wrong guess is recoverable in one turn.
 
 **Grouping is what's advertised, not what's callable.** `call_tool` resolves
-every one of the 96 operation names from a handler registry that doesn't care
+every one of the 102 operation names from a handler registry that doesn't care
 what `list_tools` chose to show — an existing MCP config that calls `trim_clip`
 directly keeps working with no changes. If you'd rather also see the flat tool
 schemas (e.g. for debugging, or a client that doesn't like the grouped shape),
@@ -412,8 +443,8 @@ set:
 FCP_MCP_LEGACY_TOOLS=1
 ```
 
-This advertises the 71 flat schemas alongside the 13 groups — 84 tools in
-total. The 25 operations that were born as group actions (`preview`, `watch`,
+This advertises the 71 flat schemas alongside the 15 groups — 86 tools in
+total. The 31 operations that were born as group actions (`preview`, `watch`,
 `index`, `scenes`, `organize`, `find`, plus `import_edl_json`) have no flat
 schema and are reached through their group.
 The flat tools will not be removed before a 1.0 release.
@@ -432,6 +463,85 @@ at it, or fetch it directly, to see a cut without opening Final Cut Pro.
 *A real 164-second music video: 129 connected clips across 15 lanes, rendered
 from its FCPXML alone. Clip names on reference layers have been relabelled.*
 
+### See the cut inline — the MCP Apps timeline (v0.26.0)
+
+The `view` tool turns the same timeline into something a host renders
+**inside the conversation**. Call `view` with `view_timeline` and a
+filepath; a host that speaks MCP Apps (SEP-1865: Claude Desktop and
+claude.ai, ChatGPT, VS Code, Goose) opens the `ui://fcp/timeline` resource
+in a sandboxed iframe and posts the result into it.
+
+![The MCP Apps timeline: a true-black ruler with marker names, spine clips carrying filmstrip thumbnails, transcript words under the clips, a cyan playhead, and a selection panel with Inspect, Find similar, Add marker and Delete buttons](docs/screenshots/2026-10-09_timeline-app-1280-selected.png)
+
+*The app rendered in headless Chromium through a stub host, 1280 px, with a
+clip selected. The phone-width render is
+`docs/screenshots/2026-10-09_timeline-app-390.png`.*
+
+What it shows: every lane (spine, connected video lanes above, audio lanes
+below), clips sized to duration with their names and roles, markers, gaps,
+a timecode ruler with a playhead and drag-to-select range, cached
+transcript words under the clip they were said in, and a filmstrip
+thumbnail per clip when ffmpeg can make one (bounded; coloured blocks
+otherwise). Click a clip for its details. The buttons call back into the
+server through the host: **Inspect** (`view_clip`) and **Find similar
+shots** (`find_shots`) are reads; **Add marker at playhead** (`mark`) and
+**Delete clip** (`edit`) are the ordinary edit actions, so the journal, the
+project guard and the review gate apply exactly as they do from chat, and
+the app re-renders from the new output file when the edit returns.
+
+The payload is exact: every position and duration is a
+`numerator/denominator` string straight from the model's Fractions, and
+the tests round-trip both fixtures through it. A host without MCP Apps gets
+a one-line summary and the JSON block as text, which is still the timeline.
+The shell loads nothing from the network. Two honest limits: the in-iframe
+protocol (`ui/initialize`, `ui/notifications/tool-result`, `tools/call`)
+follows the spec text and the `@modelcontextprotocol/ext-apps` client and
+has been driven by a stub host, not yet by a shipping one; and on `mcp` 1.x
+the tool carries `_meta.ui` and the resource is served, but the SDK has no
+slot to advertise the extension capability, so a host that insists on the
+handshake needs `mcp` 2.x.
+
+### Generative fill — quote, then confirm, then insert (v0.26.0)
+
+The `gen` tool fills a gap, adds B-roll over a clip, or extends a clip past
+its out point with generated video. **It spends money, so the order is
+fixed and the gate is not optional:**
+
+```json
+gen {"action": "gen_quote", "args": {"provider": "fal", "seconds": 7, "prompt": "a street at dusk, handheld"}}
+→ Quote 61585b429a17 — fal/kling-2.5, 10s billable for 7.00s requested
+   Estimated: $0.70 (prices as of 2026-10-09; third-party figures, NOT verified against an invoice)
+   Cap: $5 per call (FCP_MCP_GEN_MAX_USD)
+
+gen {"action": "gen_fill_gap", "args": {"filepath": "…/cut.fcpxml", "prompt": "a street at dusk, handheld",
+                                         "seconds": 7, "quote_id": "61585b429a17", "confirm": true}}
+```
+
+Generation refuses — naming the fix each time — without `confirm=true`,
+without a quote id, with a quote whose job changed (the quote is recomputed
+from provider, model, billable seconds and prompt; a stale id cannot buy a
+different job), without the provider's key in the environment, and above
+the per-call cap `FCP_MCP_GEN_MAX_USD` (default `5`). Kling and Wan bill 5
+or 10 seconds and Veo 4, 6 or 8, so a 7-second gap is a 10-second job and
+the quote says 10. Prices are the upper end of what the providers' pages
+reported on `prices_as_of`; every quote and every result says they are
+unverified.
+
+Providers: `fal` (`kling-2.5` default, `wan-2.5`) and `gemini` (`veo-3.1`)
+generate; `runway` (Aleph) and `luma` (Ray Modify) are video-to-video and
+quote but refuse as not implemented rather than pretend. Keys come from
+`FAL_KEY`, `GEMINI_API_KEY`, `RUNWAY_API_KEY`, `LUMA_API_KEY` only, travel in
+one auth header, are never written or logged, and every reply is redacted;
+the transport refuses to send a key in a URL or body. What comes back is
+ffprobed for its **real** duration and frame rate (the model never invents
+an fps), saved under `generated/` beside the project through the sandboxed
+output path so the journal records it, attached as a connected clip with
+`videoRole="generated"` and a marker naming prompt and provider, snapped to
+the sequence's frame grid, DTD-validated, and reported with the output
+file's sha256. `gen_broll` and `gen_extend_clip` condition the generation on
+a frame of the source clip when the media is present and say so when it is
+not.
+
 ### Claude Code skill
 
 A `final-cut-pro` skill ships in `skill/`, wrapping this server with the
@@ -446,11 +556,11 @@ ln -s "$PWD/fcp-mcp-server/skill" ~/.claude/skills/final-cut-pro
 
 ---
 
-## All 96 Operations
+## All 102 Operations
 
-The 96 operations below are what the 13 groups in [Tools](#tools) dispatch
-to — every `action` value the groups accept. All 71 flat-schema operations remain directly callable; set
-`FCP_MCP_LEGACY_TOOLS=1` to advertise them alongside the groups.
+The 102 operations below are what the 15 groups in [Tools](#tools) dispatch
+to — every `action` value the groups accept. The 71 flat-schema operations are
+still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 
 | Category | Tools | What It Does |
 |----------|------:|--------------|
@@ -483,7 +593,9 @@ to — every `action` value the groups accept. All 71 flat-schema operations rem
 | **Scenes** | 3 | Detect shot boundaries, mark them, split on them |
 | **Organize** | 6 | Bulk keywords/ratings/roles, auto-proposed keywords, operation history, hash-checked undo |
 | **Find** | 3 | Shot search across transcript, metadata and vision tiers; warm the index; assemble a selects reel |
-| | **96** | |
+| **View** | 2 | The MCP Apps timeline payload (`view_timeline`) and the clip inspector (`view_clip`) |
+| **Generative fill** | 4 | Quote a job, then fill a gap, add B-roll or extend a clip against a confirmed quote |
+| | **102** | |
 
 <details>
 <summary><strong>Full tool reference (click to expand)</strong></summary>
@@ -578,13 +690,17 @@ which are never mixed. The reported duration accounts for the overlaps, and
 | `FCP_MAX_BATCH_MARKERS` | No | `10000` | Cap on markers written by one batch or import operation. Excess markers are reported as dropped, never silently skipped |
 | `FCP_MAX_TRANSCRIPT_CHARS` | No | `1048576` | Cap on inline transcript text passed to `import_transcript_markers` |
 | `FCPXML_DTD_DIR` | No | FCP app bundle | Directory of Apple `FCPXMLv*_*.dtd` files for DTD validation (auto-detected from the installed Final Cut Pro) |
-| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the 71 flat tool schemas alongside the 13 grouped tools |
+| `FCP_MCP_LEGACY_TOOLS` | No | unset | Set to `1` to advertise the 71 flat tool schemas alongside the 15 grouped tools |
 | `FCP_WATCH_DIR` | No | unset | Default folder `watch_start` observes for Final Cut Pro XML exports |
 | `FCP_MCP_AUTOPUSH` | No | unset | Set to `1` so every write also imports into the running Final Cut Pro. Off by default — repeated imports accumulate library churn, which is your call to make |
 | `FCP_MCP_INDEX` | No | `~/.fcp-mcp/index.db` | Where the analysis cache lives. `off` disables it entirely; every tool still works, it just recomputes. Any other value is a path |
 | `ELEVENLABS_API_KEY` | No | unset | Enables `backend: "elevenlabs"` on the transcript tools. Sent as the `xi-api-key` header and nowhere else; never read unless that backend is requested |
 | `FCP_MCP_JOURNAL` | No | `~/.fcp-mcp/journal/` | Where the operation ledger lives (paths and hashes, never content). `off` disables it — `history`/`undo` then say so and the `deliver` review gate refuses to certify anything |
 | `FCP_MCP_VLM_MODEL` | No | `mlx-community/Qwen2-VL-2B-Instruct-4bit` | Hub id of the MLX vision model `find` captions shots with. Loaded offline only; a missing model is reported with its `hf download` command, never fetched |
+| `FCP_MCP_GEN_MAX_USD` | No | `5` | Per-call ceiling on the estimated cost of a `gen` generation. A quote over it says so; generation refuses. A malformed value raises rather than defaulting |
+| `FAL_KEY` | No | unset | Enables `gen` provider `fal` (Kling 2.5, Wan 2.5). Sent as `Authorization: Key …` to queue.fal.run only; never read unless a `gen` action runs |
+| `GEMINI_API_KEY` | No | unset | Enables `gen` provider `gemini` (Veo 3.1). Sent as `x-goog-api-key` to generativelanguage.googleapis.com only |
+| `RUNWAY_API_KEY`, `LUMA_API_KEY` | No | unset | Reserved for the video-to-video providers, which quote but are not implemented in this release |
 
 ---
 
@@ -607,8 +723,8 @@ which are never mixed. The reported duration accounts for the overlaps, and
 
 ```
 fcp-mcp-server/           ~15.7k lines Python
-├── server.py              MCP entry point — 13 grouped tools advertised by default
-│                          (TOOL_GROUPS), dispatching into 96 handlers
+├── server.py              MCP entry point — 15 grouped tools advertised by default
+│                          (TOOL_GROUPS), dispatching into 102 handlers
 │                          (TOOL_HANDLERS); 5 prompts, resource discovery.
 │                          FCP_MCP_LEGACY_TOOLS=1 re-advertises the flat tools.
 │                          Binds itself to tools/ via bind_server() — group modules
@@ -815,7 +931,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-2025 tests across 74 suites. Current SDK compatibility and FCP round-trip results are recorded in [retiming validation](docs/retiming-validation.md). CI also runs `mcp` 2.x and `FCP_MCP_INDEX=off`; the extra skips there are the tests OF the cache. The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+2334 tests across 82 suites — 2329 pass and 5 skip locally on v0.26.0 at the `mcp` 1.21.1 floor; 2328 pass and 6 skip on `mcp` 2.x; 2304 pass and 30 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 
@@ -894,6 +1010,7 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **A wheel that starts** — the publish workflow installs the built wheel into a clean venv and runs `initialize` + `tools/list` before a release ships; the MCP registry check reads `isLatest` and is compiled in CI — *v0.21.1–0.22.1*
 - [x] **Gap-based storylines are visible** — `mc-clip` and `caption` connected to a gap spine parse, the multicam angle resolves to its media, and every media tool walks connected clips too (#23, @tomartmedia) — *v0.23.0*
 - [x] **Every tool reads the whole edit** — the reporting tools (EDL, CSV, markers, keywords, pacing, roles) and the preview follow connected clips too, so a gap-based project no longer exports empty — *v0.24.0*
+- [x] **See the cut** — the `view` MCP Apps timeline rendered inline by the host, `gen` generative fill behind a quote-then-confirm money gate, and the `expected_sha256` project guard; the rest of the October idea set is in [`docs/ROADMAP-2026-10.md`](docs/ROADMAP-2026-10.md) — *v0.26.0*
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written
 - [ ] Audio sync detection

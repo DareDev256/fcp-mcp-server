@@ -33,8 +33,15 @@ from mcp.types import (
 from fcpxml import diversity as _diversity
 from fcpxml import journal as _journal
 from fcpxml import live
+from fcpxml import timeline_app as _timeline_app
 from fcpxml.diff import compare_timelines, format_diff
-from fcpxml.mcp_compat import register_handlers, tool_input_schema
+from fcpxml.mcp_compat import (
+    APPS_EXTENSION_ID,
+    build_tool,
+    initialization_options,
+    register_handlers,
+    tool_input_schema,
+)
 
 # Not called from this module. tools/media.py reaches these three through the
 # bound server module (srv.detect_silence, ...) because the tests monkeypatch
@@ -57,7 +64,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.25.2"
+__version__ = "0.26.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -841,9 +848,16 @@ def parse_transcript_timestamps(text: str) -> list[dict]:
 # ============================================================================
 
 async def list_resources() -> list[Resource]:
-    """Expose discovered FCPXML files as MCP resources."""
+    """Expose discovered FCPXML files as MCP resources, plus the timeline app."""
     files = find_fcpxml_files(PROJECTS_DIR)
-    resources = []
+    # The MCP Apps shell. One resource, no project in it: the host renders
+    # it once and posts each `view` tool result into it.
+    resources = [Resource(
+        uri=_timeline_app.APP_URI,
+        name="FCP timeline app",
+        description="Interactive timeline rendered by MCP Apps hosts from the view tool's results",
+        mimeType=_timeline_app.APP_MIME_TYPE,
+    )]
     for f in files:
         p = Path(f)
         encoded = quote(f)
@@ -884,6 +898,13 @@ def _uri_to_path(uri: str, scheme: str) -> str:
 async def read_resource(uri: str) -> str | list[ReadResourceContents]:
     """Read an FCPXML file and return a summary."""
     raw = str(uri)
+    if raw == _timeline_app.APP_URI:
+        return [ReadResourceContents(
+            content=_timeline_app.render_app_html(),
+            mime_type=_timeline_app.APP_MIME_TYPE,
+        )]
+    if raw.startswith("ui://"):
+        return f"Unknown app resource: {raw}. The only one served is {_timeline_app.APP_URI}."
     if raw.startswith("preview://"):
         try:
             filepath = _validate_filepath(
@@ -2234,6 +2255,7 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
     return _text_result(f"""# Timeline Analysis: {tl.name}
 {shape}
 ## Overview
+- **sha256**: {_journal.file_hash(arguments["filepath"])} (pass as `expected_sha256` to edit this exact file)
 - **Duration**: {format_duration(tl.duration.seconds)}
 - **Resolution**: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 
@@ -4040,13 +4062,15 @@ def _animation_schema_extensions(actions: list[str]) -> dict:
 def _group_tool(name: str) -> Tool:
     """Build the advertised Tool schema for one group."""
     spec = TOOL_GROUPS[name]
-    return Tool(
-        name=name,
-        description=(
+    # `meta` is how a group binds an MCP Apps resource (tools/view.py). It
+    # rides on the Tool as `_meta` on both SDK generations — see build_tool.
+    return build_tool(
+        name,
+        (
             f"{spec['description']} "
             f"Actions: {', '.join(spec['actions'])}."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
                 "action": {
@@ -4058,13 +4082,18 @@ def _group_tool(name: str) -> Tool:
                     "type": "object",
                     "description": (
                         "Arguments for the chosen action, e.g. "
-                        "{\"filepath\": \"/path/to/project.fcpxml\"}."
+                        "{\"filepath\": \"/path/to/project.fcpxml\"}. Any "
+                        "action that takes a filepath also accepts "
+                        "expected_sha256: the call refuses if the file no "
+                        "longer hashes to it (every write result and "
+                        "analyze_timeline report the current sha256)."
                     ),
                 },
             },
             "required": ["action"],
             **_animation_schema_extensions(spec["actions"]),
         },
+        meta=spec.get("meta"),
     )
 
 
@@ -4143,14 +4172,85 @@ def _review_gate(action: str, arguments: dict) -> list[TextContent] | None:
     return None
 
 
+def _project_guard(arguments: dict) -> list[TextContent] | None:
+    """Refuse to touch a file that is not the one the caller last saw.
+
+    An LLM holds a sha256 from the previous result and passes it back as
+    ``expected_sha256``; if the file on disk no longer hashes to it — the
+    operator saved over it in Final Cut, another session wrote a new
+    version, the path now points at a different project — the call refuses
+    and names both hashes. Without the argument nothing changes. Applied to
+    every action that takes a filepath, reads included: a read of the wrong
+    file is a wrong answer too, and one rule is easier to trust than a list.
+    """
+    expected = arguments.get("expected_sha256")
+    if expected is None:
+        return None
+    filepath = arguments.get("filepath")
+    if not isinstance(expected, str) or not isinstance(filepath, str):
+        return _text_result(
+            "Refused: expected_sha256 must be a hex string and needs a filepath to check against."
+        )
+    current = _journal.file_hash(filepath)
+    if current is None:
+        return _text_result(f"Refused: {filepath} does not exist, so it cannot match expected_sha256.")
+    if current.lower() != expected.strip().lower():
+        return _text_result(
+            f"Refused: {filepath} changed since you last read it.\n"
+            f"expected sha256: {expected.strip().lower()}\n"
+            f"current sha256:  {current}\n"
+            "Re-read it (inspect analyze_timeline or view view_timeline report the current hash) "
+            "and decide again against the file as it is now."
+        )
+    return None
+
+
+def _written_hashes(written: list[str]) -> dict[str, str]:
+    """The sha256 of every FCPXML this request wrote, for the next call's guard."""
+    hashes = {}
+    for path in written:
+        if path.endswith((".fcpxml", ".fcpxmld")):
+            digest = _journal.file_hash(path)
+            if digest:
+                hashes[Path(path).name] = digest
+    return hashes
+
+
+def _with_hashes(text: str, hashes: dict[str, str]) -> str:
+    """Attach *hashes* to a handler's reply without breaking its format.
+
+    Keyframe and retime actions answer with one JSON object that callers
+    parse; a text footer after it is "Extra data" to json.loads, so the
+    hashes go inside the object as a ``sha256`` field. Every other reply is
+    prose and gets the footer lines.
+    """
+    if not hashes:
+        return text
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(stripped)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and "sha256" not in payload:
+            payload["sha256"] = hashes
+            return json.dumps(
+                payload, ensure_ascii=False, allow_nan=False,
+                indent=2 if "\n" in stripped else None,
+            )
+    lines = [f"sha256 ({name}): {digest}" for name, digest in hashes.items()]
+    return text + "\n\n" + "\n".join(lines)
+
+
 async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequence[TextContent]:
-    """Run *handler* inside a journal ledger, behind the review gate.
+    """Run *handler* inside a journal ledger, behind the project guard and
+    the review gate.
 
     Any path the handler validates as an output and then writes is recorded
     against the input. Handlers change nothing for this: the seam is
     _validate_output_path, which every write already passes through.
     """
-    refusal = _review_gate(action, arguments)
+    refusal = _project_guard(arguments) or _review_gate(action, arguments)
     if refusal is not None:
         return refusal
     filepath = arguments.get("filepath")
@@ -4160,6 +4260,11 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
         result = await handler(arguments)
     finally:
         written = _journal.finish(token)
+    # Every write answers with the hash of what it wrote, so the model can
+    # pass it back as expected_sha256 on the next call without a round trip.
+    hashes = _written_hashes(written)
+    if hashes:
+        result = _text_result(_with_hashes(result[0].text, hashes))
     # Autopush lives HERE, on the same seam, so every write handler gets it
     # without knowing: whatever this request wrote as FCPXML is pushed.
     # push_to_fcp is the push; it is not pushed again.
@@ -4221,8 +4326,12 @@ register_handlers(
 # ============================================================================
 
 async def main():
+    # MCP Apps is advertised under capabilities.extensions where the SDK has
+    # the slot (2.x). On 1.x the tool still carries _meta.ui and the ui://
+    # resource is still served; only the up-front handshake is missing.
+    options = initialization_options(server, {APPS_EXTENSION_ID: {}})
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+        await server.run(read_stream, write_stream, options)
 
 
 def main_sync():
