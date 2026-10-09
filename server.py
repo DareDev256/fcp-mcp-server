@@ -2250,6 +2250,7 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
     return _text_result(f"""# Timeline Analysis: {tl.name}
 {shape}
 ## Overview
+- **sha256**: {_journal.file_hash(arguments["filepath"])} (pass as `expected_sha256` to edit this exact file)
 - **Duration**: {format_duration(tl.duration.seconds)}
 - **Resolution**: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 
@@ -4135,14 +4136,59 @@ def _review_gate(action: str, arguments: dict) -> list[TextContent] | None:
     return None
 
 
+def _project_guard(arguments: dict) -> list[TextContent] | None:
+    """Refuse to touch a file that is not the one the caller last saw.
+
+    An LLM holds a sha256 from the previous result and passes it back as
+    ``expected_sha256``; if the file on disk no longer hashes to it — the
+    operator saved over it in Final Cut, another session wrote a new
+    version, the path now points at a different project — the call refuses
+    and names both hashes. Without the argument nothing changes. Applied to
+    every action that takes a filepath, reads included: a read of the wrong
+    file is a wrong answer too, and one rule is easier to trust than a list.
+    """
+    expected = arguments.get("expected_sha256")
+    if expected is None:
+        return None
+    filepath = arguments.get("filepath")
+    if not isinstance(expected, str) or not isinstance(filepath, str):
+        return _text_result(
+            "Refused: expected_sha256 must be a hex string and needs a filepath to check against."
+        )
+    current = _journal.file_hash(filepath)
+    if current is None:
+        return _text_result(f"Refused: {filepath} does not exist, so it cannot match expected_sha256.")
+    if current.lower() != expected.strip().lower():
+        return _text_result(
+            f"Refused: {filepath} changed since you last read it.\n"
+            f"expected sha256: {expected.strip().lower()}\n"
+            f"current sha256:  {current}\n"
+            "Re-read it (inspect analyze_timeline or view view_timeline report the current hash) "
+            "and decide again against the file as it is now."
+        )
+    return None
+
+
+def _hash_footer(written: list[str]) -> str:
+    """The sha256 of every FCPXML this request wrote, for the next call's guard."""
+    lines = []
+    for path in written:
+        if path.endswith((".fcpxml", ".fcpxmld")):
+            digest = _journal.file_hash(path)
+            if digest:
+                lines.append(f"sha256 ({Path(path).name}): {digest}")
+    return ("\n\n" + "\n".join(lines)) if lines else ""
+
+
 async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequence[TextContent]:
-    """Run *handler* inside a journal ledger, behind the review gate.
+    """Run *handler* inside a journal ledger, behind the project guard and
+    the review gate.
 
     Any path the handler validates as an output and then writes is recorded
     against the input. Handlers change nothing for this: the seam is
     _validate_output_path, which every write already passes through.
     """
-    refusal = _review_gate(action, arguments)
+    refusal = _project_guard(arguments) or _review_gate(action, arguments)
     if refusal is not None:
         return refusal
     filepath = arguments.get("filepath")
@@ -4152,6 +4198,11 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
         result = await handler(arguments)
     finally:
         written = _journal.finish(token)
+    # Every write answers with the hash of what it wrote, so the model can
+    # pass it back as expected_sha256 on the next call without a round trip.
+    footer = _hash_footer(written)
+    if footer:
+        result = _text_result(result[0].text + footer)
     # Autopush lives HERE, on the same seam, so every write handler gets it
     # without knowing: whatever this request wrote as FCPXML is pushed.
     # push_to_fcp is the push; it is not pushed again.

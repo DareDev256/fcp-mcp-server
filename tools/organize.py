@@ -116,13 +116,15 @@ async def handle_history(args: dict) -> list:
         return text_result(f"No operations recorded for the folder of {Path(filepath).name}.")
     lines = [
         f"**History** — {Path(filepath).parent} ({len(rows)} most recent)\n",
-        "| When | Tool | Action | Input | Output | Output hash |",
+        "| When | Tool | Action | Input | Output | Output sha256 |",
         "|---|---|---|---|---|---|",
     ]
     for r in rows:
         inp = (r.get("input") or {}).get("path") or ""
         out = (r.get("output") or {}).get("path") or ""
-        sha = ((r.get("output") or {}).get("sha256") or "")[:12]
+        # The full hash, not a prefix: this is the value the next call passes
+        # back as expected_sha256, and a prefix cannot be passed back.
+        sha = (r.get("output") or {}).get("sha256") or ""
         extra = f" → {Path(r['moved_to']).name}" if r.get("moved_to") else ""
         lines.append(
             f"| {_age(r.get('ts', 0))} | {r.get('tool', '')} | {r.get('action', '')} | "
