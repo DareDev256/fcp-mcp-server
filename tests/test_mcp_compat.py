@@ -53,7 +53,7 @@ class TestRegistration:
         if is_legacy_api():
             # 1.x keys `request_handlers` by request *type*, so assert on the
             # types. Reading the `method` literal off the model instead looks
-            # tidier and is not portable — at the declared floor (mcp 1.3.0)
+            # tidier and is not portable — at mcp 1.3.0, then the declared floor,
             # that field carries no default and the whole set collapses to
             # {PydanticUndefined}. The floor job caught exactly that.
             from mcp.types import (
