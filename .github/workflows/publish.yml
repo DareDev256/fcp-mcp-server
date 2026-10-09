@@ -74,10 +74,17 @@ jobs:
         run: |
           python -m venv /tmp/smoke
           /tmp/smoke/bin/pip install --quiet dist/*.whl
-          count='import server, tools; print(len(server.TOOL_GROUPS), len(server.TOOL_HANDLERS), len(tools.EXTRA_GROUPS), server.__file__)'
-          read -r src_groups src_handlers src_extra src_file < <(/tmp/smoke/bin/python -c "$count")
+          # A script file, not an inline -c string built from a shell variable:
+          # the workflow-scripts job compiles every inline -c body as Python.
+          # Fed on stdin, so sys.path[0] is the CURRENT directory: run as a
+          # file, Python would put /tmp first and both reads would see the wheel.
+          cat > /tmp/count.py <<'PY'
+          import server, tools
+          print(len(server.TOOL_GROUPS), len(server.TOOL_HANDLERS), len(tools.EXTRA_GROUPS), server.__file__)
+          PY
+          read -r src_groups src_handlers src_extra src_file < <(/tmp/smoke/bin/python - < /tmp/count.py)
           cd /tmp
-          read -r whl_groups whl_handlers whl_extra whl_file < <(/tmp/smoke/bin/python -c "$count")
+          read -r whl_groups whl_handlers whl_extra whl_file < <(/tmp/smoke/bin/python - < /tmp/count.py)
           echo "source tree: $src_groups groups, $src_handlers handlers, $src_extra tools/ groups ($src_file)"
           echo "wheel:       $whl_groups groups, $whl_handlers handlers, $whl_extra tools/ groups ($whl_file)"
           case "$src_file" in "$GITHUB_WORKSPACE"/*) ;; *) echo "::error::source count did not read the checkout"; exit 1;; esac
