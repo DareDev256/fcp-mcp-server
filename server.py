@@ -343,7 +343,9 @@ def _validate_filepath(filepath: str, allowed_extensions: tuple[str, ...] | None
     return str(resolved)
 
 
-def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) -> str:
+def _validate_output_path(
+    output_path: str, *, anchor_dir: str | None = None, note_output: bool = True,
+) -> str:
     """Validate an output path with optional sandbox enforcement.
 
     Resolves traversal, blocks null bytes, ensures parent exists, and — when
@@ -356,6 +358,8 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
         anchor_dir: If set, the resolved output must be a child of this
             directory.  Typically the parent directory of the input file so
             outputs stay co-located with their sources.
+        note_output: Register a prospective journal output. New-file publishers
+            may defer this until their exclusive publication succeeds.
 
     Raises:
         ValueError: For null bytes, missing parent, or sandbox escape.
@@ -380,7 +384,8 @@ def _validate_output_path(output_path: str, *, anchor_dir: str | None = None) ->
 
     # The journal seam: every write passes through here, so noting the
     # approved path is enough for the ledger to record it once it exists.
-    _journal.note_output(str(resolved))
+    if note_output:
+        _journal.note_output(str(resolved))
     return str(resolved)
 
 
@@ -2048,7 +2053,7 @@ def _legacy_tool_list() -> list[Tool]:
                 },
             }
         ),
-    ]
+    ] + _keyframe_tools.tool_schemas() + _retime_tools.tool_schemas()
 
 
 def _legacy_tools_enabled() -> bool:
@@ -3559,6 +3564,15 @@ async def handle_reformat_timeline(arguments: dict) -> Sequence[TextContent]:
 # detect_beats and transcribe stay imported at the top of this file:
 # tools/media.py reaches them as srv.X so the tests' monkeypatches on this
 # module still take effect.
+from tools import keyframes as _keyframe_tools  # noqa: E402
+from tools import retime as _retime_tools  # noqa: E402
+from tools.keyframes import (  # noqa: E402
+    handle_batch_keyframes,
+    handle_delete_keyframes,
+    handle_list_keyframes,
+    handle_set_animation_curve,
+    handle_set_keyframes,
+)
 from tools.media import (  # noqa: E402
     handle_detect_beats,
     handle_detect_media_silence,
@@ -3580,6 +3594,11 @@ from tools.nle import (  # noqa: E402
     handle_list_effects,
     handle_list_templates,
     handle_relink_media,
+)
+from tools.retime import (  # noqa: E402
+    handle_list_speed_points,
+    handle_reset_speed,
+    handle_set_speed_curve,
 )
 
 
@@ -3745,6 +3764,14 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
 
 
 TOOL_HANDLERS = {
+    "list_speed_points": handle_list_speed_points,
+    "set_speed_curve": handle_set_speed_curve,
+    "reset_speed": handle_reset_speed,
+    "list_keyframes": handle_list_keyframes,
+    "set_keyframes": handle_set_keyframes,
+    "set_animation_curve": handle_set_animation_curve,
+    "delete_keyframes": handle_delete_keyframes,
+    "batch_keyframes": handle_batch_keyframes,
     # Read
     "list_projects": handle_list_projects,
     "analyze_timeline": handle_analyze_timeline,
@@ -3850,7 +3877,7 @@ TOOL_GROUPS: dict[str, dict] = {
             "list_projects", "analyze_timeline", "analyze_pacing", "list_clips",
             "list_markers", "list_roles", "list_keywords", "list_effects",
             "list_templates", "list_library_clips", "list_compound_clips",
-            "list_connected_clips", "filter_by_role",
+            "list_connected_clips", "filter_by_role", "list_keyframes", "list_speed_points",
         ],
     },
     "diagnose": {
@@ -3876,6 +3903,8 @@ TOOL_GROUPS: dict[str, dict] = {
             "reorder_clips", "change_speed", "rapid_trim", "add_transition",
             "add_audio", "add_connected_clip", "assign_role", "fill_gaps",
             "fix_flash_frames", "remove_silence_candidates", "remove_media_silence",
+            "set_keyframes", "delete_keyframes", "batch_keyframes", "set_animation_curve",
+            "set_speed_curve", "reset_speed",
         ],
     },
     "mark": {
@@ -4024,6 +4053,12 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
     return await _journaled(group, action, call_args, handler)
 
 
+def _animation_schema_extensions(actions: list[str]) -> dict:
+    clauses = [clause for module in (_keyframe_tools, _retime_tools)
+               for clause in module.group_schema_extensions(actions).get("allOf", [])]
+    return {"allOf": clauses} if clauses else {}
+
+
 def _group_tool(name: str) -> Tool:
     """Build the advertised Tool schema for one group."""
     spec = TOOL_GROUPS[name]
@@ -4056,6 +4091,7 @@ def _group_tool(name: str) -> Tool:
                 },
             },
             "required": ["action"],
+            **_animation_schema_extensions(spec["actions"]),
         },
         meta=spec.get("meta"),
     )
@@ -4169,15 +4205,41 @@ def _project_guard(arguments: dict) -> list[TextContent] | None:
     return None
 
 
-def _hash_footer(written: list[str]) -> str:
+def _written_hashes(written: list[str]) -> dict[str, str]:
     """The sha256 of every FCPXML this request wrote, for the next call's guard."""
-    lines = []
+    hashes = {}
     for path in written:
         if path.endswith((".fcpxml", ".fcpxmld")):
             digest = _journal.file_hash(path)
             if digest:
-                lines.append(f"sha256 ({Path(path).name}): {digest}")
-    return ("\n\n" + "\n".join(lines)) if lines else ""
+                hashes[Path(path).name] = digest
+    return hashes
+
+
+def _with_hashes(text: str, hashes: dict[str, str]) -> str:
+    """Attach *hashes* to a handler's reply without breaking its format.
+
+    Keyframe and retime actions answer with one JSON object that callers
+    parse; a text footer after it is "Extra data" to json.loads, so the
+    hashes go inside the object as a ``sha256`` field. Every other reply is
+    prose and gets the footer lines.
+    """
+    if not hashes:
+        return text
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(stripped)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and "sha256" not in payload:
+            payload["sha256"] = hashes
+            return json.dumps(
+                payload, ensure_ascii=False, allow_nan=False,
+                indent=2 if "\n" in stripped else None,
+            )
+    lines = [f"sha256 ({name}): {digest}" for name, digest in hashes.items()]
+    return text + "\n\n" + "\n".join(lines)
 
 
 async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequence[TextContent]:
@@ -4200,9 +4262,9 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
         written = _journal.finish(token)
     # Every write answers with the hash of what it wrote, so the model can
     # pass it back as expected_sha256 on the next call without a round trip.
-    footer = _hash_footer(written)
-    if footer:
-        result = _text_result(result[0].text + footer)
+    hashes = _written_hashes(written)
+    if hashes:
+        result = _text_result(_with_hashes(result[0].text, hashes))
     # Autopush lives HERE, on the same seam, so every write handler gets it
     # without knowing: whatever this request wrote as FCPXML is pushed.
     # push_to_fcp is the push; it is not pushed again.

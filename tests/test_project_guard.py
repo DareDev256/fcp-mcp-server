@@ -117,3 +117,21 @@ def test_the_guard_is_load_bearing(project, monkeypatch):
     monkeypatch.setattr(server, "_project_guard", lambda arguments: None)
     text = _mark(project, expected_sha256=WRONG)
     assert "Saved to" in text
+
+
+def test_a_json_reply_carries_the_hashes_inside_the_object():
+    """Keyframe and retime actions answer with one JSON object. A text footer
+    after it made json.loads raise "Extra data" in every caller, so the
+    hashes go inside the object instead, and the reply stays one document."""
+    import json
+
+    reply = json.dumps({"output_path": "/x/out.fcpxml", "ok": True, "note": "café"}, ensure_ascii=False)
+    merged = server._with_hashes(reply, {"out.fcpxml": "a" * 64})
+    payload = json.loads(merged)
+    assert payload["sha256"] == {"out.fcpxml": "a" * 64}
+    assert payload["note"] == "café" and "\\u00e9" not in merged
+    # Prose keeps the footer line the model reads.
+    prose = server._with_hashes("Saved to: out.fcpxml", {"out.fcpxml": "b" * 64})
+    assert prose.endswith(f"sha256 (out.fcpxml): {'b' * 64}")
+    # No hashes, no change.
+    assert server._with_hashes(reply, {}) == reply

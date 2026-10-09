@@ -6,7 +6,8 @@
 
 "See the cut." An interactive timeline a host renders inline, generative fill
 behind a money gate, and a hash guard so a model cannot edit a file that
-changed under it. 15 grouped tools, 94 operations. Full idea set, including
+changed under it. Also ships @travisoa's keyframes and speed curves (#26)
+and the mcp floor fix (#27). 15 grouped tools, 102 operations. Full idea set, including
 what was deliberately left out: `docs/ROADMAP-2026-10.md`.
 
 ### Added
@@ -51,23 +52,42 @@ what was deliberately left out: `docs/ROADMAP-2026-10.md`.
 - **Project guard.** Every action that takes a `filepath` accepts
   `expected_sha256` and refuses, naming both hashes, when the file no longer
   matches. Mutation-checked.
+- **Keyframes, speed curves and adaptive animation curves** (#26, thanks
+  @travisoa). Eight actions inside the existing `inspect` and `edit` groups:
+  read, set, delete and batch-edit position, scale, rotation, opacity and
+  volume keyframes by structural `clip_path`; `set_animation_curve` approximates
+  authored cubic Bezier segments with linear keys inside a per-frame error
+  bound (FCPXML has no field for Bezier handles); read, set and reset variable
+  speed with exact rational integration and ripple. Imported into Final Cut
+  Pro 12.4 without warnings. Usage and limits: `docs/keyframes.md`,
+  `docs/retiming.md`.
 - `docs/ROADMAP-2026-10.md`: the October idea set with status, rationale and
   source for each item.
 
 ### Changed
 - **Every write now ends with `sha256 (<output>): …`** for each FCPXML it
   wrote, so the model has the hash to pass back as `expected_sha256`.
+  A write that answers with one JSON object (the keyframe and speed
+  actions) carries the hashes as a `sha256` field inside it instead, so the
+  reply still parses.
   `analyze_timeline` reports the input's sha256; `history` prints the full
   output sha256 instead of a 12-character prefix (a prefix cannot be passed
   back). Output of existing operations moved: hence a minor version.
 - `list_resources` now lists `ui://fcp/timeline` ahead of the project files.
   `preview://` is unchanged.
+- The grouped-schema size ceiling in `tests/test_tool_groups.py` moves from
+  35% to 40% of the flat list: `edit` now carries the keyframe and speed
+  schemas (~16 KB).
 - The verb cap in `tests/test_tool_groups.py` moves 14 → 15: `view` must be
   its own tool because MCP Apps binds the UI to a tool's `_meta`, and `gen`
   is the money-gated verb a model should choose on purpose.
 
 ### Fixed
-- Nothing in existing operations; the 0.25.2 marker fix stands.
+- **Raised the `mcp` floor from 1.3.0 to 1.21.1** (#27, thanks @travisoa).
+  pydantic 2.14.0 (2026-10-08) removed the private `eval_type_backport` that
+  mcp 1.3.0-1.21.0 import at startup, so a fresh install of any of those SDKs
+  failed before the server could start. 1.21.1 is the first release without
+  that import. Installs that resolve the latest `mcp` were never affected.
 
 ## [0.25.2] - 2026-10-07
 

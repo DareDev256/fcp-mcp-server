@@ -22,11 +22,14 @@ enough to move a connected clip by minutes. That is #17, and it is why
 nothing here is allowed to see a rounded rate.
 """
 
+import re
 from fractions import Fraction
 
 __all__ = [
     "parse_seconds",
+    "parse_strict_seconds",
     "format_seconds",
+    "format_exact_seconds",
     "frame_duration_from_attr",
     "to_frames",
     "rational_fps",
@@ -184,6 +187,28 @@ def parse_seconds(value: str | None) -> Fraction:
             raise ValueError(f"Zero denominator in FCPXML time: {value!r}")
         return Fraction(int(num), denominator)
     return Fraction(text)
+
+
+_STRICT_SECONDS = re.compile(r"\d+(?:/\d+)?s\Z")
+
+
+def parse_strict_seconds(value) -> Fraction:
+    """Exact seconds from caller input: only ``"12s"`` or ``"1001/30000s"``.
+
+    :func:`parse_seconds` is lenient because it reads attributes Final Cut
+    wrote; it also takes decimals, signs, a missing unit and an empty value.
+    Tool arguments get this stricter form instead.
+    """
+    if not isinstance(value, str) or not _STRICT_SECONDS.fullmatch(value):
+        raise ValueError("time must be nonnegative rational seconds, e.g. '1s' or '1001/30000s'")
+    return parse_seconds(value)
+
+
+def format_exact_seconds(value: Fraction) -> str:
+    """Render *value* exactly, without the frame snapping of :func:`format_seconds`."""
+    if value.denominator == 1:
+        return f"{value.numerator}s"
+    return f"{value.numerator}/{value.denominator}s"
 
 
 def frame_duration_from_attr(frame_duration: str | None) -> Fraction:

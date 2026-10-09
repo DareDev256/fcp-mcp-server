@@ -214,7 +214,11 @@ class TestLegacyGating:
                 [{"n": t.name, "d": t.description, "s": tool_input_schema(t)} for t in ts]
             ))
 
-        assert size(grouped) < size(legacy) * 0.35, (
+        # 0.35 held until v0.26.0, when `edit` took the keyframe/retime
+        # schemas (#26, ~16 KB on its own) and `view`/`gen` joined. 0.40
+        # still means the grouped list is well under half the flat one; if
+        # this trips again, trim the `edit` schema before moving the line.
+        assert size(grouped) < size(legacy) * 0.40, (
             f"grouped={size(grouped)} legacy={size(legacy)}"
         )
 

@@ -131,19 +131,27 @@ def tool_input_schema(tool: Any) -> dict:
 def build_tool(name: str, description: str, input_schema: dict, meta: dict | None = None) -> Any:
     """Construct a ``Tool`` carrying ``_meta`` on either SDK generation.
 
-    2.x has a ``meta`` field that serialises as ``_meta``. 1.x has no such
-    field, but its models are ``extra="allow"``, so an ``_meta`` kwarg rides
-    along and serialises under the same name. Either way the wire JSON is
-    ``{"_meta": {...}}``, which is what an MCP Apps host reads.
+    Three shapes exist. 2.x has a ``meta`` field that populates by name and
+    serialises as ``_meta``. Late 1.x (1.21.1 at least) has the same field
+    but populates only by its alias, so ``meta=`` lands in the extras and the
+    field stays None. Early 1.x has no field at all, and its
+    ``extra="allow"`` models carry an ``_meta`` kwarg as an extra. So try the
+    field name, and when the field did not take it, build again by alias.
+    Every shape then serialises to ``{"_meta": {...}}``, which is what an
+    MCP Apps host reads.
     """
     from mcp.types import Tool
 
     kwargs: dict[str, Any] = {
         "name": name, "description": description, "inputSchema": input_schema,
     }
-    if meta:
-        kwargs["meta" if "meta" in Tool.model_fields else "_meta"] = meta
-    return Tool(**kwargs)
+    if not meta:
+        return Tool(**kwargs)
+    if "meta" in Tool.model_fields:
+        tool = Tool(**kwargs, meta=meta)
+        if getattr(tool, "meta", None) == meta:
+            return tool
+    return Tool(**kwargs, _meta=meta)
 
 
 def tool_meta(tool: Any) -> dict | None:

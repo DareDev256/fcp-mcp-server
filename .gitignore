@@ -42,3 +42,6 @@ htmlcov/
 .DS_Store
 *.fcpbundle/
 uv.lock
+
+# Local FCP validation media and libraries
+.local-validation/
