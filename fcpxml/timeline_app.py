@@ -548,8 +548,14 @@ _APP_HTML = r"""<!DOCTYPE html>
     var ruler = el("div", "ruler");
     var step = niceStep(dur, width - GUTTER);
     for (var t = 0; t <= dur; t += step) { var k = el("div", "tick", tcOf(t)); k.style.left = x(t) + "px"; ruler.appendChild(k); }
-    var lastLabelEnd = -1;
-    p.markers.forEach(function (m) {
+    // Marker names on the upper row: sequence markers AND clip markers (a
+    // chapter marker lives on its clip in FCPXML; every m.start is already
+    // on the sequence clock), left to right, a name dropped when it would
+    // overprint the previous one.
+    var lastLabelEnd = -1, named = p.markers.slice();
+    p.clips.forEach(function (c) { (c.markers || []).forEach(function (m) { named.push(m); }); });
+    named.sort(function (a, b) { return frac(a.start) - frac(b.start); });
+    named.forEach(function (m) {
       var left = x(frac(m.start));
       var lab = el("div", "mlabel", left - lastLabelEnd > 8 ? m.name : ""); lab.style.left = left + "px"; lab.title = m.name;
       ruler.appendChild(lab); lastLabelEnd = Math.max(lastLabelEnd, left + (lab.textContent ? m.name.length * 6 + 10 : 2));

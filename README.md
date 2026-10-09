@@ -1,16 +1,45 @@
 # FCPXML MCP
 
-**The bridge between Final Cut Pro and AI. 15 grouped tools (102 underlying operations) that turn timeline XML into structured data Claude can read, edit, generate, SEE, find — and undo.**
+**Edit Final Cut Pro by talking to Claude, and watch the cut change.**
 
 [![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![MCP Compatible](https://img.shields.io/badge/MCP%20SDK-1.3%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
-[![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![MCP Marketplace](https://img.shields.io/badge/MCP%20Marketplace-Indexed-blueviolet)](https://getlulu.dev/mcps/fcpxml-mcp-server)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.21.1%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
+[![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Hardened for real libraries:** 182 adversarial-input security tests, `defusedxml` everywhere, sandboxed writes, no patched binaries, no private APIs — plus a [private disclosure channel](SECURITY.md) with externally reported fixes already credited and merged.
+[![Watch Claude cut: one prompt on the left, and on the right the ui://fcp/timeline app re-rendering after each real tool call — the interview take loses its dead air, four section markers appear on the ruler, and a B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+
+*One prompt, seven tool calls, and the timeline re-rendered inline after each
+write. Every frame is the real `ui://fcp/timeline` app drawing a real
+`view_timeline` result; the B-roll provider is mocked and the recording says
+so on screen. [Full-size mp4](docs/assets/hero-watch-claude-cut.mp4), re-recorded
+with [`demo/hero/build.py`](demo/hero/build.py).*
+
+**See it.** `view` returns the timeline as exact rational-time JSON, and a
+host with MCP Apps draws it inline: lanes, thumbnails, markers, transcript
+words, a playhead, buttons that call the other tools.
+
+**Cut it.** 15 grouped tools, 102 operations: trims, splits, silence removal,
+markers from transcripts and beats, rough cuts, keyframes and speed ramps,
+transcript edits, cross-NLE export, and a push into a running Final Cut Pro.
+
+**Trust it.** Every write is journaled with its sha256 and can be undone.
+`deliver` refuses an unreviewed cut, `expected_sha256` refuses a file that
+changed under the model, and generation is quote-then-confirm under a
+per-call cap. 182 adversarial-input security tests, `defusedxml` everywhere,
+sandboxed writes, no private APIs, and a [disclosure channel](SECURITY.md).
+
+```bash
+claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server
+```
+
+Then `File → Export XML…` in Final Cut Pro, and ask Claude to work on the file.
+
+---
+
+## Proof
 
 ![FCPXML MCP demo: Final Cut Pro on the left, a terminal on the right. A timeline is read back, a marker is placed on every cut, and roles are assigned across ten clips, with Final Cut open the whole time](docs/assets/demo-live-fcp.gif)
 
@@ -25,12 +54,12 @@ The earlier terminal only demo is still at `docs/assets/demo.gif`.
 Re-record it with `vhs demo/demo.tape`; the media is synthesised by ffmpeg at
 run time, so there is no fixture to keep.*
 
----
-
 ## Keyframes and speed curves
 
-The `inspect` and `edit` groups include five video/audio animation actions
-and three speed curve actions. See
+Contributed by [@travisoa](https://github.com/travisoa) in
+[#26](https://github.com/DareDev256/fcp-mcp-server/pull/26): the `inspect`
+and `edit` groups include five video/audio animation actions and three speed
+curve actions, imported into Final Cut Pro 12.4 without warnings. See
 [keyframe usage](docs/keyframes.md) for installation and animation, and
 [speed curves](docs/retiming.md) for holds, sampled ramps, ripple and reset.
 

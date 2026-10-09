@@ -65,6 +65,17 @@ what was deliberately left out: `docs/ROADMAP-2026-10.md`.
   source for each item.
 
 ### Changed
+- **README hero: "watch Claude cut".** The first screen is one line, one
+  28 s recording and three pillars; the live Final Cut demo moved under
+  "Proof". The recording (`docs/assets/hero-watch-claude-cut.{mp4,gif}`) is
+  the real `ui://fcp/timeline` app driven by a stub MCP Apps host, re-drawn
+  after each real handler call (`import_edl_json`, `remove_media_silence`,
+  `batch_add_markers`, `gen_quote`, `gen_broll` with the provider mocked as
+  the tests mock it, `history`), and is re-recorded with one command:
+  `uv run --with pillow demo/hero/build.py` (generator and stub host in
+  `demo/hero/`). The timeline app now labels clip markers (chapter markers
+  live on their clip in FCPXML) on the ruler beside sequence markers, so
+  "mark every section" is visible; the payload is unchanged.
 - **Every write now ends with `sha256 (<output>): …`** for each FCPXML it
   wrote, so the model has the hash to pass back as `expected_sha256`.
   A write that answers with one JSON object (the keyframe and speed
