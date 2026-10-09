@@ -65,18 +65,26 @@ jobs:
       # Python finds tools/ in the working directory. So: install the built
       # wheel into a clean venv, cd OUT of the source tree, and start it.
       - name: The built wheel must actually start
+        # The expected counts come from the source tree this wheel was built
+        # from, never from numbers typed here: a hand-typed 13/88 refused the
+        # v0.26.0 wheel (15/102) when nothing was wrong with it. What this
+        # catches is the wheel exposing LESS than the tree, e.g. a tools/
+        # module left out of the package. Same venv both times, so the only
+        # difference between the two reads is where `server` is imported from.
         run: |
           python -m venv /tmp/smoke
           /tmp/smoke/bin/pip install --quiet dist/*.whl
+          count='import server, tools; print(len(server.TOOL_GROUPS), len(server.TOOL_HANDLERS), len(tools.EXTRA_GROUPS), server.__file__)'
+          read -r src_groups src_handlers src_extra src_file < <(/tmp/smoke/bin/python -c "$count")
           cd /tmp
-          /tmp/smoke/bin/python - <<'PY'
-          import server, tools
-          groups, handlers = len(server.TOOL_GROUPS), len(server.TOOL_HANDLERS)
-          print(f"started {server.__version__}: {groups} groups, {handlers} handlers")
-          assert groups == 13, f"expected 13 groups from an install, got {groups}"
-          assert handlers == 88, f"expected 88 handlers, got {handlers}"
-          assert tools.EXTRA_GROUPS, "tools/ registered nothing"
-          PY
+          read -r whl_groups whl_handlers whl_extra whl_file < <(/tmp/smoke/bin/python -c "$count")
+          echo "source tree: $src_groups groups, $src_handlers handlers, $src_extra tools/ groups ($src_file)"
+          echo "wheel:       $whl_groups groups, $whl_handlers handlers, $whl_extra tools/ groups ($whl_file)"
+          case "$src_file" in "$GITHUB_WORKSPACE"/*) ;; *) echo "::error::source count did not read the checkout"; exit 1;; esac
+          case "$whl_file" in "$GITHUB_WORKSPACE"/*) echo "::error::wheel count read the checkout, not the install"; exit 1;; esac
+          [ "$whl_extra" -gt 0 ] || { echo "::error::tools/ registered nothing"; exit 1; }
+          [ "$whl_groups" = "$src_groups" ] && [ "$whl_handlers" = "$src_handlers" ] && [ "$whl_extra" = "$src_extra" ] \
+            || { echo "::error::the installed wheel does not expose what the source tree does"; exit 1; }
 
       - uses: pypa/gh-action-pypi-publish@release/v1
 
