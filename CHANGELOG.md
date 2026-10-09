@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-09
+
+"See the cut." An interactive timeline a host renders inline, generative fill
+behind a money gate, and a hash guard so a model cannot edit a file that
+changed under it. 15 grouped tools, 94 operations. Full idea set, including
+what was deliberately left out: `docs/ROADMAP-2026-10.md`.
+
+### Added
+- **`view` group — an MCP Apps timeline (SEP-1865).** `view_timeline` returns
+  the timeline as an exact rational-time JSON payload (every position and
+  duration a `numerator/denominator` string; the tests round-trip both
+  fixtures with Fractions) that hosts with MCP Apps render inline from the
+  `ui://fcp/timeline` resource (`text/html;profile=mcp-app`): lanes, clips
+  sized to duration with names and roles, markers, gaps, a timecode ruler
+  with playhead and range selection, cached transcript words under the clip
+  they belong to, and bounded per-clip filmstrip thumbnails (coloured blocks
+  when ffmpeg or the media is absent). Clicking a clip shows its details; the
+  buttons call back through the host — `view_clip` and `find_shots` for
+  reads, `mark.add_marker` and `edit.delete_clips` for edits, so the journal,
+  the project guard and the review gate apply — and the app re-renders from
+  the new output file after an edit. Hosts without Apps get the summary and
+  the JSON as text. `view_clip` is the inspect button. The shell is
+  self-contained (no CDN, no fetch), true-black with one cyan accent, and was
+  rendered through a stub host at 1280 and 390 px
+  (`docs/screenshots/2026-10-09_timeline-app-*.png`). Works on `mcp` 1.x
+  and 2.x through `fcpxml/mcp_compat.py` (`build_tool` carries `_meta` on
+  both; the extension capability is advertised on 2.x only, since 1.x's
+  `ServerCapabilities` has no `extensions` slot). The in-iframe postMessage
+  method names come from the spec text and could not be verified against
+  installed source; the field names on the server side were verified
+  against the 2.x SDK.
+- **`gen` group — generative fill, quote-then-confirm.** `gen_quote`
+  prices a job from a dated table (`prices_as_of`, `price_verified: false`;
+  fal Kling 2.5 / Wan 2.5, Gemini Veo 3.1; Runway Aleph and Luma Ray Modify
+  quote but refuse as "not implemented" — they are video-to-video) and
+  returns a quote id. `gen_fill_gap`, `gen_broll` and `gen_extend_clip`
+  refuse without `confirm=true`, a quote id whose job still matches, the
+  provider's key in the environment (`FAL_KEY`, `GEMINI_API_KEY`,
+  `RUNWAY_API_KEY`, `LUMA_API_KEY`; sent only in the auth header, never
+  logged, every reply redacted — both guards mutation-checked) and a price
+  under `FCP_MCP_GEN_MAX_USD` (default 5). The result is ffprobed for its
+  real duration and frame rate (never guessed), written to `generated/`
+  beside the project through the sandboxed output path, attached as a
+  connected clip with `videoRole="generated"` and a marker naming prompt and
+  provider, snapped to the sequence frame grid, DTD-validated and journaled.
+  A position past the end of the spine gets a `<gap>` appended to hang off.
+- **Project guard.** Every action that takes a `filepath` accepts
+  `expected_sha256` and refuses, naming both hashes, when the file no longer
+  matches. Mutation-checked.
+- `docs/ROADMAP-2026-10.md`: the October idea set with status, rationale and
+  source for each item.
+
+### Changed
+- **Every write now ends with `sha256 (<output>): …`** for each FCPXML it
+  wrote, so the model has the hash to pass back as `expected_sha256`.
+  `analyze_timeline` reports the input's sha256; `history` prints the full
+  output sha256 instead of a 12-character prefix (a prefix cannot be passed
+  back). Output of existing operations moved: hence a minor version.
+- `list_resources` now lists `ui://fcp/timeline` ahead of the project files.
+  `preview://` is unchanged.
+- The verb cap in `tests/test_tool_groups.py` moves 14 → 15: `view` must be
+  its own tool because MCP Apps binds the UI to a tool's `_meta`, and `gen`
+  is the money-gated verb a model should choose on purpose.
+
+### Fixed
+- Nothing in existing operations; the 0.25.2 marker fix stands.
+
 ## [0.25.2] - 2026-10-07
 
 First release on PyPI since 0.25.0. 0.25.1 was tagged in the manifests but never
