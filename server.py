@@ -33,8 +33,15 @@ from mcp.types import (
 from fcpxml import diversity as _diversity
 from fcpxml import journal as _journal
 from fcpxml import live
+from fcpxml import timeline_app as _timeline_app
 from fcpxml.diff import compare_timelines, format_diff
-from fcpxml.mcp_compat import register_handlers, tool_input_schema
+from fcpxml.mcp_compat import (
+    APPS_EXTENSION_ID,
+    build_tool,
+    initialization_options,
+    register_handlers,
+    tool_input_schema,
+)
 
 # Not called from this module. tools/media.py reaches these three through the
 # bound server module (srv.detect_silence, ...) because the tests monkeypatch
@@ -836,9 +843,16 @@ def parse_transcript_timestamps(text: str) -> list[dict]:
 # ============================================================================
 
 async def list_resources() -> list[Resource]:
-    """Expose discovered FCPXML files as MCP resources."""
+    """Expose discovered FCPXML files as MCP resources, plus the timeline app."""
     files = find_fcpxml_files(PROJECTS_DIR)
-    resources = []
+    # The MCP Apps shell. One resource, no project in it: the host renders
+    # it once and posts each `view` tool result into it.
+    resources = [Resource(
+        uri=_timeline_app.APP_URI,
+        name="FCP timeline app",
+        description="Interactive timeline rendered by MCP Apps hosts from the view tool's results",
+        mimeType=_timeline_app.APP_MIME_TYPE,
+    )]
     for f in files:
         p = Path(f)
         encoded = quote(f)
@@ -879,6 +893,13 @@ def _uri_to_path(uri: str, scheme: str) -> str:
 async def read_resource(uri: str) -> str | list[ReadResourceContents]:
     """Read an FCPXML file and return a summary."""
     raw = str(uri)
+    if raw == _timeline_app.APP_URI:
+        return [ReadResourceContents(
+            content=_timeline_app.render_app_html(),
+            mime_type=_timeline_app.APP_MIME_TYPE,
+        )]
+    if raw.startswith("ui://"):
+        return f"Unknown app resource: {raw}. The only one served is {_timeline_app.APP_URI}."
     if raw.startswith("preview://"):
         try:
             filepath = _validate_filepath(
@@ -4005,13 +4026,15 @@ async def handle_group(group: str, arguments: dict) -> list[TextContent]:
 def _group_tool(name: str) -> Tool:
     """Build the advertised Tool schema for one group."""
     spec = TOOL_GROUPS[name]
-    return Tool(
-        name=name,
-        description=(
+    # `meta` is how a group binds an MCP Apps resource (tools/view.py). It
+    # rides on the Tool as `_meta` on both SDK generations — see build_tool.
+    return build_tool(
+        name,
+        (
             f"{spec['description']} "
             f"Actions: {', '.join(spec['actions'])}."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
                 "action": {
@@ -4023,12 +4046,17 @@ def _group_tool(name: str) -> Tool:
                     "type": "object",
                     "description": (
                         "Arguments for the chosen action, e.g. "
-                        "{\"filepath\": \"/path/to/project.fcpxml\"}."
+                        "{\"filepath\": \"/path/to/project.fcpxml\"}. Any "
+                        "action that takes a filepath also accepts "
+                        "expected_sha256: the call refuses if the file no "
+                        "longer hashes to it (every write result and "
+                        "analyze_timeline report the current sha256)."
                     ),
                 },
             },
             "required": ["action"],
         },
+        meta=spec.get("meta"),
     )
 
 
@@ -4185,8 +4213,12 @@ register_handlers(
 # ============================================================================
 
 async def main():
+    # MCP Apps is advertised under capabilities.extensions where the SDK has
+    # the slot (2.x). On 1.x the tool still carries _meta.ui and the ui://
+    # resource is still served; only the up-front handshake is missing.
+    options = initialization_options(server, {APPS_EXTENSION_ID: {}})
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+        await server.run(read_stream, write_stream, options)
 
 
 def main_sync():

@@ -50,13 +50,27 @@ from typing import Any, Awaitable, Callable
 from mcp.server import Server
 
 __all__ = [
+    "APPS_EXTENSION_ID",
+    "APP_MIME_TYPE",
     "MCP_API_VERSION",
+    "advertises_extensions",
+    "build_tool",
     "current_request",
+    "initialization_options",
     "is_legacy_api",
     "register_handlers",
     "resource_mime_type",
     "tool_input_schema",
+    "tool_meta",
 ]
+
+# MCP Apps (SEP-1865). Both constants are verified against the 2.x SDK's
+# ``mcp.server.apps`` module, which this server deliberately does not import:
+# it is 2.x-only, and the wire format is just a ``_meta.ui.resourceUri`` on
+# the tool plus a ``ui://`` resource with this MIME type, both of which the
+# 1.x models carry as extras.
+APPS_EXTENSION_ID = "io.modelcontextprotocol/ui"
+APP_MIME_TYPE = "text/html;profile=mcp-app"
 
 
 def is_legacy_api() -> bool:
@@ -112,6 +126,54 @@ def tool_input_schema(tool: Any) -> dict:
     if schema is None:
         schema = getattr(tool, "inputSchema", None)
     return schema or {}
+
+
+def build_tool(name: str, description: str, input_schema: dict, meta: dict | None = None) -> Any:
+    """Construct a ``Tool`` carrying ``_meta`` on either SDK generation.
+
+    2.x has a ``meta`` field that serialises as ``_meta``. 1.x has no such
+    field, but its models are ``extra="allow"``, so an ``_meta`` kwarg rides
+    along and serialises under the same name. Either way the wire JSON is
+    ``{"_meta": {...}}``, which is what an MCP Apps host reads.
+    """
+    from mcp.types import Tool
+
+    kwargs: dict[str, Any] = {
+        "name": name, "description": description, "inputSchema": input_schema,
+    }
+    if meta:
+        kwargs["meta" if "meta" in Tool.model_fields else "_meta"] = meta
+    return Tool(**kwargs)
+
+
+def tool_meta(tool: Any) -> dict | None:
+    """Read a ``Tool``'s ``_meta`` back across both SDK generations."""
+    value = getattr(tool, "meta", None)
+    if value is None:
+        extra = getattr(tool, "model_extra", None) or {}
+        value = extra.get("_meta")
+    return value or None
+
+
+def advertises_extensions() -> bool:
+    """True when the installed SDK can advertise ``capabilities.extensions``.
+
+    2.x added the field (SEP-2133); 1.x has no slot for it, so a 1.x server
+    still stamps ``_meta.ui`` on the tool and serves the ``ui://`` resource,
+    but cannot tell the host up front that it speaks MCP Apps. A host that
+    requires the handshake will not render the app on 1.x, and that is said
+    in the docs rather than papered over.
+    """
+    from mcp.types import ServerCapabilities
+
+    return "extensions" in ServerCapabilities.model_fields
+
+
+def initialization_options(server: Server, extensions: dict[str, dict] | None = None) -> Any:
+    """``create_initialization_options`` with extensions advertised where possible."""
+    if extensions and advertises_extensions():
+        return server.create_initialization_options(extensions=extensions)
+    return server.create_initialization_options()
 
 
 def resource_mime_type(contents: Any) -> str | None:
