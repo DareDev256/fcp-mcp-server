@@ -7,7 +7,7 @@ third-party prices and competitor claims are reported, not verified.
 | # | Idea | Status | Where |
 |---|------|--------|-------|
 | 1 | MCP Apps timeline (`ui://fcp/timeline`) | **Shipped** | `view` group, `fcpxml/timeline_app.py` |
-| 2 | Generative fill, quote-then-confirm | **Shipped** (fal Kling/Wan, Gemini Veo; Runway/Luma stubs) | `gen` group, `fcpxml/gen.py` |
+| 2 | Generative fill, quote-then-confirm | **Shipped** (fal Kling/Wan, Gemini Omni Flash; Runway/Luma stubs) | `gen` group, `fcpxml/gen.py` |
 | 3 | Project guard (`expected_sha256`) | **Shipped** | `server._project_guard` |
 | 4 | OpenTimelineIO export | Not built | — |
 | 5 | Text-based transcript editing inside the app | Not built | — |
@@ -64,7 +64,7 @@ length, lands in `generated/` beside the project, and is attached as a
 connected clip with role `generated` and a marker naming prompt and provider.
 
 **Prices (per generated second, upper end of the range seen, unverified):**
-Veo 3.1 $0.40 (Gemini API; $0.10–0.40 by tier/audio), Kling 2.5 $0.07 (fal;
+Gemini Omni 1.1 Flash $0.10 at 720p, quoted as a 10 s call (Gemini API; replaced Veo 3.1 on 2026-10-21), Kling 2.5 $0.07 (fal;
 $0.04–0.07), Wan 2.5 $0.15 (fal; $0.05–0.15), Runway Aleph $0.15 (15
 credits/s at $0.01), Luma Ray Modify — no per-second figure published, so no
 price on file and the quote says so. `prices_as_of` is in every quote.

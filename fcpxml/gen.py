@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -55,13 +56,15 @@ from .writer import (
 # ---------------------------------------------------------------------------
 
 # USD per generated second, the UPPER end of every range seen so a quote
-# never under-promises. Sources, all read 2026-10-09 and none verified
-# against an invoice: Google Gemini API pricing page (Veo 3.1 ~$0.10-0.40/s
-# by tier and audio), fal.ai model pages (Kling 2.5 ~$0.04-0.07/s, Wan 2.5
+# never under-promises. Sources, none verified against an invoice: Google
+# Gemini API pricing page, read 2026-10-21 (Omni 1.1 Flash: output video
+# $17.50/1M tokens x 5,792 tokens per second of 720p = ~$0.10/s; a developer
+# forum report says every call is metered as 10 s of 720p, so Omni is quoted as
+# a flat 10 s call), fal.ai model pages read 2026-10-09 (Kling 2.5 ~$0.04-0.07/s, Wan 2.5
 # ~$0.05-0.15/s), Runway's credit table (Aleph 15 credits/s at $0.01/credit),
 # Luma's Ray Modify page (no per-second figure published). Update the date
 # when the numbers are.
-PRICES_AS_OF = "2026-10-09"
+PRICES_AS_OF = "2026-10-21"
 
 PRICES: dict[tuple[str, str], dict[str, Any]] = {
     ("fal", "kling-2.5"): {
@@ -76,10 +79,11 @@ PRICES: dict[tuple[str, str], dict[str, Any]] = {
         "endpoint": "fal-ai/wan-25-preview/image-to-video",
         "text_endpoint": "fal-ai/wan-25-preview/text-to-video",
     },
-    ("gemini", "veo-3.1"): {
-        "usd_per_second": Decimal("0.40"),
-        "billable": (4, 6, 8),
-        "endpoint": "models/veo-3.1-generate-preview:predictLongRunning",
+    # Veo 3.1 preview left the Gemini API on 2026-10-22 (GA Veo is Vertex-only).
+    ("gemini", "omni-1.1-flash"): {
+        "usd_per_second": Decimal("0.10"),
+        "billable": (10,),
+        "model_id": "gemini-omni-1.1-flash",
     },
     ("runway", "aleph"): {
         "usd_per_second": Decimal("0.15"),
@@ -93,7 +97,7 @@ PRICES: dict[tuple[str, str], dict[str, Any]] = {
     },
 }
 
-DEFAULT_MODEL = {"fal": "kling-2.5", "gemini": "veo-3.1", "runway": "aleph", "luma": "ray-modify"}
+DEFAULT_MODEL = {"fal": "kling-2.5", "gemini": "omni-1.1-flash", "runway": "aleph", "luma": "ray-modify"}
 KEY_ENV = {"fal": "FAL_KEY", "gemini": "GEMINI_API_KEY", "runway": "RUNWAY_API_KEY", "luma": "LUMA_API_KEY"}
 MAX_USD_ENV = "FCP_MCP_GEN_MAX_USD"
 DEFAULT_MAX_USD = Decimal("5")
@@ -139,7 +143,7 @@ def cap_usd() -> Decimal:
 def billable_seconds(provider: str, model: str, seconds: Fraction) -> int:
     """What the provider charges for *seconds*: the next supported clip length.
 
-    Kling and Wan bill 5 or 10; Veo bills 4, 6 or 8. A 7-second gap on Kling
+    Kling and Wan bill 5 or 10; Omni is quoted as one 10 s call. A 7-second gap on Kling
     is a 10-second generation and the quote must say 10, not 7.
     """
     steps = PRICES[(provider, model)]["billable"]
@@ -415,49 +419,54 @@ class FalProvider(Provider):
 
 
 class GeminiProvider(Provider):
-    """Veo through the Gemini API: predictLongRunning, poll the operation, download.
+    """Gemini Omni Flash through the Gemini interactions API: one synchronous call.
 
-    The key rides in ``x-goog-api-key`` on generativelanguage.googleapis.com
-    only, including the file download, which that host requires.
+    The video comes back inline as base64 in the ``model_output`` step (or as a
+    ``uri``, which is downloaded only from googleapis.com). The key rides in
+    ``x-goog-api-key`` on generativelanguage.googleapis.com only.
     """
 
     name = "gemini"
     BASE = "https://generativelanguage.googleapis.com/v1beta/"
+    TIMEOUT = 600.0
 
     def generate(self, prompt, seconds, *, image_path=None):
         key = key_for("gemini")
         auth = {"x-goog-api-key": key, "Content-Type": "application/json"}
-        instance: dict[str, Any] = {"prompt": prompt}
+        content: list[dict[str, Any]] = []
         if image_path:
-            instance["image"] = {
-                "bytesBase64Encoded": base64.b64encode(Path(image_path).read_bytes()).decode("ascii"),
-                "mimeType": "image/jpeg",
-            }
-        body = json.dumps({"instances": [instance], "parameters": {"durationSeconds": seconds}}).encode("utf-8")
-        endpoint = PRICES[("gemini", self.model)]["endpoint"]
-        status, data = _http("POST", self.BASE + endpoint, auth, body)
-        op = _json(status, data, "veo submit").get("name")
-        if not op:
-            raise ProviderError("veo submit returned no operation name")
-        for _ in range(POLL_LIMIT):
-            status, data = _http("GET", self.BASE + op, {"x-goog-api-key": key})
-            result = _json(status, data, "veo operation")
-            if result.get("done"):
-                break
-            _sleep(POLL_INTERVAL)
-        else:
-            raise ProviderError("veo generation did not finish in time")
-        if result.get("error"):
-            raise ProviderError(f"veo failed: {redact(str(result['error']))[:300]}")
-        samples = ((result.get("response") or {}).get("generateVideoResponse") or {}).get("generatedSamples") or []
-        uri = ((samples[0] if samples else {}).get("video") or {}).get("uri")
-        if not uri:
-            raise ProviderError("veo operation finished with no video")
-        if not uri.startswith(self.BASE) and "googleapis.com" not in uri:
-            raise ProviderError("veo returned a download uri off googleapis.com; refusing to send the key there")
+            raw = Path(image_path).read_bytes()
+            content.append({
+                "type": "image",
+                "data": base64.b64encode(raw).decode("ascii"),
+                "mime_type": "image/png" if raw[:4] == b"\x89PNG" else "image/jpeg",
+            })
+        content.append({"type": "text", "text": f"{prompt} Duration about {seconds} seconds."})
+        body = json.dumps({
+            "model": PRICES[("gemini", self.model)]["model_id"],
+            "input": content,
+            "response_format": {"type": "video", "aspect_ratio": "16:9", "resolution": "720p"},
+        }).encode("utf-8")
+        status, data = _http("POST", self.BASE + "interactions", auth, body, timeout=self.TIMEOUT)
+        result = _json(status, data, "omni interaction")
+        video = None
+        for step in result.get("steps") or [{"type": "model_output", "content": result.get("outputs") or []}]:
+            if step.get("type") != "model_output":
+                continue
+            for item in step.get("content") or []:
+                if item.get("type") == "video":
+                    video = item
+        if not video:
+            raise ProviderError(f"omni returned no video: {redact(data[:300].decode('utf-8', 'replace'))}")
+        if video.get("data"):
+            return base64.b64decode(video["data"])
+        uri = video.get("uri") or ""
+        host = urllib.parse.urlsplit(uri).hostname or ""
+        if urllib.parse.urlsplit(uri).scheme != "https" or not (host == "googleapis.com" or host.endswith(".googleapis.com")):
+            raise ProviderError("omni returned a download uri off googleapis.com; refusing to send the key there")
         status, data = _http("GET", uri, {"x-goog-api-key": key})
         if status >= 300 or not data:
-            raise ProviderError(f"veo video download returned HTTP {status}")
+            raise ProviderError(f"omni video download returned HTTP {status}")
         return data
 
 

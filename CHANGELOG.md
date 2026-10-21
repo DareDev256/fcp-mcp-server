@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-10-21
+
+Google retires the Veo 3.1 and Omni preview models from the Gemini API on
+2026-10-22, so the `gemini` provider would have failed on every call.
+
+### Changed
+- **`gen` provider `gemini` now runs Gemini Omni 1.1 Flash
+  (`omni-1.1-flash`, the new default).** One synchronous call to the
+  interactions API; the video is read from the `model_output` step (inline
+  base64, or a `uri` downloaded only from `*.googleapis.com` over https). GA
+  Veo 3.1 is Vertex-only, so `veo-3.1` is gone and asking for it is refused
+  as an unknown model. Verified live on 2026-10-21: one 10 s 1280x720 clip
+  with audio in 30 s.
+- **Omni is quoted as one 10-second call at $0.10/s ($1.00).** Google's
+  pricing page meters 720p output at about $0.10/s, and a developer forum
+  report says every call is metered as 10 s; quotes stay at the upper end.
+  `prices_as_of` is now 2026-10-21.
+
+### Fixed
+- The download-host check parses the hostname instead of searching the URL
+  for `googleapis.com`, so `https://evil.example/?googleapis.com` and
+  `https://googleapis.com.evil.example/` no longer pass.
+
 ## [0.27.1] - 2026-10-20
 
 A `push_to_fcp` fix, reported by John Palchak by email against 0.26.0 on

@@ -423,7 +423,7 @@ verbs**, not 102 flat tool names:
 | `organize` | Library housekeeping — bulk keywords, ratings and roles over a clip selection; `organize_auto` proposes keywords from captions and transcripts; `history` reads the operation ledger and `undo` moves the last outputs aside (never deletes) |
 | `find` | "Find the shot where…" — a router over transcript words, metadata and offline vision captions that names the tier on every hit; `find_index` warms every source; `find_to_timeline` assembles the hits into a selects reel |
 | `view` | **See the cut inline** — `view_timeline` returns the timeline as an exact rational-time payload that MCP Apps hosts render as an interactive timeline (`ui://fcp/timeline`); `view_clip` is the inspect button. Read-only |
-| `gen` | **Generative fill behind a money gate** — `gen_quote` prices a job (fal Kling/Wan, Gemini Veo; Runway/Luma honest stubs); `gen_fill_gap` / `gen_broll` / `gen_extend_clip` refuse without `quote_id` + `confirm=true`, a key, and a price under `FCP_MCP_GEN_MAX_USD`; the result is ffprobed, attached as a `generated` lane clip with a marker, DTD-checked and journaled |
+| `gen` | **Generative fill behind a money gate** — `gen_quote` prices a job (fal Kling/Wan, Gemini Omni Flash; Runway/Luma honest stubs); `gen_fill_gap` / `gen_broll` / `gen_extend_clip` refuse without `quote_id` + `confirm=true`, a key, and a price under `FCP_MCP_GEN_MAX_USD`; the result is ffprobed, attached as a `generated` lane clip with a marker, DTD-checked and journaled |
 
 Each call has the same shape: `{"action": "trim_clip", "args": {...}}`. The
 `action` is one of the 102 operation names below; `args` is whatever that
@@ -522,12 +522,12 @@ without a quote id, with a quote whose job changed (the quote is recomputed
 from provider, model, billable seconds and prompt; a stale id cannot buy a
 different job), without the provider's key in the environment, and above
 the per-call cap `FCP_MCP_GEN_MAX_USD` (default `5`). Kling and Wan bill 5
-or 10 seconds and Veo 4, 6 or 8, so a 7-second gap is a 10-second job and
-the quote says 10. Prices are the upper end of what the providers' pages
+or 10 seconds, so a 7-second gap is a 10-second job and the quote says 10;
+Gemini Omni Flash is quoted as one 10-second call (3–10 s output). Prices are the upper end of what the providers' pages
 reported on `prices_as_of`; every quote and every result says they are
 unverified.
 
-Providers: `fal` (`kling-2.5` default, `wan-2.5`) and `gemini` (`veo-3.1`)
+Providers: `fal` (`kling-2.5` default, `wan-2.5`) and `gemini` (`omni-1.1-flash`)
 generate; `runway` (Aleph) and `luma` (Ray Modify) are video-to-video and
 quote but refuse as not implemented rather than pretend. Keys come from
 `FAL_KEY`, `GEMINI_API_KEY`, `RUNWAY_API_KEY`, `LUMA_API_KEY` only, travel in
@@ -699,7 +699,7 @@ which are never mixed. The reported duration accounts for the overlaps, and
 | `FCP_MCP_VLM_MODEL` | No | `mlx-community/Qwen2-VL-2B-Instruct-4bit` | Hub id of the MLX vision model `find` captions shots with. Loaded offline only; a missing model is reported with its `hf download` command, never fetched |
 | `FCP_MCP_GEN_MAX_USD` | No | `5` | Per-call ceiling on the estimated cost of a `gen` generation. A quote over it says so; generation refuses. A malformed value raises rather than defaulting |
 | `FAL_KEY` | No | unset | Enables `gen` provider `fal` (Kling 2.5, Wan 2.5). Sent as `Authorization: Key …` to queue.fal.run only; never read unless a `gen` action runs |
-| `GEMINI_API_KEY` | No | unset | Enables `gen` provider `gemini` (Veo 3.1). Sent as `x-goog-api-key` to generativelanguage.googleapis.com only |
+| `GEMINI_API_KEY` | No | unset | Enables `gen` provider `gemini` (Gemini Omni 1.1 Flash; Veo 3.1 preview left the Gemini API on 2026-10-22). Sent as `x-goog-api-key` to generativelanguage.googleapis.com only |
 | `RUNWAY_API_KEY`, `LUMA_API_KEY` | No | unset | Reserved for the video-to-video providers, which quote but are not implemented in this release |
 
 ---

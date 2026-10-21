@@ -7,6 +7,7 @@ mutation check: the guard is removed and the test proves it would have let
 the failure through. A guard nothing can see fail is not a guard.
 """
 
+import base64
 import json
 import shutil
 import subprocess
@@ -38,7 +39,7 @@ def _clean(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_price_table_is_dated_and_typed():
-    assert gen.PRICES_AS_OF == "2026-10-09"
+    assert gen.PRICES_AS_OF == "2026-10-21"
     for (provider, model), entry in gen.PRICES.items():
         assert provider in gen.DEFAULT_MODEL, provider
         assert entry["usd_per_second"] is None or isinstance(entry["usd_per_second"], Decimal), model
@@ -49,7 +50,7 @@ def test_price_table_is_dated_and_typed():
     ("fal", "kling-2.5", 7, 10, "0.70"),
     ("fal", "kling-2.5", "3.2", 5, "0.35"),
     ("fal", "wan-2.5", 5, 5, "0.75"),
-    ("gemini", "veo-3.1", 5, 6, "2.40"),
+    ("gemini", "omni-1.1-flash", 5, 10, "1.00"),
     ("runway", "aleph", "2.5", 3, "0.45"),
 ])
 def test_quote_bills_the_next_supported_length(provider, model, seconds, billable, usd):
@@ -293,39 +294,70 @@ def test_fal_failure_and_http_error_become_provider_errors(monkeypatch):
     assert "HTTP 401" in str(exc.value) and KEY not in str(exc.value)
 
 
-def test_gemini_adapter_uses_the_goog_header_and_polls_the_operation(monkeypatch):
+def test_gemini_adapter_sends_one_omni_interaction_with_the_goog_header(monkeypatch, tmp_path):
+    monkeypatch.setenv("GEMINI_API_KEY", "gm-key-0123456789")
+    frame = tmp_path / "f.png"
+    frame.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    t = _Transport([
+        (200, {"steps": [
+            {"type": "user_input", "content": [{"type": "text", "text": "dusk"}]},
+            {"type": "model_output", "content": [{"type": "video", "data": base64.b64encode(b"OMNI").decode()}]},
+        ]}),
+    ])
+    monkeypatch.setattr(gen, "_http", t)
+    data = gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10, image_path=str(frame))
+    assert data == b"OMNI"
+    (call,) = t.calls
+    assert call["url"] == gen.GeminiProvider.BASE + "interactions"
+    assert call["headers"]["x-goog-api-key"] == "gm-key-0123456789"
+    body = json.loads(call["body"])
+    assert body["model"] == "gemini-omni-1.1-flash"
+    assert body["response_format"] == {"type": "video", "aspect_ratio": "16:9", "resolution": "720p"}
+    assert [c["type"] for c in body["input"]] == ["image", "text"]
+    assert body["input"][0]["mime_type"] == "image/png"
+    assert "10 seconds" in body["input"][1]["text"]
+
+
+def test_gemini_reads_a_uri_video_from_googleapis_only(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "gm-key-0123456789")
     base = gen.GeminiProvider.BASE
     t = _Transport([
-        (200, {"name": "operations/abc"}),
-        (200, {"done": False}),
-        (200, {"done": True, "response": {"generateVideoResponse": {"generatedSamples": [
-            {"video": {"uri": base + "files/v1:download?alt=media"}}]}}}),
-        (200, b"VEO"),
+        (200, {"outputs": [{"type": "video", "uri": base + "files/v1:download?alt=media"}]}),
+        (200, b"OMNI"),
     ])
     monkeypatch.setattr(gen, "_http", t)
-    data = gen.GeminiProvider("veo-3.1").generate("dusk", 8)
-    assert data == b"VEO"
-    submit, poll1, poll2, download = t.calls
-    assert submit["url"] == base + gen.PRICES[("gemini", "veo-3.1")]["endpoint"]
-    assert json.loads(submit["body"]) == {"instances": [{"prompt": "dusk"}], "parameters": {"durationSeconds": 8}}
-    for call in t.calls:
-        assert call["headers"]["x-goog-api-key"] == "gm-key-0123456789"
-        assert call["url"].startswith(base)
-    assert poll1["url"] == base + "operations/abc"
+    assert gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10) == b"OMNI"
+    assert t.calls[1]["headers"]["x-goog-api-key"] == "gm-key-0123456789"
 
 
-def test_gemini_refuses_to_send_the_key_off_googleapis(monkeypatch):
+@pytest.mark.parametrize("uri", [
+    "https://evil.example/steal",
+    "https://evil.example/?googleapis.com",
+    "http://generativelanguage.googleapis.com/files/x",
+    "https://googleapis.com.evil.example/x",
+])
+def test_gemini_refuses_to_send_the_key_off_googleapis(monkeypatch, uri):
     monkeypatch.setenv("GEMINI_API_KEY", "gm-key-0123456789")
-    t = _Transport([
-        (200, {"name": "operations/abc"}),
-        (200, {"done": True, "response": {"generateVideoResponse": {"generatedSamples": [
-            {"video": {"uri": "https://evil.example/steal"}}]}}}),
-    ])
+    t = _Transport([(200, {"steps": [{"type": "model_output", "content": [{"type": "video", "uri": uri}]}]})])
     monkeypatch.setattr(gen, "_http", t)
     with pytest.raises(gen.ProviderError, match="refusing to send the key"):
-        gen.GeminiProvider("veo-3.1").generate("dusk", 8)
-    assert len(t.calls) == 2
+        gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10)
+    assert len(t.calls) == 1
+
+
+def test_gemini_without_a_video_fails_loud(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gm-key-0123456789")
+    t = _Transport([(200, {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "no"}]}]})])
+    monkeypatch.setattr(gen, "_http", t)
+    with pytest.raises(gen.ProviderError, match="no video"):
+        gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10)
+
+
+def test_retired_veo_model_is_refused():
+    with pytest.raises(gen.RefusedError, match="Unknown model 'veo-3.1'"):
+        gen.quote("gemini", 6, "dusk", "veo-3.1")
+    with pytest.raises(gen.RefusedError, match="at most 10s"):
+        gen.quote("gemini", 11, "dusk")
 
 
 def test_runway_and_luma_are_honest_stubs():
@@ -333,7 +365,7 @@ def test_runway_and_luma_are_honest_stubs():
         with pytest.raises(gen.RefusedError, match="not implemented"):
             gen.provider_for(provider).generate("x", 5)
     assert isinstance(gen.provider_for("fal"), gen.FalProvider)
-    assert isinstance(gen.provider_for("gemini", "veo-3.1"), gen.GeminiProvider)
+    assert isinstance(gen.provider_for("gemini"), gen.GeminiProvider)
 
 
 # ---------------------------------------------------------------------------
