@@ -2,6 +2,75 @@
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-20
+
+"Files Final Cut actually opens." Five bugs reported by @brannonwinn, each
+found by importing our output into Final Cut Pro and having it refused or
+misplaced, while `validate_fcpxml()` reported nothing (#30-#34). A minor
+version, not a patch: four existing operations now write different output.
+Thanks @brannonwinn for repros precise enough to test against verbatim.
+
+### Fixed
+- **Transition effect uids are the ones Final Cut writes (#30).** Every
+  `FCP_EFFECTS` uid now carries the `FxPlug:` prefix Final Cut exports and
+  expects; the bare UUID was refused on import. Checking the table against
+  Final Cut Pro 12.4's own plugin list (`Filters.bundle/Contents/Info.plist`,
+  the `FxTransition` entries) found more than the prefix: seven entries
+  (`band-wipe`, `center-wipe`, `checker-wipe`, `clock-wipe`, `gradient-wipe`,
+  `inset-wipe`, `star-wipe`) held UUIDs that match no plugin in the app, and
+  are now the real ones; `fade`, `fade-to-black` and `fade-from-black` pointed
+  at **Fade, a colour look filter**, and now write Fade To Color, the
+  transition Final Cut offers for a fade to or from black. Effect names are
+  Final Cut's English display names ("Band", "Star", "Fade To Color").
+  `tests/test_effect_registry.py` reads the installed app's plugin list, so
+  a uid that is not a shipping transition fails the suite wherever Final Cut
+  is present. An `<effect>` written by an earlier version with the bare UUID
+  is upgraded in place on the next `add_transition`, not duplicated.
+- **`add_transition()` refuses a transition the clips cannot cover (#31).**
+  A transition overlaps media beyond both clips' used ranges; when either
+  clip lacks half the transition's duration of handle, the call now raises,
+  naming the clip, what it has, what it needs, and the longest transition
+  that fits, before anything is written. It used to write a file Final Cut
+  refused ("Encountered an unexpected value").
+- **Rough cut, montage and A/B roll transitions are DTD-valid (#32).**
+  Their `<filter-video>` had no `ref` (`#REQUIRED` in the DTD) and no effect
+  resource behind it; they now share `add_transition`'s path. A cut whose
+  clips lack the media to overlap stays a hard cut instead of poisoning the
+  whole file, and is listed under "Transitions Left Out" in the reply
+  (`RoughCutResult.transitions_skipped`, and `transitions_skipped` in the
+  montage and A/B roll results). A/B roll adds transitions by default, so
+  every A/B roll written before 0.27.0 carries the bad element.
+- **Generated timelines keep each asset whole (#33).** The rough cut copied
+  assets field by field and dropped `format` (and every attribute it did not
+  name, such as the audio layout). Assets are now copied whole, the
+  `<format>` each one points at is copied with it, and a pre-1.9 `src`
+  attribute moves onto a `<media-rep>`. `hasVideo`/`hasAudio` are no longer
+  forced to `1` when the source omits them.
+- **Connected and audio clip offsets are relative to the parent's start
+  (#34).** `add_connected_clip()` and `add_audio_clip()` documented `offset`
+  as relative to the parent clip's start but wrote it as is, so on any
+  trimmed parent the clip landed before the parent's in-point. The parent's
+  `start` is now added, which the parser already assumed when reading.
+  `add_music_bed()` inherits the fix.
+- **`add_connected_clip()` writes DTD-ordered children.** It appended the
+  new clip after the parent's markers and keywords, where the DTD does not
+  allow an anchored item; it now inserts it in DTD order, as
+  `add_audio_clip()` already did. Found while building the Final Cut import
+  check for this release.
+
+### Added
+- `validate_fcpxml()` reports a transition that reaches past the media of
+  the clip beside it (error, `transition_handles`, measured from where the
+  transition actually sits, so off-centre transitions in Final Cut exports
+  are not flagged) and an `<effect>` uid written as a bare UUID (warning,
+  `effect_uid`).
+
+### Changed
+- An unknown `transition_type` raises `ValueError` listing the known slugs
+  instead of silently writing a cross dissolve. `noise-dissolve` is gone:
+  Final Cut has no Noise Dissolve transition, only a filter of that name.
+  The MCP `add_transition` schema's four values are unaffected.
+
 ## [0.26.0] - 2026-10-09
 
 "See the cut." An interactive timeline a host renders inline, generative fill

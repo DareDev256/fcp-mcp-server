@@ -64,7 +64,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.26.0"
+__version__ = "0.27.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -2888,12 +2888,25 @@ async def handle_auto_rough_cut(arguments: dict) -> Sequence[TextContent]:
 - **Actual Duration**: {format_duration(result.actual_duration)}
 - **Average Clip**: {format_duration(result.average_clip_duration)}
 - **{_diversity.describe(result.diversity_score)}**
-
+{_transitions_skipped_note(result.transitions_skipped)}
 ## Output
 Saved to: `{result.output_path}`
 
 **Next step**: Import this FCPXML into Final Cut Pro (File > Import > XML)
 """)
+
+
+def _transitions_skipped_note(skipped) -> str:
+    """The reply section for cuts left hard, or "" when every transition fit."""
+    if not skipped:
+        return ""
+    lines = "\n".join(f"- {s}" for s in skipped)
+    return (
+        f"\n## Transitions Left Out ({len(skipped)})\n"
+        "These cuts stay hard: their clips lack the media for the overlap, "
+        "and Final Cut refuses a file that asks for it.\n"
+        f"{lines}\n"
+    )
 
 
 async def handle_generate_montage(arguments: dict) -> Sequence[TextContent]:
@@ -2926,7 +2939,7 @@ async def handle_generate_montage(arguments: dict) -> Sequence[TextContent]:
 ## Pacing
 - **Start Clip Duration**: {format_duration(result['start_clip_duration'])}
 - **End Clip Duration**: {format_duration(result['end_clip_duration'])}
-
+{_transitions_skipped_note(result.get('transitions_skipped'))}
 ## Output
 Saved to: `{result['output_path']}`
 """)
@@ -2957,7 +2970,7 @@ async def handle_generate_ab_roll(arguments: dict) -> Sequence[TextContent]:
 - **Actual Duration**: {format_duration(result['actual_duration'])}
 - **A-Roll Duration**: {result['a_duration_setting']} per segment
 - **B-Roll Duration**: {result['b_duration_setting']} per cutaway
-
+{_transitions_skipped_note(result.get('transitions_skipped'))}
 ## Output
 Saved to: `{result['output_path']}`
 
