@@ -48,7 +48,9 @@ already running; ``list_fcp_libraries`` checks first and declines to
 launch, while ``push_to_fcp`` launching FCP is the point.
 """
 
+import shutil
 import subprocess
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -159,12 +161,66 @@ class ImportNotObservedError(RuntimeError):
     """
 
 
+def _document_of(path: Path) -> Path:
+    """The XML file behind *path*: a bundle's ``Info.fcpxml``, else *path*."""
+    return path / "Info.fcpxml" if path.suffix.lower() == ".fcpxmld" else path
+
+
 def _projects_in(fcpxml_path: str) -> List[str]:
-    """Every ``<project name=...>`` in a document, in order."""
+    """Every ``<project name=...>`` in a document or bundle, in order."""
     from .safe_xml import safe_parse
 
-    root = safe_parse(fcpxml_path).getroot()
+    root = safe_parse(str(_document_of(Path(fcpxml_path)))).getroot()
     return [p.get("name", "") for p in root.iter("project") if p.get("name")]
+
+
+def _sent_library_location(send_path: Path) -> Optional[str]:
+    """The ``library location`` option the document about to be sent carries."""
+    from .safe_xml import safe_parse
+
+    root = safe_parse(str(_document_of(send_path))).getroot()
+    for option in root.findall("import-options/option"):
+        if option.get("key") == "library location" and option.get("value"):
+            return option.get("value")
+    return None
+
+
+def _import_ready_copy(
+    path: Path,
+    import_copy_path: Optional[str],
+    library_location: str,
+    suppress_warnings: bool,
+    copy_assets: Optional[bool],
+) -> Path:
+    """Write the copy Final Cut is sent, with ``<import-options>``; return it.
+
+    The original is never touched. A bundle is copied whole, because its
+    sidecars are part of the edit, and the options go into the copy's
+    ``Info.fcpxml``. With no *import_copy_path* the copy goes to a fresh
+    temporary directory.
+    """
+    is_bundle = path.suffix.lower() == ".fcpxmld"
+    if import_copy_path:
+        dest = Path(import_copy_path)
+    else:
+        dest = Path(tempfile.mkdtemp(prefix="fcp-mcp-import-")) / path.name
+    if is_bundle:
+        if dest.suffix.lower() != ".fcpxmld":
+            raise ValueError(
+                f"import_copy_path for a bundle must end in .fcpxmld: {dest}"
+            )
+        # dirs_exist_ok: a re-push refreshes the earlier copy in place. A
+        # sidecar left over from it is inert, since Final Cut only reads the
+        # data files the new Info.fcpxml points at.
+        shutil.copytree(path, dest, dirs_exist_ok=True)
+    inject_import_options(
+        str(_document_of(path)),
+        str(_document_of(dest)),
+        library_location=library_location,
+        suppress_warnings=suppress_warnings,
+        copy_assets=copy_assets,
+    )
+    return dest
 
 
 def _same_bundle(a: str, b: str) -> bool:
@@ -259,9 +315,9 @@ def push_to_fcp(
         library_location: Target library path/URL (created if absent).
         suppress_warnings: Suppress non-fatal import warning dialogs.
         copy_assets: Copy media into the library vs. link in place.
-        import_copy_path: Where to write the options-injected copy for
-            flat files (defaults handled by the caller; required when
-            options are used on a flat file).
+        import_copy_path: Where to write the options-injected copy (a
+            ``.fcpxmld`` path for a bundle). Without one the copy goes to a
+            fresh temporary directory; a copy is always sent.
 
     Returns:
         Dict with ``sent`` (path actually opened), ``launched_fcp``
@@ -272,7 +328,6 @@ def push_to_fcp(
             Automation permission grant for the host process).
     """
     path = Path(fcpxml_path)
-    send_path = path
 
     # Resolve the target BEFORE anything is sent. Until v0.25.0 an absent
     # library_location meant no `library location` option was written at all,
@@ -280,18 +335,18 @@ def push_to_fcp(
     # function still returned success.
     target = resolve_library_target(library_location)
 
-    # Bundles: open directly (option injection inside a copied bundle is
-    # a v0.10 refinement); flat files get an import-ready copy so the
-    # user's original is never touched.
-    if path.suffix.lower() != '.fcpxmld' and import_copy_path:
-        send_path = Path(
-            inject_import_options(
-                str(path),
-                import_copy_path,
-                library_location=target,
-                suppress_warnings=suppress_warnings,
-                copy_assets=copy_assets,
-            )
+    # Every document sent carries its target. Until 0.27.1 a .fcpxmld bundle,
+    # and any push without an import_copy_path (autopush), was sent with no
+    # <import-options>: Final Cut 12.3 raised its "Which library?" picker for
+    # a bundle and the Apple event blocked until the osascript timeout
+    # (reported by John Palchak), and a flat file silently imported nothing.
+    send_path = _import_ready_copy(
+        path, import_copy_path, target, suppress_warnings, copy_assets
+    )
+    if not _sent_library_location(send_path):
+        raise RuntimeError(
+            f"Refusing to send {send_path}: it carries no library location, "
+            f"so Final Cut would ask which library to use or import nothing."
         )
 
     # What must show up in the target for this to have worked.
@@ -319,7 +374,15 @@ def push_to_fcp(
         f'open POSIX file "{_applescript_quote(str(send_path.resolve()))}"\n'
         'end tell'
     )
-    proc = _run_osascript(script)
+    try:
+        proc = _run_osascript(script)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Final Cut Pro did not answer the Open Document event within "
+            f"{_OSASCRIPT_TIMEOUT_SECONDS}s. A modal dialog is most likely "
+            f"waiting in Final Cut (a library picker or an import warning); "
+            f"answer or dismiss it there. Sent: {send_path}"
+        ) from None
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
         hint = ""

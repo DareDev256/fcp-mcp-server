@@ -64,7 +64,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.27.0"
+__version__ = "0.27.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -3620,15 +3620,14 @@ async def handle_push_to_fcp(arguments: dict) -> Sequence[TextContent]:
 
     filepath = _validate_filepath(arguments["filepath"], ('.fcpxml', '.fcpxmld'))
 
-    # Flat files get an options-injected sibling copy (never touch the
-    # original); the copy path goes through the same write sandbox as
-    # every other derived output.
-    import_copy = None
-    if Path(filepath).suffix.lower() == '.fcpxml':
-        anchor = str(Path(filepath).resolve().parent)
-        import_copy = _validate_output_path(
-            generate_output_path(filepath, "_import"), anchor_dir=anchor
-        )
+    # Every push sends an options-injected sibling copy (never the
+    # original): `_import.fcpxml`, or `_import.fcpxmld` for a bundle, which
+    # is copied whole with its sidecars. The copy path goes through the same
+    # write sandbox as every other derived output.
+    anchor = str(Path(filepath).resolve().parent)
+    import_copy = _validate_output_path(
+        generate_output_path(filepath, "_import"), anchor_dir=anchor
+    )
 
     result = push_to_fcp(
         filepath,
