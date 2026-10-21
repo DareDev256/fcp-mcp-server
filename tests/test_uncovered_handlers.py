@@ -12,6 +12,7 @@ an ERROR message, which is exactly the failure this file exists to prevent.
 """
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 
@@ -154,7 +155,13 @@ def test_generate_montage_reports_the_length_it_actually_made(project, tmp_path)
     assert "Target Duration**: 20.00s" in body
     total = sum(c.duration.seconds for c in parse_fcpxml(str(out)).timelines[0].clips)
     assert 0 < total <= 20.0
-    assert f"Actual Duration**: {total:.2f}s" in body, body
+    # Montage shuffles its clips, so the float sum above and the report's
+    # exact sum can land either side of a .xx5 rounding edge (12.37 vs
+    # 12.38). Compare the numbers, to a hundredth, not the printed strings.
+    match = re.search(r"Actual Duration\*\*: ([0-9.]+)s", body)
+    assert match, body
+    assert float(match.group(1)) == pytest.approx(total, abs=0.01), body
+    assert float(match.group(1)) < 20.0, body
 
 
 def test_generate_ab_roll_alternates_between_the_two_keyword_sets(project, tmp_path):
