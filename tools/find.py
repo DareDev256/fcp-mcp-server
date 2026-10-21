@@ -365,7 +365,7 @@ async def handle_find_to_timeline(args: dict):
             "in_point": TimeValue.from_seconds(float(h.start), gen.fps),
             "use_duration": TimeValue.from_seconds(float(dur), gen.fps),
         })
-    total = gen._build_output(selections, output_path, False, "00:00:00:01")
+    total, _ = gen._build_output(selections, output_path, False, "00:00:00:01")
     score = diversity.score(kept)
     out = r["mode"] + "\n\n# Selects Reel\n\n"
     out += f"- **Query**: {r['query']}\n- **Shots**: {len(kept)} of {len(r['hits'])} hits kept\n"

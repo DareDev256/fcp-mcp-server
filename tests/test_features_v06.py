@@ -91,15 +91,22 @@ class TestEffectRegistry:
         assert 'cross-dissolve' in FCP_EFFECTS
         name, uid = FCP_EFFECTS['cross-dissolve']
         assert name == 'Cross Dissolve'
-        assert uid == '4731E73A-8DAC-4113-9A30-AE85B1761265'
+        # As Final Cut exports it (#30): the bare UUID was refused on import.
+        assert uid == 'FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265'
 
-    def test_registry_has_fade(self):
-        assert 'fade' in FCP_EFFECTS
+    def test_registry_fade_is_fade_to_color(self):
+        """"fade" is Final Cut's Fade To Color transition, not the Fade look.
+
+        8154D0DA-... is PAEFade, an FxFilter colour look. Until 0.27.0 the
+        registry wrote it inside a <transition>.
+        """
         name, uid = FCP_EFFECTS['fade']
-        assert uid == '8154D0DA-C99B-4EF8-8FF8-006FE5ED57F1'
+        assert name == 'Fade To Color'
+        assert uid == 'FxPlug:F779C565-486D-4633-8035-0374B4DB8F5C'
+        assert '8154D0DA' not in uid
 
     def test_legacy_alias_fade_to_black(self):
-        """Legacy alias fade-to-black should map to Fade."""
+        """Legacy alias fade-to-black should map to Fade To Color."""
         name, uid = FCP_EFFECTS['fade-to-black']
         assert uid == FCP_EFFECTS['fade'][1]
 

@@ -209,6 +209,9 @@ class ValidationIssueType(Enum):
     FRAME_MISALIGNMENT = "frame_misalignment"
     MISSING_EFFECT_REF = "missing_effect_ref"
     MISSING_MEDIA_REP = "missing_media_rep"
+    # Final Cut import refusals the DTD cannot see (v0.27.0)
+    TRANSITION_HANDLES = "transition_handles"
+    EFFECT_UID = "effect_uid"
 
 
 # ============================================================================
@@ -921,6 +924,8 @@ class RoughCutResult:
     segments: int
     average_clip_duration: float
     diversity_score: float = 1.0  # 1.0 = no adjacent cut reuses a source
+    # One line per cut left hard because its clips lack the media to overlap.
+    transitions_skipped: List[str] = field(default_factory=list)
 
 
 # ============================================================================

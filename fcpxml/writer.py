@@ -29,6 +29,7 @@ Architecture notes
 
 import copy
 import logging
+import re
 import subprocess
 import uuid
 import xml.etree.ElementTree as ET
@@ -68,37 +69,68 @@ _MAX_NOTE_LENGTH = 4096
 # EFFECT RESOURCE REGISTRY (v0.6.0)
 # ============================================================================
 
-# FCP built-in transition/filter effect UUIDs extracted from Filters.bundle.
-# Maps slug → (display_name, uuid).
+# Final Cut's built-in transitions, keyed by slug → (display_name, uid).
+#
+# Every uid is copied from Final Cut Pro 12.4's own plugin list
+# (Contents/PlugIns/InternalFiltersXPC.pluginkit/Contents/PlugIns/
+# Filters.bundle/Contents/Info.plist, the entries whose protocolNames include
+# FxTransition), and every name is that entry's English display name.
+# Final Cut writes an FxPlug effect as "FxPlug:<UUID>" and refused a file
+# carrying the bare UUID (#30). Before 0.27.0 this table held bare UUIDs,
+# seven of which matched no plugin at all, and it mapped "fade" onto Fade,
+# a colour LOOK (an FxFilter, not a transition). tests/test_effect_registry.py
+# checks the table against the installed app whenever Final Cut is present.
+FXPLUG_PREFIX = 'FxPlug:'
+
+_CROSS_DISSOLVE = ('Cross Dissolve', 'FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265')
+_FADE_TO_COLOR = ('Fade To Color', 'FxPlug:F779C565-486D-4633-8035-0374B4DB8F5C')
+_WIPE = ('Wipe', 'FxPlug:857E2FBA-98DB-411B-A88C-CE6ABC1F65D8')
+
 FCP_EFFECTS: Dict[str, tuple] = {
     # Dissolves
-    'cross-dissolve': ('Cross Dissolve', '4731E73A-8DAC-4113-9A30-AE85B1761265'),
-    'fade': ('Fade', '8154D0DA-C99B-4EF8-8FF8-006FE5ED57F1'),
-    'dip-to-color': ('Dip to Color', 'F779C565-486D-4633-8035-0374B4DB8F5C'),
-    'noise-dissolve': ('Noise Dissolve', 'ABFED81E-35D9-429C-AB47-438C1FB5D9DE'),
-    # Wipes
-    'edge-wipe': ('Edge Wipe', '857E2FBA-98DB-411B-A88C-CE6ABC1F65D8'),
-    'slide': ('Slide', '6AAB0D54-FCD8-4EBD-A62D-D352A5ED1648'),
-    'band-wipe': ('Band Wipe', 'A4E0B8E4-E916-474B-A14C-E3A9E0B1A3C1'),
-    'center-wipe': ('Center Wipe', 'B3F2D4A1-7C8E-4B9D-A5F6-D1E2C3B4A5D6'),
-    'checker-wipe': ('Checker Wipe', 'C4D3E2F1-8A7B-4C6D-B5E4-F2A1D3C4B5E6'),
-    'clock-wipe': ('Clock Wipe', 'D5E4F3A2-9B8C-4D7E-C6F5-A3B2E4D5C6F7'),
-    'gradient-wipe': ('Gradient Wipe', 'E6F5A4B3-AC9D-4E8F-D7A6-B4C3F5E6D7A8'),
-    'inset-wipe': ('Inset Wipe', 'F7A6B5C4-BD0E-4F9A-E8B7-C5D4A6F7E8B9'),
-    'star-wipe': ('Star Wipe', 'A8B7C6D5-CE1F-4A0B-F9C8-D6E5B7A8F9C0'),
-    # Legacy aliases — map common shorthand to canonical slugs
-    'fade-to-black': ('Fade', '8154D0DA-C99B-4EF8-8FF8-006FE5ED57F1'),
-    'fade-from-black': ('Fade', '8154D0DA-C99B-4EF8-8FF8-006FE5ED57F1'),
-    'wipe': ('Edge Wipe', '857E2FBA-98DB-411B-A88C-CE6ABC1F65D8'),
-    'dissolve': ('Cross Dissolve', '4731E73A-8DAC-4113-9A30-AE85B1761265'),
+    'cross-dissolve': _CROSS_DISSOLVE,
+    'dip-to-color': _FADE_TO_COLOR,
+    # Wipes and movements
+    'edge-wipe': _WIPE,
+    'slide': ('Slide', 'FxPlug:6AAB0D54-FCD8-4EBD-A62D-D352A5ED1648'),
+    'band-wipe': ('Band', 'FxPlug:8AD995CC-8DD6-4652-A3D2-B1468DCC6203'),
+    'center-wipe': ('Center', 'FxPlug:539C8A29-BBED-4670-B774-338109A7DB68'),
+    'checker-wipe': ('Checker', 'FxPlug:BD9D0933-6EB1-4E58-A8E7-3B49B552ED0C'),
+    'clock-wipe': ('Clock', 'FxPlug:B2C3F87B-2A21-4E13-8173-46ED4FEBC57A'),
+    'gradient-wipe': ('Gradient Image', 'FxPlug:62199A78-FDBF-4E9B-BB25-9A1D62FD2D48'),
+    'inset-wipe': ('Inset Wipe', 'FxPlug:5F0E1FA2-C172-4AFF-88CB-64B0F08195E4'),
+    'star-wipe': ('Star', 'FxPlug:F92E8AA4-FEB7-4746-B049-287D956E1716'),
+    # Aliases. Fade To Color defaults to black, so it is the fade to and
+    # from black Final Cut itself offers.
+    'dissolve': _CROSS_DISSOLVE,
+    'fade': _FADE_TO_COLOR,
+    'fade-to-black': _FADE_TO_COLOR,
+    'fade-from-black': _FADE_TO_COLOR,
+    'wipe': _WIPE,
 }
+
+
+def resolve_transition(transition_type: str) -> tuple:
+    """``(display_name, uid)`` for a transition slug.
+
+    Raises instead of substituting a cross dissolve: a wipe silently written
+    as a dissolve is an edit the caller did not ask for.
+    """
+    try:
+        return FCP_EFFECTS[transition_type]
+    except KeyError:
+        known = ', '.join(sorted(FCP_EFFECTS))
+        raise ValueError(
+            f"Unknown transition_type '{transition_type}'. Known: {known}"
+        ) from None
 
 
 def list_effects() -> List[Dict[str, str]]:
     """Return a list of all available FCP transition effects.
 
-    Each entry contains slug, display_name, and uuid.
-    Legacy aliases are excluded to avoid duplicates.
+    Each entry contains slug, name, and uuid (the uid exactly as Final Cut
+    writes it, ``FxPlug:`` prefix included). Aliases are excluded to avoid
+    duplicates.
     """
     seen_uuids: set = set()
     effects = []
@@ -322,6 +354,26 @@ def _create_asset_element(
     return asset
 
 
+def _copy_asset(asset: ET.Element) -> ET.Element:
+    """A whole copy of a source ``<asset>`` for another document.
+
+    Every attribute and child comes along (``format``, the audio layout, colour
+    overrides, the media-rep's bookmark): rebuilding an asset field by field
+    silently drops whatever the rebuild did not name, which is how generated
+    rough cuts lost ``format`` (#33). An asset in the pre-1.9 form carries
+    ``src`` itself; that moves onto a ``<media-rep>``, the only form FCPXML
+    1.13 accepts.
+    """
+    copied = copy.deepcopy(asset)
+    copied.tail = None
+    src = copied.attrib.pop('src', None)
+    if src is not None and copied.find('media-rep') is None:
+        copied.insert(0, ET.Element('media-rep', kind='original-media', src=src))
+    if not copied.get('uid'):
+        copied.set('uid', str(uuid.uuid4()).upper())
+    return copied
+
+
 def _probe_audio_info(src: str) -> Optional[Dict[str, Any]]:
     """Probe an audio file for its real duration, sample rate, and channels.
 
@@ -520,6 +572,164 @@ def write_fcpxml(
 
 
 # ============================================================================
+# TRANSITION MEDIA (v0.27.0)
+# ============================================================================
+#
+# A transition overlaps the end of the item before it and the start of the
+# item after it (FCPXML 1.13 DTD, the comment on <transition>). Neither item's
+# offset or duration moves: the overlap is drawn from media OUTSIDE their used
+# ranges. For a transition spanning [cut - before, cut + after], the incoming
+# clip shows `before` of media ahead of its in-point and the outgoing clip
+# shows `after` of media past its out-point. Final Cut refuses an import whose
+# transition reaches past either end of the media ("Encountered an unexpected
+# value", #31), and nothing in the DTD can see it.
+
+
+def _ensure_effect_resource(resources: ET.Element, name: str, uid: str) -> str:
+    """Return the id of the ``<effect>`` for *uid*, adding it if missing.
+
+    An ``<effect>`` written before 0.27.0 carries the bare UUID of the same
+    plugin; it is upgraded in place rather than duplicated beside the fixed one.
+    """
+    bare = uid[len(FXPLUG_PREFIX):] if uid.startswith(FXPLUG_PREFIX) else uid
+    for eff in resources.findall('effect'):
+        if eff.get('uid') in (uid, bare):
+            eff.set('uid', uid)
+            return eff.get('id')
+    ref_id = FCPXMLModifier._unique_resource_id(resources, 'r_dissolve')
+    eff_el = ET.SubElement(resources, 'effect')
+    eff_el.set('id', ref_id)
+    eff_el.set('name', name)
+    eff_el.set('uid', uid)
+    return ref_id
+
+
+def _transition_element(
+    name: str, offset: str, duration: str, effect_ref_id: Optional[str]
+) -> ET.Element:
+    """A ``<transition>``, with its ``<filter-video>`` when there is an effect.
+
+    ``<filter-video ref>`` is #REQUIRED in the DTD (#32), so the child is only
+    written with a ref to point at.
+    """
+    transition = ET.Element('transition')
+    transition.set('name', name)
+    transition.set('offset', offset)
+    transition.set('duration', duration)
+    if effect_ref_id:
+        fv = ET.SubElement(transition, 'filter-video')
+        fv.set('ref', effect_ref_id)
+        fv.set('name', name)
+    return transition
+
+
+def _media_bounds(
+    elem: ET.Element, resources: Dict[str, ET.Element]
+) -> Optional[Tuple[Fraction, Fraction]]:
+    """The source range *elem* can draw on, or None when no limit is known.
+
+    Gaps, titles and generators synthesise their frames and a still (an asset
+    with no duration) holds forever, so any overlap fits them. A clip that
+    wraps its media (``clip``, ``ref-clip``, ``mc-clip``, ``sync-clip``) or is
+    retimed reads it through a mapping this does not resolve, so it is treated
+    as unknown and never reported short.
+    """
+    if elem.tag not in ('asset-clip', 'video', 'audio'):
+        return None
+    if elem.find('timeMap') is not None:
+        return None
+    asset = resources.get(elem.get('ref', ''))
+    if asset is None or asset.tag != 'asset':
+        return None
+    duration = parse_seconds(asset.get('duration'))
+    if duration <= 0:
+        return None
+    first = parse_seconds(asset.get('start'))
+    return first, first + duration
+
+
+def _transition_shortfalls(
+    outgoing: Optional[ET.Element],
+    incoming: Optional[ET.Element],
+    before: Fraction,
+    after: Fraction,
+    resources: Dict[str, ET.Element],
+) -> List[Tuple[ET.Element, str, Fraction, Fraction]]:
+    """Each neighbour that cannot cover a transition, as ``(elem, side, has, needs)``.
+
+    *before* is how far the transition starts ahead of the cut, *after* how
+    far it runs past it. *side* is ``"head"`` (media before the in-point) or
+    ``"tail"`` (media after the out-point). Empty when the transition fits.
+    """
+    short = []
+    for elem, side, needs in ((incoming, 'head', before), (outgoing, 'tail', after)):
+        if elem is None or needs <= 0:
+            continue
+        bounds = _media_bounds(elem, resources)
+        if bounds is None:
+            continue
+        first, last = bounds
+        in_point = parse_seconds(elem.get('start')) if elem.get('start') else first
+        out_point = in_point + parse_seconds(elem.get('duration'))
+        has = in_point - first if side == 'head' else last - out_point
+        if has < needs:
+            short.append((elem, side, max(has, Fraction(0)), needs))
+    return short
+
+
+def _describe_span(seconds: Fraction, frame: Optional[Fraction]) -> str:
+    """``"6 frames"`` when *seconds* is whole frames of *frame*, else seconds."""
+    if frame:
+        frames = seconds / frame
+        if frames.denominator == 1:
+            return f"{frames.numerator} frame{'' if frames.numerator == 1 else 's'}"
+    return f"{float(seconds):.3f}s"
+
+
+def _describe_shortfall(
+    elem: ET.Element, side: str, has: Fraction, needs: Fraction,
+    frame: Optional[Fraction],
+) -> str:
+    where = 'before its in-point' if side == 'head' else 'after its out-point'
+    return (
+        f"'{elem.get('name', elem.get('ref', elem.tag))}' has "
+        f"{_describe_span(has, frame)} of media {where} and needs "
+        f"{_describe_span(needs, frame)}"
+    )
+
+
+def _spine_neighbour(
+    children: List[ET.Element], index: int, step: int
+) -> Optional[ET.Element]:
+    """The nearest non-transition sibling of ``children[index]`` in direction *step*."""
+    i = index + step
+    while 0 <= i < len(children):
+        if children[i].tag != 'transition':
+            return children[i]
+        i += step
+    return None
+
+
+def _resource_index(root: ET.Element) -> Dict[str, ET.Element]:
+    """Every resource element in *root* (asset, effect, media) by id."""
+    return {
+        el.get('id'): el for el in root.iter()
+        if el.tag in ('asset', 'effect', 'media') and el.get('id')
+    }
+
+
+def _sequence_frame(root: ET.Element) -> Optional[Fraction]:
+    """Seconds per frame of the first sequence's format, if it resolves."""
+    sequence = root.find('.//sequence')
+    if sequence is None:
+        return None
+    for fmt in root.iter('format'):
+        if fmt.get('id') == sequence.get('format') and fmt.get('frameDuration'):
+            return frame_duration_from_attr(fmt.get('frameDuration'))
+    return None
+
+
+# ============================================================================
 # PRE-EXPORT DTD VALIDATOR (v0.6.0)
 # ============================================================================
 
@@ -685,6 +895,84 @@ def _check_asset_sources(root: ET.Element) -> List[ValidationIssue]:
     return issues
 
 
+def _check_transition_handles(root: ET.Element) -> List[ValidationIssue]:
+    """Flag transitions that reach past the media of the clips beside them.
+
+    The requirement is measured from where the transition actually sits
+    relative to the cut, not assumed centred, so an off-centre transition
+    in a Final Cut export is held to what it really overlaps.
+    """
+    issues = []
+    resources = _resource_index(root)
+    frame = _sequence_frame(root)
+    for spine in root.iter('spine'):
+        children = list(spine)
+        for i, transition in enumerate(children):
+            if transition.tag != 'transition':
+                continue
+            outgoing = _spine_neighbour(children, i, -1)
+            incoming = _spine_neighbour(children, i, +1)
+            try:
+                start = parse_seconds(transition.get('offset'))
+                end = start + parse_seconds(transition.get('duration'))
+                if incoming is not None:
+                    cut = parse_seconds(incoming.get('offset'))
+                elif outgoing is not None:
+                    cut = (parse_seconds(outgoing.get('offset'))
+                           + parse_seconds(outgoing.get('duration')))
+                else:
+                    continue
+                short = _transition_shortfalls(
+                    outgoing, incoming,
+                    max(cut - start, Fraction(0)), max(end - cut, Fraction(0)),
+                    resources,
+                )
+            except (ValueError, ZeroDivisionError):
+                continue
+            for elem, side, has, needs in short:
+                issues.append(ValidationIssue(
+                    issue_type=ValidationIssueType.TRANSITION_HANDLES,
+                    severity="error",
+                    message=(
+                        f"<transition name=\"{transition.get('name', '')}\" "
+                        f"offset=\"{transition.get('offset', '')}\">: "
+                        f"{_describe_shortfall(elem, side, has, needs, frame)}. "
+                        f"Final Cut refuses the import."
+                    ),
+                    timecode=transition.get('offset'),
+                    clip_name=elem.get('name'),
+                ))
+    return issues
+
+
+_BARE_UUID = re.compile(
+    r'^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+)
+
+
+def _check_effect_uids(root: ET.Element) -> List[ValidationIssue]:
+    """Flag ``<effect>`` uids written as a bare UUID.
+
+    Final Cut writes an FxPlug effect as ``FxPlug:<UUID>`` and refused a file
+    carrying the bare form (#30). A warning, not an error: only Cross Dissolve
+    has been seen refused, and the DTD accepts any CDATA here.
+    """
+    issues = []
+    for eff in root.iter('effect'):
+        uid = eff.get('uid', '')
+        if _BARE_UUID.match(uid):
+            issues.append(ValidationIssue(
+                issue_type=ValidationIssueType.EFFECT_UID,
+                severity="warning",
+                message=(
+                    f"<effect id=\"{eff.get('id', '?')}\" "
+                    f"name=\"{eff.get('name', '')}\"> uid is a bare UUID; "
+                    f"Final Cut writes FxPlug effects as \"{FXPLUG_PREFIX}{uid}\"."
+                ),
+            ))
+    return issues
+
+
 def validate_fcpxml(root: ET.Element, fps: float = 24.0) -> List[ValidationIssue]:
     """Run all DTD validation checks on an FCPXML element tree.
 
@@ -702,6 +990,8 @@ def validate_fcpxml(root: ET.Element, fps: float = 24.0) -> List[ValidationIssue
     issues.extend(_check_frame_alignment(root, fps))
     issues.extend(_check_effect_refs(root))
     issues.extend(_check_asset_sources(root))
+    issues.extend(_check_transition_handles(root))
+    issues.extend(_check_effect_uids(root))
     return issues
 
 
@@ -1554,15 +1844,10 @@ class FCPXMLModifier:
         effect_ref_id: str | None,
     ) -> ET.Element:
         """Build a <transition> element with optional filter-video child."""
-        transition = ET.Element('transition')
-        transition.set('name', effect_name)
-        transition.set('offset', trans_offset.to_fcpxml())
-        transition.set('duration', trans_duration.to_fcpxml())
-        if effect_ref_id:
-            fv = ET.SubElement(transition, 'filter-video')
-            fv.set('ref', effect_ref_id)
-            fv.set('name', effect_name)
-        return transition
+        return _transition_element(
+            effect_name, trans_offset.to_fcpxml(), trans_duration.to_fcpxml(),
+            effect_ref_id,
+        )
 
     def save(self, output_path: Optional[str] = None) -> str:
         """Serialise the modified XML tree to disk.
@@ -2122,55 +2407,33 @@ class FCPXMLModifier:
         """
         Add a transition to a clip.
 
+        The transition is centred on the cut, so each clip beside it must have
+        half its duration of media beyond the range it uses. When either does
+        not, this raises, naming the clip and the longest transition that fits,
+        instead of writing a file Final Cut refuses (#31). Nothing is written
+        to the tree before every requested cut has been checked.
+
         Args:
             clip_id: Target clip
             position: 'start', 'end', or 'both'
-            transition_type: Type of transition
+            transition_type: A slug from ``FCP_EFFECTS``; anything else raises
             duration: Transition duration
 
         Returns:
             Created transition element(s)
         """
         spine, clip, clip_index = self._require_spine_clip(clip_id)
+        effect_name, effect_uid = resolve_transition(transition_type)
 
         trans_duration = self._parse_time(duration)
-
-        # Effect name and FCP built-in effect UID lookup via registry
-        effect_name, effect_uid = FCP_EFFECTS.get(
-            transition_type,
-            FCP_EFFECTS['cross-dissolve']
-        )
-
-        # Ensure effect resource exists in <resources>
-        effect_ref_id = None
-        if effect_uid:
-            root = self.tree.getroot()
-            resources = root.find('.//resources')
-            if resources is not None:
-                for eff in resources.findall('effect'):
-                    if eff.get('uid') == effect_uid:
-                        effect_ref_id = eff.get('id')
-                        break
-                if effect_ref_id is None:
-                    effect_ref_id = self._unique_resource_id(resources, 'r_dissolve')
-                    eff_el = ET.SubElement(resources, 'effect')
-                    eff_el.set('id', effect_ref_id)
-                    eff_el.set('name', effect_name)
-                    eff_el.set('uid', effect_uid)
-
-        transitions_added = []
-
         _, clip_dur, clip_offset = self._get_clip_times(clip)
         half_dur = trans_duration * 0.5
 
+        children = list(spine)
+        cuts = []  # (offset, insert index, outgoing, incoming)
         if position in ('end', 'both'):
-            end_offset = clip_offset + clip_dur - half_dur
-            transition = self._make_transition_element(
-                effect_name, end_offset, trans_duration, effect_ref_id
-            )
-            spine.insert(clip_index + 1, transition)
-            transitions_added.append(transition)
-
+            cuts.append((clip_offset + clip_dur - half_dur, clip_index + 1,
+                         clip, _spine_neighbour(children, clip_index, +1)))
         if position in ('start', 'both'):
             start_offset = clip_offset - half_dur
             if start_offset < TimeValue.zero():
@@ -2178,10 +2441,47 @@ class FCPXMLModifier:
                     f"Transition at start would produce negative offset "
                     f"({start_offset.to_seconds():.3f}s) for clip '{clip_id}'"
                 )
+            cuts.append((start_offset, clip_index,
+                         _spine_neighbour(children, clip_index, -1), clip))
+
+        half = Fraction(half_dur.numerator, half_dur.denominator)
+        frame = 1 / rational_fps(self.fps or 24)
+        root = self.tree.getroot()
+        resources = _resource_index(root)
+        for _, _, outgoing, incoming in cuts:
+            short = _transition_shortfalls(outgoing, incoming, half, half, resources)
+            if short:
+                fits = min(has for _, _, has, _ in short)
+                longest = 2 * (fits // frame)
+                hint = (
+                    f"The longest {effect_name} that fits is "
+                    f"{_describe_span(longest * frame, frame)}"
+                    if longest else "No transition fits until the clips are trimmed"
+                )
+                reasons = '; '.join(
+                    _describe_shortfall(e, side, has, needs, frame)
+                    for e, side, has, needs in short
+                )
+                raise ValueError(
+                    f"Final Cut cannot build a {_describe_span(2 * half, frame)} "
+                    f"{effect_name} at the {'end' if outgoing is clip else 'start'} "
+                    f"of '{clip_id}': {reasons}. {hint}. Trim the clips to leave "
+                    f"handles, or ask for a shorter duration."
+                )
+
+        effect_ref_id = None
+        resources_el = root.find('.//resources')
+        if resources_el is not None:
+            effect_ref_id = _ensure_effect_resource(resources_el, effect_name, effect_uid)
+
+        transitions_added = []
+        # The end cut's index is the higher one, so it goes in first and the
+        # start cut's index stays valid.
+        for offset, index, _, _ in cuts:
             transition = self._make_transition_element(
-                effect_name, start_offset, trans_duration, effect_ref_id
+                effect_name, offset, trans_duration, effect_ref_id
             )
-            spine.insert(clip_index, transition)
+            spine.insert(index, transition)
             transitions_added.append(transition)
 
         return transitions_added[0] if len(transitions_added) == 1 else transitions_added
@@ -2920,10 +3220,24 @@ class FCPXMLModifier:
 
         new_clip = self._make_asset_clip(
             asset_id, asset.get('name', 'Untitled'),
-            self._parse_time(offset), source_start, clip_duration,
-            parent=parent, lane=str(lane),
+            self._anchored_offset(parent, offset), source_start, clip_duration,
+            lane=str(lane),
         )
+        # Anchored items precede the parent's markers and keywords in the
+        # DTD; appending put the clip after them on any marked parent.
+        _dtd_insert(parent, new_clip)
         return new_clip
+
+    def _anchored_offset(self, parent: ET.Element, offset: str) -> 'TimeValue':
+        """An anchored item's ``offset`` for a position relative to *parent*'s start.
+
+        An anchored item's offset is in its parent's local timeline, whose
+        origin is the parent's ``start`` (FCPXML 1.13 DTD, the comments on
+        ``start``), not 0. Until 0.27.0 the relative offset was written as is,
+        so on any trimmed parent the clip landed before the parent's in-point
+        (#34), the same error markers had until 0.19.3.
+        """
+        return self._parse_time(parent.get('start', '0s')) + self._parse_time(offset)
 
     # ========================================================================
     # AUDIO CLIP OPERATIONS (v0.6.0)
@@ -3015,7 +3329,7 @@ class FCPXMLModifier:
 
         new_clip = self._make_asset_clip(
             asset_id, asset.get('name', 'Audio'),
-            self._parse_time(offset), source_start, clip_duration,
+            self._anchored_offset(parent, offset), source_start, clip_duration,
             lane=str(lane),
             audioRole=_sanitize_xml_value(role, 256),
         )

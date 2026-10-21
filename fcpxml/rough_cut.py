@@ -9,8 +9,9 @@ import random
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import diversity
 from .models import (
@@ -21,7 +22,16 @@ from .models import (
     SegmentSpec,
     TimeValue,
 )
-from .writer import _create_asset_element, write_fcpxml
+from .rational import frame_duration_seconds
+from .writer import (
+    FCP_EFFECTS,
+    _copy_asset,
+    _describe_shortfall,
+    _ensure_effect_resource,
+    _transition_element,
+    _transition_shortfalls,
+    write_fcpxml,
+)
 
 
 class RoughCutGenerator:
@@ -191,7 +201,7 @@ class RoughCutGenerator:
         diversity_score = diversity.score([{"source": c.get("ref")} for c in selected_clips])
 
         # Generate output FCPXML
-        actual_duration = self._build_output(
+        actual_duration, transitions_skipped = self._build_output(
             selected_clips, output_path, add_transitions, transition_duration
         )
 
@@ -204,6 +214,7 @@ class RoughCutGenerator:
             segments=len(segments) if segments else 1,
             average_clip_duration=actual_duration / len(selected_clips) if selected_clips else 0,
             diversity_score=diversity_score,
+            transitions_skipped=transitions_skipped,
         )
 
     def _parse_duration(self, duration: str) -> TimeValue:
@@ -360,41 +371,28 @@ class RoughCutGenerator:
         output_path: str,
         add_transitions: bool,
         transition_duration: str
-    ) -> float:
-        """Build the output FCPXML."""
+    ) -> Tuple[float, List[str]]:
+        """Build the output FCPXML.
+
+        Returns the timeline length in seconds and one line per cut whose
+        transition was left out because its clips lack the media to overlap.
+        """
         # Create new FCPXML structure
         root = ET.Element('fcpxml', version='1.13')
         resources = ET.SubElement(root, 'resources')
 
-        # Copy relevant resources
-        format_id = None
+        # The sequence's format is the source's first; every format a copied
+        # asset points at comes along too, so no asset's `format` dangles.
+        format_id = next(iter(self.formats), None)
+        used_refs = sorted(set(c.get('ref') for c in clips if c.get('ref')))
+        used_assets = [self.resources[ref] for ref in used_refs if ref in self.resources]
+        wanted_formats = {format_id} | {a.get('format') for a in used_assets}
         for fmt_id, fmt in self.formats.items():
-            resources.append(fmt)
-            format_id = fmt_id
-            break
+            if fmt_id in wanted_formats:
+                resources.append(fmt)
 
-        # Copy needed assets — use media-rep form for new assets
-        used_refs = set(c.get('ref') for c in clips if c.get('ref'))
-        for ref in used_refs:
-            if ref in self.resources:
-                orig = self.resources[ref]
-                # Extract src from either attribute or media-rep child
-                src = orig.get('src', '')
-                if not src:
-                    mr = orig.find('media-rep')
-                    if mr is not None:
-                        src = mr.get('src', '')
-                _create_asset_element(
-                    resources,
-                    asset_id=orig.get('id', ref),
-                    name=orig.get('name', ''),
-                    src=src,
-                    duration=orig.get('duration', '0s'),
-                    start=orig.get('start', '0s'),
-                    has_video=orig.get('hasVideo', '1'),
-                    has_audio=orig.get('hasAudio', '1'),
-                    uid=orig.get('uid'),
-                )
+        for orig in used_assets:
+            resources.append(_copy_asset(orig))
 
         # Create library structure
         # No `location` — see the note in fcpxml/edl.py; the import target is
@@ -423,9 +421,18 @@ class RoughCutGenerator:
         # Add clips to spine
         current_offset = TimeValue.zero()
         trans_dur = TimeValue.from_timecode(transition_duration, self.fps) if add_transitions else None
+        effect_name, effect_uid = FCP_EFFECTS['cross-dissolve']
+        effect_ref_id = (
+            _ensure_effect_resource(resources, effect_name, effect_uid)
+            if trans_dur else None
+        )
+        resource_index = {el.get('id'): el for el in resources if el.get('id')}
+        frame = frame_duration_seconds(self.fps)
+        skipped: List[str] = []
 
+        previous = None
         for i, clip in enumerate(clips):
-            ET.SubElement(spine, 'asset-clip',
+            elem = ET.SubElement(spine, 'asset-clip',
                 ref=clip.get('ref', 'r1'),
                 offset=current_offset.to_fcpxml(),
                 name=clip['name'],
@@ -434,25 +441,35 @@ class RoughCutGenerator:
                 format=format_id or "r1",
                 tcFormat="NDF")
 
-            # Add transition before clip (except first)
+            # Add transition before clip (except first). A cut whose clips
+            # lack the media to overlap stays a hard cut and is reported:
+            # Final Cut refuses the whole file over one such transition.
             if add_transitions and i > 0 and trans_dur:
                 half_trans = trans_dur * 0.5
-                trans_offset = current_offset - half_trans
+                half = Fraction(half_trans.numerator, half_trans.denominator)
+                short = _transition_shortfalls(
+                    previous, elem, half, half, resource_index)
+                if short:
+                    skipped.append(
+                        f"cut {i} ({previous.get('name')} -> {clip['name']}): "
+                        + '; '.join(_describe_shortfall(e, side, has, needs, frame)
+                                    for e, side, has, needs in short)
+                    )
+                else:
+                    spine.insert(-1, _transition_element(
+                        effect_name,
+                        (current_offset - half_trans).to_fcpxml(),
+                        trans_dur.to_fcpxml(),
+                        effect_ref_id,
+                    ))
 
-                transition = ET.Element('transition',
-                    name="Cross Dissolve",
-                    offset=trans_offset.to_fcpxml(),
-                    duration=trans_dur.to_fcpxml())
-                ET.SubElement(transition, 'filter-video',
-                    name="Cross Dissolve")
-                spine.insert(-1, transition)
-
+            previous = elem
             current_offset = current_offset + clip['use_duration']
 
         # Write output
         write_fcpxml(root, output_path)
 
-        return total_duration.to_seconds()
+        return total_duration.to_seconds(), skipped
 
     # ========================================================================
     # MONTAGE GENERATION (v0.3.0)
@@ -522,7 +539,7 @@ class RoughCutGenerator:
         selected_clips = self._select_clips_for_montage(available_clips, config)
 
         # Build output
-        actual_duration = self._build_output(
+        actual_duration, transitions_skipped = self._build_output(
             selected_clips, output_path, add_transitions, "00:00:00:06"
         )
 
@@ -534,7 +551,8 @@ class RoughCutGenerator:
             'actual_duration': actual_duration,
             'pacing_curve': pacing_curve,
             'start_clip_duration': selected_clips[0]['use_duration'].to_seconds() if selected_clips else 0,
-            'end_clip_duration': selected_clips[-1]['use_duration'].to_seconds() if selected_clips else 0
+            'end_clip_duration': selected_clips[-1]['use_duration'].to_seconds() if selected_clips else 0,
+            'transitions_skipped': transitions_skipped,
         }
 
     def _select_clips_for_montage(
@@ -641,7 +659,7 @@ class RoughCutGenerator:
         )
 
         # Build output
-        actual_duration = self._build_output(
+        actual_duration, transitions_skipped = self._build_output(
             selected_clips, output_path, add_transitions, "00:00:00:12"
         )
 
@@ -658,7 +676,8 @@ class RoughCutGenerator:
             'target_duration': target_time.to_seconds(),
             'actual_duration': actual_duration,
             'a_duration_setting': a_duration,
-            'b_duration_setting': b_duration
+            'b_duration_setting': b_duration,
+            'transitions_skipped': transitions_skipped,
         }
 
     def _build_ab_sequence(
