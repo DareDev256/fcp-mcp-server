@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-10-20
+
+A `push_to_fcp` fix, reported by John Palchak by email against 0.26.0 on
+Final Cut Pro 12.3, with the cause traced to the line.
+
+### Fixed
+- **Pushing a `.fcpxmld` bundle imports into `library_location` with zero
+  clicks.** The `<import-options>` injection was skipped for bundles, so the
+  document reached Final Cut with no target: it raised its "Which library do
+  you want to import Info.fcpxml into?" picker, the Apple event blocked, and
+  the call failed with `TimeoutExpired` after 120 s even when the import then
+  landed. A bundle is now copied whole to `<name>_import.fcpxmld` beside the
+  original (sidecars included, original untouched) and the options go into
+  the copy's `Info.fcpxml`, exactly as flat files already worked.
+- **A push without `import_copy_path` carries its target too.** The same
+  skip applied to every call that passed no copy path, which is how autopush
+  (`FCP_MCP_AUTOPUSH`) calls it; on 12.3 such a document imports nothing.
+  The copy now goes to a fresh temporary directory instead of being skipped.
+- **A bundle push is verified.** The verifier parsed the bundle directory
+  rather than its `Info.fcpxml`, found no projects, and so reported every
+  bundle push as unverified.
+- The document is read back before sending and the push refuses if it
+  carries no library location. An Apple event that Final Cut never answers
+  now fails naming the likely cause (a modal dialog waiting in Final Cut)
+  instead of a bare `TimeoutExpired`.
+
 ## [0.27.0] - 2026-10-20
 
 "Files Final Cut actually opens." Five bugs reported by @brannonwinn, each
