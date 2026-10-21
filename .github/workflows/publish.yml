@@ -160,8 +160,11 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           for attempt in $(seq 1 10); do
             # Why isLatest and not the first match: see the script's docstring.
-            served=$(curl -sf "https://registry.modelcontextprotocol.io/v0.1/servers?search=fcpxml-mcp-server" \
-              | python3 .github/scripts/registry_latest.py)
+            # An empty or failed reply must reach the retry, not end the step:
+            # under bash -e a failed substitution exits (v0.27.2 went red on
+            # its first read, 20 s after a publish the registry did serve).
+            served=$(curl -sf --max-time 20 "https://registry.modelcontextprotocol.io/v0.1/servers?search=fcpxml-mcp-server" \
+              | python3 .github/scripts/registry_latest.py) || served=""
             if [ "$served" = "$version" ]; then
               echo "registry is serving ${version}"
               exit 0

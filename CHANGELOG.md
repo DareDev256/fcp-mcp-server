@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Publish: the MCP registry check now retries a failed read.** Under
+  `bash -e` an empty registry reply ended the step on its first attempt, so
+  v0.27.2's run went red 20 s after a publish the registry did serve.
+
 ## [0.27.2] - 2026-10-21
 
 Google retires the Veo 3.1 and Omni preview models from the Gemini API on
