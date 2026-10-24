@@ -783,7 +783,7 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 1808 tests across 68 suites — see Testing below
+├── tests/                 2379 tests across 85 suites (collected 2026-10-24) — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -909,7 +909,7 @@ Before v0.6.20, the 4-part SMPTE parser silently dropped frames — `01:00:10:12
 | **Rational time, never floats** | All durations are fractions (`600/2400s`) matching FCPXML's native format — zero rounding errors across trim, split, speed |
 | **Non-destructive by default** | Modified files get `_modified`, `_chapters` suffixes. Originals are never overwritten |
 | **Single source of truth** | `MarkerType` enum owns serialization: `from_string()` for input, `from_xml_element()` for parsing, `xml_attrs` for writing. `INCOMPLETE` is canonical; `TODO` is a backward-compat alias (same object) |
-| **Security-first** | 13-layer defense-in-depth across all 62 handlers — see [Security](#security) for the full matrix |
+| **Security-first** | 13-layer defense-in-depth on the tool handlers — see [Security](#security) for the full matrix |
 | **Dispatch, not conditionals** | `TOOL_HANDLERS` dict maps names → async handlers. No 1000-line if/elif |
 
 ---
