@@ -181,7 +181,10 @@ def test_case3_connected_clips_appear_where_the_timeline_puts_them(media, tmp_pa
     result, out = _render(tl, tmp_path, "l")
     assert result["error"] is None, result["error"]
     assert result["expected"] == Fraction(8)
-    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
+    # The colours first: they say whether a failing lane check is the render
+    # or the instrument.
+    seen = {t: _rgb(out, t) for t in (2.0, 3.5, 4.5, 6.0, 7.5)}
+    assert result["verified"] is True, (seen, result["drift"], result["lanes"], result["substitutions"])
     assert [v for _, v, _ in result["lanes"]] == [True, True]
     assert _is(_rgb(out, 2.0), "red")      # Red: timeline 1s-3s
     assert not _is(_rgb(out, 3.5), "red")  # gone again before the gap

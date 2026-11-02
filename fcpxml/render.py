@@ -203,9 +203,13 @@ def verify_lanes(graph, out_path: str, height: int) -> list:
         source_at = Fraction(0) if piece.still else max(
             piece.read_in, piece.read_in + into - piece.hold_head
         )
+        # The expected frame takes the render's own pixel route (scaled, then
+        # yuv420p, then grey). Straight from a 10-bit ProRes to grey, ffmpeg
+        # 6.1 applies a different range conversion than the yuv420p proxy
+        # went through, and a correctly drawn lane measured 27/255 apart.
         expected = _grey(
             piece.source, source_at,
-            f"scale={width}:{height_px},setsar=1,"
+            f"scale={width}:{height_px},setsar=1,format=yuv420p,"
             f"crop={right - left}:{bottom - top}:{left - x}:{top - y}",
         )
         if rendered is None or expected is None:
