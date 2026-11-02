@@ -434,18 +434,54 @@ def test_a_plain_lane_carries_no_caveat(tmp_path):
     assert compile_timeline(tl).substitutions == ()
 
 
-def test_an_audio_lane_is_reported_rather_than_silently_dropped(tmp_path):
+def test_an_audio_lane_is_mixed_at_its_own_time(tmp_path):
+    """0.30.0: a clip below the spine is heard, delayed to its timeline
+    instant, over a silent bed exactly the timeline's length."""
+    from fcpxml.models import MediaRef
+
     media = tmp_path / "a.mov"
     media.write_bytes(b"\x00")
-    tl = _timeline(
-        [_clip("a", 0, 48, path=str(media))],
-        connected_clips=[_lane("music", -1, 0, 48, str(media))],
-    )
+    music = _lane("music", -1, 12, 24, str(media))
+    music.media = MediaRef(duration=Fraction(10), has_audio=True)
+    music.volume_db = -6.0
+    tl = _timeline([_clip("a", 0, 48, path=str(media))], connected_clips=[music])
     graph = compile_timeline(tl)
-    assert any("audio lanes are not mixed" in note for note in graph.substitutions)
-    args = graph_to_args(graph, "/tmp/out.mp4")
-    # The only overlay is the spine piece onto its own canvas.
-    assert "[l0]" not in args[args.index("-filter_complex") + 1]
+    assert [s.label for s in graph.audio] == ["music"]
+    assert graph.audio[0].at == Fraction(12, 24)
+    chain = graph_to_args(graph, "/tmp/out.mp4")
+    fc = chain[chain.index("-filter_complex") + 1]
+    assert "anullsrc=r=48000:cl=stereo,atrim=duration=2.000000" in fc
+    assert "volume=-6.00dB,adelay=delays=500:all=1[a0]" in fc
+    assert "amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]" in fc
+    assert chain[chain.index("[aout]") - 1] == "-map"
+    assert any("audio mixed from 1 clip" in n for n in graph.substitutions)
+
+
+def test_a_hand_built_clip_without_media_stays_silent(tmp_path):
+    """No parsed media means no promise of a sound stream to bind."""
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline([_clip("a", 0, 48, path=str(media))],
+                   connected_clips=[_lane("music", -1, 0, 48, str(media))])
+    graph = compile_timeline(tl)
+    assert graph.audio == ()
+    assert "[aout]" not in graph_to_args(graph, "/tmp/out.mp4")
+
+
+def test_a_transition_crossfades_the_sound_over_the_same_handles(tmp_path):
+    from fcpxml.models import MediaRef
+
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    a, b = _clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))
+    for c in (a, b):
+        c.media = MediaRef(duration=Fraction(10), has_audio=True)
+    b.source_start = Timecode(frames=24, frame_rate=24.0)
+    graph = compile_timeline(_timeline([a, b], transitions=[_transition("Cross Dissolve", 24, duration_frames=12)]))
+    out, inn = graph.audio
+    assert (out.fade_in, out.fade_out) == (0, Fraction(12, 24))
+    assert (inn.fade_in, inn.fade_out) == (Fraction(12, 24), 0)
+    assert inn.at == Fraction(18, 24)  # the incoming sound starts with the dissolve
 
 
 def test_two_video_lanes_stack_in_lane_order(tmp_path):

@@ -26,6 +26,12 @@ below exists to keep that true:
 * A clip whose file has no picture where the timeline asks for one becomes
   black (spine) or is not drawn (lane), with a note, instead of an input
   that yields no frames and empties the whole render.
+* Sound (0.30.0) follows the same clock: every clip that plays its asset's
+  audio (spine, video lanes, and audio lanes below the spine) is placed at
+  its timeline instant over a silent bed exactly the timeline's length. At a
+  transition the two sides crossfade over the same handles the picture
+  uses. A gap is silence. ``adjust-volume`` is applied; pan, EQ, audio
+  effects and role levels are not, and the report says so.
 
 Time is carried as fractions.Fraction end to end and quantised to output
 frames ONCE, cumulatively (``_frame``), so per-piece rounding never adds up
@@ -43,6 +49,7 @@ from fcpxml.media_intel import media_src_to_path
 # The proxy's frame rate. Fixed: the proxy exists to be cheap to make and
 # quick to scrub, and every quantisation below is to this grid.
 FPS = 24
+AUDIO_RATE = 48000
 
 _IMAGE_EXTENSIONS = (
     ".png", ".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff", ".bmp",
@@ -62,6 +69,7 @@ class SourceInfo:
     height: Optional[int] = None
     still: bool = False
     has_video: bool = True
+    has_audio: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,6 +97,8 @@ class Segment:
     transform: Any = None
     effects: tuple = ()
     has_video: bool = True
+    has_audio: bool = False
+    volume_db: Optional[float] = None
 
     @property
     def duration(self) -> Fraction:
@@ -148,6 +158,25 @@ class Piece:
 
 
 @dataclass(frozen=True)
+class Sound:
+    """One clip's audio on the output clock.
+
+    ``at`` is where its first sample lands (seconds from the start of the
+    proxy); ``read_in``/``read_len`` are file seconds; ``fade_in`` /
+    ``fade_out`` are the crossfades at a transition, in seconds.
+    """
+
+    label: str
+    source: str
+    at: Fraction
+    read_in: Fraction
+    read_len: Fraction
+    fade_in: Fraction = Fraction(0)
+    fade_out: Fraction = Fraction(0)
+    volume_db: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class FilterGraph:
     """A renderable description of a timeline, plus what we could not honour."""
 
@@ -158,6 +187,7 @@ class FilterGraph:
     pieces: tuple[Piece, ...] = ()
     frame: tuple[int, int] = (1920, 1080)
     lanes: tuple[Piece, ...] = ()
+    audio: tuple[Sound, ...] = ()
 
     @property
     def total_frames(self) -> int:
@@ -223,11 +253,15 @@ def _segment_from(item: Any, lane: int, probes: Optional[Mapping[str, SourceInfo
         Fraction(media.duration) if media is not None and media.duration else None
     )
     has_video = bool(media.has_video) if media is not None else True
+    # Sound only when the document says this element plays it; a hand-built
+    # clip (no media) stays silent rather than binding a stream it may lack.
+    has_audio = bool(media.has_audio) if media is not None else False
 
     probe = (probes or {}).get(source) if not missing else None
     if probe is not None:
         still = probe.still
-        has_video = probe.has_video
+        has_video = probe.has_video and has_video
+        has_audio = probe.has_audio and has_audio
         width = probe.width or width
         height = probe.height or height
         file_duration = probe.duration if not probe.still else None
@@ -249,6 +283,8 @@ def _segment_from(item: Any, lane: int, probes: Optional[Mapping[str, SourceInfo
         transform=getattr(item, "transform", None),
         effects=tuple(getattr(item, "effects", ()) or ()),
         has_video=has_video,
+        has_audio=has_audio and not still,
+        volume_db=getattr(item, "volume_db", None),
     )
 
 
@@ -429,6 +465,7 @@ def compile_timeline(
     *,
     with_transitions: bool = True,
     with_lanes: bool = True,
+    with_audio: bool = True,
 ) -> FilterGraph:
     """Build a FilterGraph from a parsed Timeline.
 
@@ -459,9 +496,12 @@ def compile_timeline(
 
     notes: list[str] = []
     lanes: list[Segment] = []
+    below: list[Segment] = []
     for connected in getattr(timeline, "connected_clips", None) or []:
         lane = getattr(connected, "lane", 1)
         if lane <= 0:
+            if getattr(connected, "media_path", ""):
+                below.append(_segment_from(connected, lane, probes))
             continue
         segment = _segment_from(connected, lane, probes)
         kind = getattr(connected, "clip_type", "asset-clip")
@@ -473,8 +513,6 @@ def compile_timeline(
             )
             continue
         lanes.append(segment)
-    if any(getattr(c, "lane", 0) < 0 for c in getattr(timeline, "connected_clips", None) or []):
-        notes.append("audio lanes are not mixed: this preview is video only")
 
     compiled, transition_notes = (
         _place_transitions(list(getattr(timeline, "transitions", None) or []), spine)
@@ -491,6 +529,26 @@ def compile_timeline(
     right = {t.boundary: t for t in compiled}
     pieces: list[Piece] = []
     undrawn: list[str] = []
+    sounds: list[Sound] = []
+    unheard: list[str] = []
+
+    def hear(segment: Segment, start: int, end: int, fade_in: int = 0, fade_out: int = 0) -> None:
+        """Add *segment*'s sound over output frames [start, end)."""
+        if not (with_audio and segment.has_audio and not segment.missing):
+            return
+        into = Fraction(start, FPS) - segment.tl_in
+        available = _availability(segment, segment.file_time(into), Fraction(end - start, FPS))
+        if available is None:
+            unheard.append(segment.label)
+            return
+        read_in, read_len, hold_head, _ = available
+        sounds.append(Sound(
+            label=segment.label, source=segment.source,
+            at=Fraction(start, FPS) + hold_head, read_in=read_in, read_len=read_len,
+            fade_in=Fraction(fade_in, FPS), fade_out=Fraction(fade_out, FPS),
+            volume_db=segment.volume_db,
+        ))
+
     for index, segment in enumerate(spine):
         own_start, own_end = _frame(segment.tl_in), _frame(segment.tl_out)
         start = left[index].start if index in left else own_start
@@ -498,6 +556,12 @@ def compile_timeline(
         frames = end - start
         if frames <= 0:
             continue
+        if segment.kind == "clip":
+            hear(
+                segment, start, end,
+                fade_in=(left[index].end - left[index].start) if index in left else 0,
+                fade_out=(right[index].end - right[index].start) if index in right else 0,
+            )
         if segment.kind == "gap":
             pieces.append(Piece(segment=index, lane=0, start=start, frames=frames))
             continue
@@ -540,6 +604,21 @@ def compile_timeline(
             segment=index, lane=0, start=start, frames=frames, source=segment.source,
             still=segment.still, read_in=read_in, read_len=read_len, hold_head=hold_head,
         ))
+
+    for segment in lanes + below:
+        hear(segment, _frame(segment.tl_in), _frame(segment.tl_out))
+    if sounds:
+        notes.append(
+            f"audio mixed from {len(sounds)} clip(s) with their adjust-volume; "
+            f"pan, EQ, audio effects and role levels are not applied"
+        )
+    if unheard:
+        notes.append(
+            "not heard (no audio in the file where the timeline needs it): "
+            + ", ".join(repr(label) for label in unheard)
+        )
+    if not with_audio and any(s.has_audio for s in spine + lanes + below):
+        notes.append("audio dropped after ffmpeg refused the mixing graph: this preview is silent")
 
     lane_pieces: list[Piece] = []
     ordered_lanes = sorted(lanes, key=lambda s: (s.lane, s.tl_in))
@@ -596,6 +675,7 @@ def compile_timeline(
         pieces=tuple(pieces),
         frame=frame,
         lanes=tuple(lane_pieces),
+        audio=tuple(sounds),
     )
 
 
@@ -800,11 +880,46 @@ def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[
         chains.append(f"{base}{stream}overlay=x=0:y=0:eof_action=pass:format=yuv420{out}")
         base = out
 
+    audio_map: list[str] = []
+    if graph.audio:
+        # A silent bed exactly the timeline's length decides the mix's
+        # length (duration=first); each clip is delayed to its own instant.
+        total = float(Fraction(graph.total_frames, FPS))
+        chains.append(
+            f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={total:.6f},asetpts=N/SR/TB[abed]"
+        )
+        labels = []
+        for number, sound in enumerate(graph.audio):
+            args += [
+                "-ss", f"{float(sound.read_in):.6f}",
+                "-t", f"{float(sound.read_len):.6f}",
+                "-i", sound.source,
+            ]
+            chain = f"[{inputs}:a]aresample={AUDIO_RATE},aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS"
+            if sound.fade_in > 0:
+                chain += f",afade=t=in:st=0:d={float(sound.fade_in):.6f}"
+            if sound.fade_out > 0:
+                start = max(Fraction(0), sound.read_len - sound.fade_out)
+                chain += f",afade=t=out:st={float(start):.6f}:d={float(sound.fade_out):.6f}"
+            if sound.volume_db is not None:
+                chain += f",volume={sound.volume_db:.2f}dB"
+            delay = int(round(float(sound.at) * 1000))
+            chain += f",adelay=delays={delay}:all=1[a{number}]"
+            chains.append(chain)
+            labels.append(f"[a{number}]")
+            inputs += 1
+        chains.append(
+            f"[abed]{''.join(labels)}amix=inputs={len(labels) + 1}:duration=first"
+            f":dropout_transition=0:normalize=0[aout]"
+        )
+        audio_map = ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k"]
+
     args += [
         "-filter_complex", ";".join(chains),
         "-map", "[vout]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
         "-pix_fmt", "yuv420p",
+        *audio_map,
         out_path,
     ]
     return args

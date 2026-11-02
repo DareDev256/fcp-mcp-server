@@ -640,6 +640,9 @@ class MediaRef:
     height: Optional[int] = None
     still: bool = False
     has_video: bool = True
+    # The element plays the asset's sound. False for a <video> element (the
+    # picture component only), a still, or an asset without audio.
+    has_audio: bool = False
 
 
 @dataclass(frozen=True)
@@ -692,6 +695,8 @@ class Clip:
     # Visual adjustments present on the clip that no preview draws
     # (adjust-crop, filter-video, ...), by tag name, in document order.
     effects: Tuple[str, ...] = ()
+    # <adjust-volume amount="-6dB">, in dB; None when the clip has none.
+    volume_db: Optional[float] = None
 
     @property
     def end(self) -> Timecode:
@@ -757,6 +762,7 @@ class ConnectedClip:
     conform: str = "fit"
     transform: Optional[Transform] = None
     effects: Tuple[str, ...] = ()
+    volume_db: Optional[float] = None
 
     @property
     def duration_seconds(self) -> float:
@@ -783,6 +789,7 @@ class ConnectedClip:
             conform=self.conform,
             transform=self.transform,
             effects=self.effects,
+            volume_db=self.volume_db,
         )
 
 

@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-02
+
+`preview_render` has sound. Until now the proxy was video only, and an
+editor judges a cut as much by ear as by eye.
+
+### Added
+- **The proxy mixes the timeline's audio** on the same clock as the picture:
+  every clip that plays its asset's sound (spine clips, connected video
+  clips, and audio clips below the spine) is placed at its own timeline
+  instant over a silent bed exactly the timeline's length, so a gap is
+  silence and the track ends where the timeline does. At a transition the
+  two sides crossfade over the same handles the picture uses.
+  `<adjust-volume amount>` is applied (a clip at -96 dB is silent); pan, EQ,
+  audio effects and role levels are not, and the report says so.
+- **A `<video>` element plays its picture only**, as in Final Cut: its sound
+  is heard only through an `<audio>` element. Audio is taken from the file
+  only when the document says the element plays it (`hasAudio="1"`) AND a
+  probe finds an audio stream, so a picture-only file never binds a stream
+  it lacks.
+- **The render's audio is verified**: a proxy whose graph mixed sound but
+  whose file has no audio track, or one of the wrong length, is UNVERIFIED.
+  If ffmpeg refuses the mixing graph, the render falls back to silent
+  before it drops transitions, and says so.
+- `scripts/test-ffmpeg6.sh` runs the suite against ffmpeg 6.1 (`brew install
+  ffmpeg@6`, keg-only), the build CI gets from Ubuntu. It reproduces locally
+  the 0.28.0 lane bug that only CI could see.
+
+### Changed
+- The "audio lanes are not mixed: this preview is video only" note is gone;
+  the report now says how many clips were mixed, and names any whose file
+  has no sound where the timeline needs it.
+
 ## [0.29.0] - 2026-11-02
 
 0.28.0 fixed the renderer reading Final Cut's clocks as the file's clock.
