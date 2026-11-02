@@ -3,6 +3,7 @@ FCPXML Parser - Reads Final Cut Pro XML files into Python objects.
 """
 
 import xml.etree.ElementTree as ET
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -13,12 +14,15 @@ from .models import (
     Keyword,
     Marker,
     MarkerType,
+    MediaRef,
     Project,
     Timecode,
     Timeline,
     TimeValue,
+    Transform,
     Transition,
 )
+from .rational import parse_seconds, rational_fps
 from .safe_xml import safe_fromstring, safe_parse
 
 # Maximum FCPXML file size (50 MB) — prevents memory exhaustion from crafted files
@@ -36,6 +40,27 @@ _CONNECTED_CLIP_TAGS = (
 
 # Tags whose media path comes from a <media> resource rather than an <asset>.
 _MEDIA_REF_TAGS = ('mc-clip', 'ref-clip')
+
+# Spine elements that occupy primary-storyline time without being a clip the
+# timeline model carries. Each still pushes every later element along by its
+# duration; skipping one moved every clip after a spine title early by the
+# title's length.
+_SPINE_TIME_ONLY_TAGS = ('title', 'audio', 'audition', 'live-drawing', 'caption')
+
+# Image files Final Cut imports as stills.
+_STILL_EXTENSIONS = (
+    '.png', '.jpg', '.jpeg', '.heic', '.heif', '.tif', '.tiff', '.bmp',
+    '.gif', '.psd', '.exr', '.webp', '.dpx', '.tga',
+)
+
+# Child elements that change a clip's picture and that no preview here draws.
+# adjust-transform and adjust-conform are read (see _picture_of); the
+# colour-conform, stabilisation, rolling-shutter and audio adjustments are
+# left out on purpose: they do not change what the cut looks like.
+_UNDRAWN_VISUAL_TAGS = (
+    'adjust-crop', 'adjust-corners', 'adjust-blend', 'adjust-360-transform',
+    'adjust-reorient', 'adjust-orientation', 'filter-video', 'filter-video-mask',
+)
 
 
 class FCPXMLParser:
@@ -135,6 +160,12 @@ class FCPXMLParser:
                 'id': fmt_id, 'name': fmt.get('name', ''),
                 'width': int(fmt.get('width', 1920)),
                 'height': int(fmt.get('height', 1080)),
+                # A still's format often declares no size; the 1920x1080
+                # defaults above would then read as a real measurement.
+                'declaredSize': (
+                    (int(fmt.get('width')), int(fmt.get('height')))
+                    if fmt.get('width') and fmt.get('height') else None
+                ),
                 'frameDuration': frame_dur,
                 'frameRate': rate,
             }
@@ -154,6 +185,7 @@ class FCPXMLParser:
                 'src': asset.get('src', '') or (media_rep.get('src', '') if (media_rep := asset.find('media-rep')) is not None else ''),
                 'start': asset.get('start', '0s'),
                 'duration': asset.get('duration', '0s'),
+                'format': asset.get('format', ''),
                 'hasVideo': asset.get('hasVideo', '1') == '1',
                 'hasAudio': asset.get('hasAudio', '1') == '1',
             }
@@ -223,6 +255,71 @@ class FCPXMLParser:
             return self.resources.get(chosen, {}).get('src', '')
         return self.resources.get(ref, {}).get('src', '')
 
+    def _media_ref_for(self, elem: ET.Element) -> Optional[MediaRef]:
+        """The asset an element plays, as the renderer needs it: clock origin,
+        still or not, declared size.
+
+        Only for elements that ref an ``<asset>`` directly. An mc-clip or
+        ref-clip plays a ``<media>`` whose own clock is not the angle file's,
+        so it gets None and keeps the old zero-origin reading rather than a
+        guessed one.
+        """
+        ref = elem.get('ref', '')
+        if not ref or elem.tag in _MEDIA_REF_TAGS:
+            return None
+        asset = self.resources.get(ref)
+        if asset is None:
+            return None
+        try:
+            origin = parse_seconds(asset.get('start'))
+            duration = parse_seconds(asset.get('duration'))
+        except ValueError:
+            return None
+        size = self.formats.get(asset.get('format', ''), {}).get('declaredSize')
+        src = asset.get('src', '').split('?', 1)[0].lower()
+        still = asset.get('hasVideo', True) and (
+            duration == 0 or src.endswith(_STILL_EXTENSIONS)
+        )
+        return MediaRef(
+            origin=origin,
+            duration=None if still else duration,
+            width=size[0] if size else None,
+            height=size[1] if size else None,
+            still=bool(still),
+            has_video=bool(asset.get('hasVideo', True)),
+        )
+
+    @staticmethod
+    def _pair(text: Optional[str], default: tuple) -> tuple:
+        try:
+            values = [float(v) for v in (text or '').split()]
+        except ValueError:
+            return default
+        if len(values) == 1:
+            return (values[0], values[0])
+        return (values[0], values[1]) if len(values) >= 2 else default
+
+    def _picture_of(self, elem: ET.Element) -> tuple:
+        """(conform, transform, undrawn effects) for a clip element."""
+        conform_elem = elem.find('adjust-conform')
+        conform = (conform_elem.get('type', 'fit') if conform_elem is not None else 'fit')
+        transform = None
+        t = elem.find('adjust-transform')
+        if t is not None and t.get('enabled', '1') != '0':
+            try:
+                rotation = float(t.get('rotation', '0') or 0)
+            except ValueError:
+                rotation = 0.0
+            transform = Transform(
+                position=self._pair(t.get('position'), (0.0, 0.0)),
+                scale=self._pair(t.get('scale'), (1.0, 1.0)),
+                rotation=rotation,
+                anchor=self._pair(t.get('anchor'), (0.0, 0.0)),
+                animated=any(p.find('keyframeAnimation') is not None for p in t.findall('param')),
+            )
+        effects = tuple(child.tag for child in elem if child.tag in _UNDRAWN_VISUAL_TAGS)
+        return conform, transform, effects
+
     def _parse_project(self, project: ET.Element) -> Optional[Timeline]:
         """Parse a project element into a Timeline."""
         name = project.get('name', 'Untitled')
@@ -259,6 +356,11 @@ class FCPXMLParser:
     def _parse_spine(self, spine: ET.Element, timeline: Timeline):
         """Parse the spine (primary storyline) including connected clips."""
         current_offset = 0
+        # Where the previous element ended, on the spine's OWN clock (its
+        # offset attributes, which may begin at tcStart rather than 0). A
+        # transition's offset is on that clock too, so the two subtract to
+        # how much of it runs before the cut.
+        raw_cut = None
         for elem in spine:
             tag = elem.tag
             if tag in ('asset-clip', 'clip', 'video', 'mc-clip', 'sync-clip', 'ref-clip'):
@@ -273,9 +375,18 @@ class FCPXMLParser:
                     elem, current_offset, self._tc(elem, 'start').frames, timeline)
                 current_offset += gap_frames
             elif tag == 'transition':
-                transition = self._parse_transition(elem, current_offset)
+                transition = self._parse_transition(elem, current_offset, raw_cut)
                 if transition:
                     timeline.transitions.append(transition)
+                continue
+            elif tag in _SPINE_TIME_ONLY_TAGS:
+                current_offset += self._tc(elem, 'duration').frames
+            else:
+                continue
+            try:
+                raw_cut = parse_seconds(elem.get('offset')) + parse_seconds(elem.get('duration'))
+            except ValueError:
+                raw_cut = None
 
     def _parse_clip(self, elem: ET.Element, offset: int) -> Optional[Clip]:
         """Parse a clip element."""
@@ -284,6 +395,7 @@ class FCPXMLParser:
         source_start = self._tc(elem, 'start')
         media_path = self._media_path_for(elem)
 
+        conform, transform, effects = self._picture_of(elem)
         clip = Clip(
             name=name,
             start=Timecode(frames=offset, frame_rate=self.frame_rate),
@@ -292,6 +404,10 @@ class FCPXMLParser:
             media_path=media_path,
             audio_role=elem.get('audioRole', ''),
             video_role=elem.get('videoRole', ''),
+            media=self._media_ref_for(elem),
+            conform=conform,
+            transform=transform,
+            effects=effects,
         )
 
         clip.markers.extend(self._collect_markers(elem, offset, source_start.frames))
@@ -358,12 +474,34 @@ class FCPXMLParser:
             duration=self._tc(elem, 'duration') if elem.get('duration') else None,
         )
 
-    def _parse_transition(self, elem: ET.Element, offset: int) -> Optional[Transition]:
-        """Parse a transition element."""
+    def _parse_transition(self, elem: ET.Element, offset: int,
+                          raw_cut=None) -> Optional[Transition]:
+        """Parse a transition element.
+
+        ``start`` stays the cut it sits on. ``lead`` is how much of it runs
+        before that cut, from its own ``offset``; Final Cut centres a new
+        transition, but an edit can leave it anywhere across the cut.
+        ``transition_type`` is left empty: the document says what the
+        transition is by ``name``, and the model's "cross-dissolve" default
+        would otherwise vouch for every unrecognised one.
+        """
+        duration = self._tc(elem, 'duration', '1s')
+        lead = None
+        if raw_cut is not None and elem.get('offset') is not None:
+            try:
+                before = raw_cut - parse_seconds(elem.get('offset'))
+                length = parse_seconds(elem.get('duration', '1s'))
+            except ValueError:
+                before = None
+            if before is not None and 0 <= before <= length:
+                lead = Timecode(frames=round(Fraction(before) * rational_fps(self.frame_rate)),
+                                frame_rate=self.frame_rate)
         return Transition(
             name=elem.get('name', 'Cross Dissolve'),
-            duration=self._tc(elem, 'duration', '1s'),
-            start=Timecode(frames=offset, frame_rate=self.frame_rate)
+            duration=duration,
+            start=Timecode(frames=offset, frame_rate=self.frame_rate),
+            transition_type='',
+            lead=lead,
         )
 
     def get_library_clips(self, keywords: Optional[list] = None) -> list:
@@ -463,12 +601,15 @@ class FCPXMLParser:
             frame_rate=self.frame_rate,
         )
 
+        conform, transform, effects = self._picture_of(elem)
         connected = ConnectedClip(
             name=name, start=start, duration=duration,
             lane=lane, offset=offset, source_start=start,
             media_path=media_path, clip_type=elem.tag, role=role,
             ref_id=ref, parent_clip_name=parent_name,
             timeline_start=timeline_start, text=text,
+            media=self._media_ref_for(elem), conform=conform,
+            transform=transform, effects=effects,
         )
 
         connected.markers.extend(

@@ -2,7 +2,79 @@
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-02
+
+`preview_render` rebuilt around one rule: **the proxy is exactly as long as
+the timeline, and every instant of it is the timeline's own picture or a
+black substitute the report names.** Reported by John Palchak by email
+against 0.27.1 (ffmpeg 9.0.2, FCPXML 1.14 from Final Cut 12.3): a transition
+beside a short clip emptied the render, a PNG still on the spine rendered an
+empty MP4, and connected clips on lane 2 were logged "drawn" and never
+appeared. All three, and the rest below, came from one mistake: Final Cut's
+clocks were read as if they were the file's clock.
+
+A minor version, not a patch, because `preview_render`'s output changes:
+an editor mid-cut who compares a 0.27 proxy with a 0.28 one will see a
+different length wherever there are transitions or gaps.
+
+### Changed
+- **A transition no longer shortens the proxy.** Final Cut draws a
+  transition on the media OUTSIDE both clips' used ranges and moves no
+  offsets, so the timeline keeps its length; the proxy now does the same.
+  The outgoing clip runs on into its tail handle, the incoming one starts in
+  its head handle, and the xfade begins where the transition's own `offset`
+  says (no longer assumed centred). A transition is never squeezed to a
+  short neighbour's length. Where the file has no handle the edge frame is
+  held, and the report says which clip and for how long.
+- **Connected clips are drawn at their `adjust-conform` and
+  `adjust-transform`** (scale, and position in percent of frame height from
+  the centre, y up), on a canvas of the SEQUENCE's shape: fit letterboxes,
+  fill crops, none keeps native pixels. The "drawn full-frame" line that sat
+  on every lane is gone; the report now names only what is not drawn (crop,
+  corner pin, blend, effects, rotation, anchor, keyframed transforms).
+- **"Drawn" is measured, not claimed.** After rendering, the frame at the
+  middle of each lane clip's window is cut out of the proxy at the clip's
+  placement and compared with its source; the report says `Seen in the
+  render`, `NOT drawn` or `Not checked` (and why) per clip.
+- **A render is VERIFIED only when the artifact is within one proxy frame
+  of the timeline and every checked lane was seen.** A proxy ffmpeg wrote
+  with no readable video is now an error, not a "Rendered:" line, and no
+  longer opens the `deliver` review gate.
+
 ### Fixed
+- **Clips of different shapes render** (a vertical phone clip beside a 16:9
+  one, 4:3 beside 16:9). Each source used to be scaled to its own width, and
+  concat and xfade both refuse inputs of different sizes, failing the whole
+  render with "Nothing was written into output file, because at least one of
+  its streams received no packets": the error John quoted for his first case,
+  reproduced here on ffmpeg 9.0.1 and 9.0.2.
+- **A still on the spine renders.** Final Cut gives a still `start="3600s"`
+  and the renderer seeked 3600 s into a one-frame image. Stills are now
+  detected (zero asset duration, an image extension, or ffprobe) and looped.
+- **Timecoded media renders.** A clip's `start` is on the asset's clock,
+  which begins at `<asset start>` (3600 s for 01:00:00:00). The file position
+  is `start - origin`; the renderer read `start` as a file time and found
+  nothing. `preview_sheet` had the same bug and the same fix.
+- **Connected clips appear where the timeline puts them.** Their raw
+  `offset` is in the PARENT's clock (a trimmed clip's in-point, a gap's or
+  still's 3600 s), and the renderer used it as a timeline time, so a clip
+  on a gap landed an hour past the end. It now reads `timeline_start`, which
+  the parser already resolved for the HTML preview in 0.24.
+- **Gaps keep their time.** The spine was concatenated clip to clip, so a gap
+  vanished and everything after it played early.
+- **One clip with no picture no longer empties the render.** Each source is
+  probed first; a clip whose file has no picture where the timeline asks
+  for one (past the end, audio only, missing) is drawn black on the spine,
+  or left off its lane, with a note naming it. If ffmpeg still refuses the
+  graph, the render retries with transitions as hard cuts, then without
+  connected clips, and says which fallback it took.
+- **An unrecognised transition says so.** The parser left every transition
+  on the model's `"cross-dissolve"` default type, which vouched for "Color
+  Panels" and friends, so they previewed as dissolves without a word. The
+  parsed type is now empty and the name decides.
+- **A title (or audio, audition, caption) on the primary storyline takes
+  its time.** The parser skipped it without advancing, so every clip after
+  a spine title was placed early by the title's length, in every tool.
 - **Publish: the MCP registry check now retries a failed read.** Under
   `bash -e` an empty registry reply ended the step on its first attempt, so
   v0.27.2's run went red 20 s after a publish the registry did serve.

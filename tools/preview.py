@@ -85,7 +85,19 @@ def _describe(result: dict) -> str:
             lines.append(
                 "Duration could NOT be read back — treat this render as UNVERIFIED."
             )
+        if result.get("verified") is False and duration is not None:
+            lines.append(
+                "UNVERIFIED: the render does not match the timeline "
+                "(see the drift above and the lane checks below)."
+            )
     lines += _crossfade_line(result.get("transitions") or ())
+    for label, verdict, detail in result.get("lanes") or ():
+        if verdict is True:
+            lines.append(f"Seen in the render: {label} ({detail})")
+        elif verdict is False:
+            lines.append(f"NOT drawn: {label} is not in the render ({detail})")
+        else:
+            lines.append(f"Not checked: {label} ({detail})")
     for note in result.get("substitutions") or ():
         lines.append(f"Substituted: {note}")
     if result.get("skipped"):
@@ -122,14 +134,17 @@ async def handle_preview_sheet(args: dict):
     graph = filtergraph.compile_timeline(timeline)
     out_dir = render.cache_dir()
     written, skipped = [], []
-    for index, segment in enumerate(s for s in graph.segments if s.lane == 0):
+    clips = (s for s in graph.segments if s.lane == 0 and s.kind == "clip")
+    for index, segment in enumerate(clips):
         if segment.missing:
             skipped.append(segment.label)
             continue
         target = str(out_dir / f"sheet_{index:04d}.png")
         # Mid-clip, so the frame is representative rather than a fade-in.
+        # file_time, not src_in: the source time is on the asset's clock
+        # (a camera's timecode), and a still has no clock at all.
         frame = render.render_frame(
-            segment.source, segment.src_in + segment.duration / 2, target
+            segment.source, segment.file_time(segment.duration / 2), target
         )
         (written if frame else skipped).append(frame or segment.label)
 
@@ -208,7 +223,7 @@ async def handle_preview_timeline(args: dict):
             continue
         left = int(float(segment.tl_in) / total * TIMELINE_BAR_WIDTH)
         span = max(1, int(float(segment.duration) / total * TIMELINE_BAR_WIDTH))
-        bar = " " * left + "#" * span
+        bar = " " * left + ("." if segment.kind == "gap" else "#") * span
         flag = "  [MEDIA MISSING]" if segment.missing else ""
         lines.append(f"{bar:<{TIMELINE_BAR_WIDTH}} {segment.label}{flag}")
     lines += _crossfade_line(graph.transitions)
