@@ -36,6 +36,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .media_intel import file_in_point
 from .rational import fcp_frame_rate_name, nominal_fps, rational_fps
 
 APP_URI = "ui://fcp/timeline"
@@ -221,11 +222,14 @@ def build_payload(
             _frac(item.start) if connected and item.start else Fraction(0)
         )
         media = getattr(item, "media_path", "") or ""
+        # Words and thumbnails come from the FILE; ``src`` above is on the
+        # asset clock and stays what the payload shows.
+        file_src = file_in_point(item) if getattr(item, "source_start", None) else src
         role = (getattr(item, "role", "") or getattr(item, "video_role", "")
                 or getattr(item, "audio_role", "") or "")
         words = []
         if words_left > 0:
-            words = _words_for(pos, src, dur, _transcript(media))[:words_left]
+            words = _words_for(pos, file_src, dur, _transcript(media))[:words_left]
             words_left -= len(words)
         row = {
             "id": f"{'c' if connected else 's'}{index}",
@@ -237,6 +241,7 @@ def build_payload(
             "duration": rational(dur),
             "end": rational(pos + dur),
             "source_start": rational(src),
+            "file_start": rational(file_src),
             "media": media,
             "role": role,
             "keywords": [k.value for k in getattr(item, "keywords", []) or []],
@@ -244,7 +249,7 @@ def build_payload(
                 getattr(item, "markers", []) or [], Fraction(0) if connected else origin
             ),
             "words": words,
-            "thumb": _thumb(media, src + dur / 2) if media else None,
+            "thumb": _thumb(media, file_src + dur / 2) if media else None,
         }
         clips.append(row)
         lanes_seen.setdefault(lane, []).append(row["id"])

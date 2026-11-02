@@ -105,7 +105,7 @@ def _broll_target(args: dict, payload: dict) -> Target:
     seconds = _seconds(args.get("seconds"), "seconds", Fraction(5))
     frame, note = (None, "generated from the prompt alone")
     if args.get("condition_on_frame", True) is not False:
-        frame, note = _frame_of(clip["media"], Fraction(clip["source_start"]) + into, "broll")
+        frame, note = _frame_of(clip["media"], Fraction(clip.get("file_start", clip["source_start"])) + into, "broll")
     return {"at": start + into, "seconds": seconds, "name": f"broll-{_slug(clip['name'])}",
             "frame": frame, "note": f"B-roll over '{clip['name']}' from {float(start + into):.2f}s; {note}"}
 
@@ -115,7 +115,7 @@ def _extend_target(args: dict, payload: dict) -> Target:
     end, dur = Fraction(clip["end"]), Fraction(clip["duration"])
     seconds = _seconds(args.get("seconds"), "seconds", Fraction(5))
     # The LAST frame of the clip, so the generation continues the shot.
-    last = Fraction(clip["source_start"]) + dur - Fraction(1, 1000)
+    last = Fraction(clip.get("file_start", clip["source_start"])) + dur - Fraction(1, 1000)
     frame, note = _frame_of(clip["media"], max(last, Fraction(0)), "extend")
     return {"at": end, "seconds": seconds, "name": f"extend-{_slug(clip['name'])}",
             "frame": frame, "note": f"continuing '{clip['name']}' from its out point at {float(end):.2f}s; {note}"}

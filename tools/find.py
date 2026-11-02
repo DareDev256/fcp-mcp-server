@@ -19,7 +19,7 @@ import tools
 from fcpxml import diversity, find, vlm
 from fcpxml import index as _index
 from fcpxml import progress as _progress
-from fcpxml.media_intel import media_src_to_path
+from fcpxml.media_intel import file_in_point, media_src_to_path
 from fcpxml.models import TimeValue
 from fcpxml.rough_cut import RoughCutGenerator
 from tools import media as _media
@@ -39,7 +39,13 @@ class _Ctx:
         self.clip = clip
         self.media_path = media_path
         self.ref = ref
-        self.src_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
+        # File time, like every transcript word and caption it is matched to.
+        # ``origin`` turns a file time back into the asset clock, which is
+        # what an in-point WRITTEN to FCPXML (or shown beside Final Cut's own
+        # source timecode) has to be on.
+        self.src_start = file_in_point(clip)
+        asset_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
+        self.origin = asset_start - self.src_start
         self.src_end = self.src_start + Fraction(clip.duration._exact_seconds)
         self.transcript = None
 
@@ -265,7 +271,8 @@ async def handle_find_shots(args: dict):
         rows = []
         for i, h in enumerate(r["hits"], 1):
             ctx = r["by_name"][h.clip_name]
-            rows.append([str(i), h.clip_name, _fmt(h.start), _fmt(h.end), _fmt(ctx.timeline_seconds(h.start)),
+            rows.append([str(i), h.clip_name, _fmt(h.start + ctx.origin), _fmt(h.end + ctx.origin),
+                         _fmt(ctx.timeline_seconds(h.start)),
                          h.tier, f"{h.score:.2f}", h.why])
         out += srv._markdown_table(["#", "Clip", "Source in", "Source out", "Timeline", "Tier", "Score", "Why"], rows)
         out += "\n\n*Next: `find_to_timeline` with the same query to assemble these into a selects reel.*"
@@ -362,7 +369,7 @@ async def handle_find_to_timeline(args: dict):
         dur = max(h.end - h.start, Fraction(1))
         selections.append({
             "ref": ctx.ref or "r1", "name": h.clip_name,
-            "in_point": TimeValue.from_seconds(float(h.start), gen.fps),
+            "in_point": TimeValue.from_seconds(float(h.start + ctx.origin), gen.fps),
             "use_duration": TimeValue.from_seconds(float(dur), gen.fps),
         })
     total, _ = gen._build_output(selections, output_path, False, "00:00:00:01")

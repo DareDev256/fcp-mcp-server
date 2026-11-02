@@ -27,7 +27,12 @@ from mcp.types import TextContent
 from fcpxml import index as _index
 from fcpxml import progress as _progress
 from fcpxml import transcript_pack as _tpack
-from fcpxml.media_intel import map_silence_to_timeline, media_src_to_path
+from fcpxml.media_intel import (
+    asset_origin_seconds,
+    file_in_point,
+    map_silence_to_timeline,
+    media_src_to_path,
+)
 from fcpxml.models import TimeValue
 from fcpxml.transcribe import (
     BACKENDS,
@@ -125,7 +130,8 @@ async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
         if silences is None:
             skipped.append((clip.name, "unanalyzable (ffmpeg missing or media unreadable)"))
             continue
-        source_start = clip.source_start.seconds if clip.source_start else 0.0
+        # File time, like the silences: the in-point is on the asset clock.
+        source_start = float(file_in_point(clip))
         mapped = map_silence_to_timeline(
             silences, source_start, clip.duration.seconds, clip.start.seconds,
             min_mapped=(1.0 / tl.frame_rate if tl.frame_rate else 0.0),
@@ -203,7 +209,11 @@ async def handle_remove_media_silence(arguments: dict) -> Sequence[TextContent]:
             skipped.append((name, "unanalyzable (ffmpeg missing or media unreadable)"))
             continue
 
-        clip_source_start = modifier._parse_time(el.get("start", "0s")).to_seconds()
+        # File time, like the silences (see media_intel.file_in_point).
+        clip_source_start = (
+            modifier._parse_time(el.get("start", "0s")).to_seconds()
+            - asset_origin_seconds(modifier.resources, el.get("ref", ""))
+        )
         clip_duration = modifier._parse_time(el.get("duration", "0s")).to_seconds()
         cut_ranges = []
         for sil_start, sil_end in silences:
@@ -416,7 +426,11 @@ def _cut_transcript_spans(modifier, clip_filter, model, language, padding, spans
             skipped.append((name, reason))
             continue
 
-        clip_source_start = modifier._parse_time(el.get("start", "0s")).to_seconds()
+        # File time, like the transcript's words (see media_intel.file_in_point).
+        clip_source_start = (
+            modifier._parse_time(el.get("start", "0s")).to_seconds()
+            - asset_origin_seconds(modifier.resources, el.get("ref", ""))
+        )
         clip_duration = modifier._parse_time(el.get("duration", "0s")).to_seconds()
         window_start = clip_source_start
         window_end = clip_source_start + clip_duration
