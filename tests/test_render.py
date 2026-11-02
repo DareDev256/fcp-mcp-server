@@ -214,7 +214,7 @@ def test_a_failing_ffmpeg_reports_its_own_stderr(bars, tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
-def test_a_compiled_crossfade_renders_and_shortens_the_artifact(bars, tmp_path):
+def test_a_compiled_crossfade_renders_and_keeps_the_timeline_length(bars, tmp_path):
     """The graph is only right if ffmpeg accepts it and the result overlaps.
 
     Every other transition test asserts the argument list. A malformed
@@ -245,8 +245,8 @@ def test_a_compiled_crossfade_renders_and_shortens_the_artifact(bars, tmp_path):
 
     assert result["error"] is None, result["error"]
     assert len(result["transitions"]) == 1
-    # 2s + 2s overlapped by 1s.
-    assert result["expected"] == Fraction(3, 1)
+    # 2s + 2s: a transition draws on handles and moves no offsets.
+    assert result["expected"] == Fraction(4, 1)
     assert result["duration"] is not None
     assert abs(result["drift"]) < Fraction(1, 8), result["drift"]
 
@@ -263,7 +263,7 @@ def test_a_lane_overlay_renders_and_changes_the_picture(bars, tmp_path):
 
     def timeline(with_lane):
         return Timeline(
-            name="L", duration=Timecode(frames=96, frame_rate=fps), frame_rate=fps,
+            name="L", duration=Timecode(frames=48, frame_rate=fps), frame_rate=fps,
             clips=[Clip(
                 name="a", start=Timecode(frames=0, frame_rate=fps),
                 duration=Timecode(frames=48, frame_rate=fps),
@@ -294,6 +294,8 @@ def test_a_lane_overlay_renders_and_changes_the_picture(bars, tmp_path):
     assert render.render_frame(str(composited), Fraction(3, 2), str(inside[0]))
     assert render.render_frame(str(plain), Fraction(3, 2), str(inside[1]))
     assert inside[0].read_bytes() != inside[1].read_bytes()
+    # And the render's own report measured it there, rather than claiming it.
+    assert [verdict for _, verdict, _ in result["lanes"]] == [True]
 
 
 def test_a_nonsense_frame_cap_raises_rather_than_skipping_the_shot():

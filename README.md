@@ -651,15 +651,20 @@ still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 #### v0.17.0 — Preview — 5 group actions
 `preview_render` · `preview_sheet` · `preview_frame` · `preview_check` · `preview_timeline`
 
-Since v0.20.0 `preview_render` compiles crossfades and video lanes rather than
-flattening them: a transition on a cut becomes an ffmpeg `xfade` (dissolve, dip
-to colour, wipe, slide), and a connected clip is overlaid for its own window,
-shifted by any crossfade that shortened the timeline before it. What the
-renderer cannot honour is printed with the render — a transition with no cut
-within its own duration, one whose neighbour is missing its media, a lane
-drawn full-frame because transforms and opacity are not read, and audio lanes,
-which are never mixed. The reported duration accounts for the overlaps, and
-`preview_render` reads the artifact's own duration back against it.
+Since v0.28.0 the proxy is exactly as long as the timeline, and every instant
+of it is the timeline's own picture or a black substitute the report names.
+A transition becomes an ffmpeg `xfade` (dissolve, dip to colour, wipe, slide)
+drawn on the clips' handles the way Final Cut draws it, so it moves nothing;
+gaps keep their time; stills loop; timecoded media is read on its own clock;
+connected clips are placed by their resolved timeline position and drawn at
+their conform, scale and position on a canvas of the sequence's shape. A clip
+whose file has no picture where the timeline needs one is shown black or left
+off its lane, by name, instead of failing the render. After rendering, the
+artifact's own duration is read back against the timeline and each lane clip
+is looked for in the frame (`Seen in the render` / `NOT drawn`), so "drawn"
+is a measurement. What the proxy cannot draw is printed with it: crop, corner
+pin, blend modes, effects, rotation, keyframed transforms, titles, and audio,
+which is never mixed.
 
 #### v0.17.0 — Watch — 4 group actions
 `watch_start` · `watch_status` · `watch_stop` · `watch_pull`
@@ -760,10 +765,12 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── transcribe.py      Local faster-whisper, or ElevenLabs Scribe opt-in (speakers, events)
 │   ├── filtergraph.py     Timeline → ffmpeg graph. PURE — Fraction end to end,
 │   │                       so compilation is asserted without ffmpeg installed.
-│   │                       xfade crossfades + full-frame lane overlays; what it
-│   │                       cannot honour is reported, never silently dropped
-│   ├── render.py          Executes the graph; probes the artifact's OWN duration
-│   │                       back and reports drift against the timeline rational
+│   │                       Output time IS timeline time: handle-drawn xfades,
+│   │                       gaps, stills, asset clocks, conform + transform; what
+│   │                       it cannot honour is reported, never silently dropped
+│   ├── render.py          Probes every source, executes the graph with fallbacks,
+│   │                       reads the artifact's OWN duration back and looks for
+│   │                       every lane clip in the frame
 │   ├── visual.py          Filmstrip + waveform from SOURCE MEDIA (preview_check)
 │   ├── watchfolder.py     Export detection. Digests CONTENT, not (mtime, size)
 │   ├── bridges.py         SpliceKit :9876 / CommandPost :27480 — DETECTION ONLY
@@ -783,7 +790,7 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 2379 tests across 85 suites (collected 2026-10-24) — see Testing below
+├── tests/                 2402 tests across 86 suites (collected 2026-11-02) — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -931,7 +938,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-2373 tests across 85 suites — 2366 pass and 7 skip locally on v0.27.1 (`mcp` 1.28.1, measured 2026-10-20); 2367 pass and 6 skip on `mcp` 2.x; 2342 pass and 31 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+2402 tests across 86 suites — 2395 pass and 7 skip locally on v0.28.0 (`mcp` 1.28.1, ffmpeg 9.0.1 and 9.0.2, measured 2026-11-02); 2396 pass and 6 skip on `mcp` 2.x; 2371 pass and 31 skip with `FCP_MCP_INDEX=off`; CI on Ubuntu (ffmpeg 6.1, no Final Cut Pro) runs 2375 pass / 27 skip (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 

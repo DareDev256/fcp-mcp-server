@@ -11,7 +11,7 @@ from fractions import Fraction
 import pytest
 
 from fcpxml.filtergraph import compile_timeline, graph_to_args
-from fcpxml.models import Clip, ConnectedClip, Timecode, Timeline, Transition
+from fcpxml.models import Clip, ConnectedClip, Timecode, Timeline, Transform, Transition
 
 NTSC_24 = 24000 / 1001
 
@@ -119,13 +119,17 @@ def test_a_transition_on_absent_media_is_reported_rather_than_compiled():
     )
     graph = compile_timeline(tl)
     assert graph.transitions == ()
-    assert len(graph.substitutions) == 1
-    assert "Cross Dissolve" in graph.substitutions[0]
-    assert "hard cut" in graph.substitutions[0]
+    transition_notes = [n for n in graph.substitutions if "Cross Dissolve" in n]
+    assert len(transition_notes) == 1
+    assert "hard cut" in transition_notes[0]
+    # The clips themselves are named as black, not silently dropped.
+    assert sum("shown black" in n for n in graph.substitutions) == 2
 
 
-def test_no_transitions_means_no_substitutions():
-    assert compile_timeline(_timeline([_clip("a", 0, 24)])).substitutions == ()
+def test_no_transitions_and_present_media_means_no_substitutions(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    assert compile_timeline(_timeline([_clip("a", 0, 24, path=str(media))])).substitutions == ()
 
 
 def test_args_are_a_list_never_a_shell_string(tmp_path):
@@ -185,14 +189,20 @@ def test_a_dissolve_on_a_cut_compiles_to_an_xfade(tmp_path):
     compiled = graph.transitions[0]
     assert (compiled.boundary, compiled.kind) == (0, "fade")
     assert compiled.duration == Fraction(4, 24)
-    assert graph.substitutions == ()
-    # The render is shorter than the sum of the cuts by the overlap.
-    assert graph.total == Fraction(48, 24) - Fraction(4, 24)
+    # Centred on the cut at frame 24: it runs 22..26.
+    assert (compiled.start, compiled.end) == (22, 26)
+    # A transition moves no offsets: the timeline, and so the render, keep
+    # their length. Before 0.28 the render came out 4 frames short.
+    assert graph.total == Fraction(48, 24)
 
     args = graph_to_args(graph, "/tmp/out.mp4", height=360)
     chain = args[args.index("-filter_complex") + 1]
-    assert "xfade=transition=fade:duration=0.166667:offset=0.833333[vout]" in chain
+    # Output time is timeline time: the xfade starts where the transition does.
+    assert "xfade=transition=fade:duration=0.166667:offset=0.916667[vout]" in chain
     assert "concat" not in chain
+    # The outgoing clip runs on into its tail handle (0..26), the incoming
+    # one starts in its head handle (22..48).
+    assert [(p.start, p.frames) for p in graph.pieces] == [(0, 26), (22, 26)]
 
 
 def test_an_unrecognised_transition_still_renders_but_says_so(tmp_path):
@@ -232,16 +242,52 @@ def test_a_transition_beside_missing_media_is_reported_as_a_hard_cut(tmp_path):
     assert "missing its media" in graph.substitutions[0]
 
 
-def test_a_transition_longer_than_its_neighbours_is_shortened_to_fit(tmp_path):
+def test_a_transition_longer_than_a_neighbour_keeps_its_length(tmp_path):
+    """John Palchak's case 1: a 1.87s transition beside a 1.27s clip.
+
+    Before 0.28 it was squeezed to the short clip's whole length, which handed
+    xfade a second input that was nothing but transition, and the render
+    failed with "Nothing was written into output file". Final Cut draws a
+    transition on HANDLES, so the short clip only has to cover the half after
+    the cut.
+    """
     media = tmp_path / "a.mov"
     media.write_bytes(b"\x00")
     tl = _timeline(
-        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 6, path=str(media))],
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 8, path=str(media))],
         transitions=[_transition("Cross Dissolve", 24, duration_frames=12)],
     )
     graph = compile_timeline(tl)
-    assert graph.transitions[0].duration == Fraction(6, 24)
-    assert "shortened to 0.25s" in graph.substitutions[0]
+    assert graph.transitions[0].duration == Fraction(12, 24)
+    assert not any("shortened" in n or "clipped" in n for n in graph.substitutions)
+    assert graph.total == Fraction(32, 24)
+
+
+def test_a_transition_that_overruns_its_clip_is_clipped_and_reported(tmp_path):
+    """Final Cut never exports this, but our own writers could: a centred
+    12-frame transition into a 4-frame clip would end after the clip does."""
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 4, path=str(media))],
+        transitions=[_transition("Cross Dissolve", 24, duration_frames=12)],
+    )
+    graph = compile_timeline(tl)
+    compiled = graph.transitions[0]
+    assert compiled.end <= 27 and compiled.start == 18
+    assert any("clipped to" in n for n in graph.substitutions)
+
+
+def test_a_transition_uses_its_own_lead_not_an_assumed_centre(tmp_path):
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    transition = _transition("Cross Dissolve", 24, duration_frames=12)
+    transition.lead = Timecode(frames=0, frame_rate=24.0)
+    tl = _timeline(
+        [_clip("a", 0, 24, path=str(media)), _clip("b", 24, 24, path=str(media))],
+        transitions=[transition],
+    )
+    assert (compile_timeline(tl).transitions[0].start, compile_timeline(tl).transitions[0].end) == (24, 36)
 
 
 def test_two_transitions_cannot_share_one_cut(tmp_path):
@@ -265,7 +311,7 @@ def test_a_wipe_compiles_to_a_wipe_not_a_dissolve(tmp_path):
     )
     graph = compile_timeline(tl)
     assert graph.transitions[0].kind == "wipeleft"
-    assert graph.substitutions == ()
+    assert not any("Wipe" in n for n in graph.substitutions)
 
 
 def test_untransitioned_cuts_beside_an_xfade_stay_concats(tmp_path):
@@ -281,8 +327,8 @@ def test_untransitioned_cuts_beside_an_xfade_stay_concats(tmp_path):
     )
     args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
     chain = args[args.index("-filter_complex") + 1]
-    assert "[v0][v1]xfade=transition=fade:duration=0.166667:offset=0.833333[x1]" in chain
-    assert "[x1][v2]concat=n=2:v=1:a=0[vout]" in chain
+    assert "[p0][p1]xfade=transition=fade:duration=0.166667:offset=0.916667[x1]" in chain
+    assert "[x1][p2]concat=n=2:v=1:a=0[vout]" in chain
 
 
 def test_a_timeline_without_transitions_still_uses_one_nway_concat(tmp_path):
@@ -293,7 +339,7 @@ def test_a_timeline_without_transitions_still_uses_one_nway_concat(tmp_path):
     )
     args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
     chain = args[args.index("-filter_complex") + 1]
-    assert "[v0][v1]concat=n=2:v=1:a=0[vout]" in chain
+    assert "[p0][p1]concat=n=2:v=1:a=0[vout]" in chain
     assert "xfade" not in chain
 
 
@@ -322,15 +368,20 @@ def test_a_video_lane_is_overlaid_for_its_own_window_only(tmp_path):
     args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4", height=360)
     chain = args[args.index("-filter_complex") + 1]
 
-    assert "setpts=PTS-STARTPTS+1.000000/TB[l1]" in chain
-    assert "overlay=eof_action=pass:enable='between(t,1.000000,2.000000)'[vout]" in chain
+    # One transparent track from frame 0: 24 clear frames, then the clip's
+    # 24 frames, composited over the base in step with it.
+    assert "format=yuva420p,trim=end_frame=24,setpts=PTS-STARTPTS[t0g0]" in chain
+    assert "[t0g0][t0p1]concat=n=2:v=1:a=0[track0]" in chain
+    assert "[base][track0]overlay=x=0:y=0:eof_action=pass:format=yuv420[vout]" in chain
+    assert "enable=" not in chain
     # The lane's source is opened as its own input, after the spine's.
     assert args.count("-i") == 2
 
 
-def test_a_crossfade_before_a_lane_shifts_the_overlay_back(tmp_path):
-    """The render is shorter than the timeline from the cut onwards, so an
-    overlay placed at its raw timeline time would sit late by the overlap."""
+def test_a_crossfade_before_a_lane_no_longer_moves_it(tmp_path):
+    """Output time is timeline time, so a lane after a crossfade sits at its
+    own timeline frame. Before 0.28 the render was shorter than the timeline
+    and every later overlay had to be shifted back to match."""
     media = tmp_path / "a.mov"
     media.write_bytes(b"\x00")
     tl = _timeline(
@@ -340,9 +391,8 @@ def test_a_crossfade_before_a_lane_shifts_the_overlay_back(tmp_path):
     )
     args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
     chain = args[args.index("-filter_complex") + 1]
-    # Timeline 2.0s, minus the 0.5s the crossfade removed before it.
-    assert "setpts=PTS-STARTPTS+1.500000/TB" in chain
-    assert "enable='between(t,1.500000,2.000000)'" in chain
+    assert "format=yuva420p,trim=end_frame=48,setpts=PTS-STARTPTS[t0g0]" in chain
+    assert "trim=end_frame=12,setpts=PTS-STARTPTS,format=yuva420p[t0p1]" in chain
 
 
 def test_a_lane_whose_media_is_missing_is_not_drawn_but_is_reported(tmp_path):
@@ -354,19 +404,34 @@ def test_a_lane_whose_media_is_missing_is_not_drawn_but_is_reported(tmp_path):
     )
     graph = compile_timeline(tl)
     args = graph_to_args(graph, "/tmp/out.mp4")
-    assert "overlay" not in args[args.index("-filter_complex") + 1]
+    assert "[l0]" not in args[args.index("-filter_complex") + 1]
+    assert graph.lanes == ()
     assert any("its media is missing" in note for note in graph.substitutions)
 
 
 def test_lane_compositing_says_what_it_cannot_read(tmp_path):
     media = tmp_path / "a.mov"
     media.write_bytes(b"\x00")
+    lane = _lane("broll", 1, 0, 24, str(media))
+    lane.effects = ("adjust-crop", "filter-video")
+    lane.transform = Transform(rotation=15.0)
+    tl = _timeline([_clip("a", 0, 48, path=str(media))], connected_clips=[lane])
+    notes = compile_timeline(tl).substitutions
+    undrawn = next(n for n in notes if "cannot render" in n)
+    assert "adjust-crop" in undrawn and "filter-video" in undrawn and "rotation" in undrawn
+
+
+def test_a_plain_lane_carries_no_caveat(tmp_path):
+    """Conform and transform are drawn now, so an unadjusted lane needs no
+    "drawn full-frame" disclaimer — that line used to sit on every lane,
+    including the ones that were never drawn at all."""
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
     tl = _timeline(
         [_clip("a", 0, 48, path=str(media))],
         connected_clips=[_lane("broll", 1, 0, 24, str(media))],
     )
-    notes = compile_timeline(tl).substitutions
-    assert any("drawn full-frame" in note and "opacity" in note for note in notes)
+    assert compile_timeline(tl).substitutions == ()
 
 
 def test_an_audio_lane_is_reported_rather_than_silently_dropped(tmp_path):
@@ -378,9 +443,9 @@ def test_an_audio_lane_is_reported_rather_than_silently_dropped(tmp_path):
     )
     graph = compile_timeline(tl)
     assert any("audio lanes are not mixed" in note for note in graph.substitutions)
-    assert "overlay" not in graph_to_args(graph, "/tmp/out.mp4")[
-        graph_to_args(graph, "/tmp/out.mp4").index("-filter_complex") + 1
-    ]
+    args = graph_to_args(graph, "/tmp/out.mp4")
+    # The only overlay is the spine piece onto its own canvas.
+    assert "[l0]" not in args[args.index("-filter_complex") + 1]
 
 
 def test_two_video_lanes_stack_in_lane_order(tmp_path):
@@ -397,5 +462,26 @@ def test_two_video_lanes_stack_in_lane_order(tmp_path):
         graph_to_args(compile_timeline(tl), "/tmp/out.mp4").index("-filter_complex") + 1
     ]
     # lane 1 composites onto the spine, lane 2 onto the result of lane 1.
-    assert "[base][l1]overlay" in chain
-    assert "[o1][l2]overlay" in chain and chain.endswith("[vout]")
+    assert "[base][track0]overlay" in chain
+    assert "[o0][track1]overlay" in chain and chain.endswith("[vout]")
+    graph = compile_timeline(tl)
+    assert [graph.segments[p.segment].label for p in graph.lanes] == ["under", "top"]
+
+
+def test_clips_on_one_lane_share_a_track_unless_they_overlap(tmp_path):
+    from fcpxml.filtergraph import lane_tracks
+
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 96, path=str(media))],
+        connected_clips=[
+            _lane("one", 1, 0, 24, str(media)),
+            _lane("two", 1, 48, 24, str(media)),
+            _lane("clash", 1, 60, 24, str(media)),
+            _lane("high", 2, 0, 24, str(media)),
+        ],
+    )
+    graph = compile_timeline(tl)
+    labels = [[graph.segments[p.segment].label for p in track] for track in lane_tracks(graph)]
+    assert labels == [["one", "two"], ["clash"], ["high"]]

@@ -618,6 +618,47 @@ class Marker:
         return f"{minutes}:{secs:02d}"
 
 
+@dataclass(frozen=True)
+class MediaRef:
+    """What the FCPXML says about the file behind a clip.
+
+    ``origin`` is the asset's own clock start (``<asset start>``). A clip's
+    ``start`` is written on that clock, so the position in the FILE is
+    ``start - origin``: a camera clip with 01:00:00:00 timecode has an origin
+    of 3600s, and seeking 3600s into an 8-second file finds nothing.
+
+    ``still`` is an image. Final Cut gives a still a zero asset duration and
+    an arbitrary ``start`` (3600s), so a still has no clock at all: every
+    instant of it is its one picture.
+
+    ``width``/``height`` are the format's declared size, None when the format
+    does not declare one.
+    """
+    origin: Fraction = Fraction(0)
+    duration: Optional[Fraction] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    still: bool = False
+    has_video: bool = True
+
+
+@dataclass(frozen=True)
+class Transform:
+    """An ``<adjust-transform>`` as written.
+
+    ``position`` is in FCPXML units: percent of the FRAME HEIGHT from the
+    centre, y up (so x runs to about +-88.9 on a 16:9 frame). ``scale`` is
+    applied after the clip is conformed to the frame. ``animated`` is True
+    when a ``<param>`` child carries keyframes; the attributes are then only
+    the resting value.
+    """
+    position: Tuple[float, float] = (0.0, 0.0)
+    scale: Tuple[float, float] = (1.0, 1.0)
+    rotation: float = 0.0
+    anchor: Tuple[float, float] = (0.0, 0.0)
+    animated: bool = False
+
+
 @dataclass
 class Clip:
     """Represents a clip in the timeline."""
@@ -641,6 +682,16 @@ class Clip:
 
     # Connected clips (B-roll, titles, audio attached to this clip)
     connected_clips: List['ConnectedClip'] = field(default_factory=list)
+
+    # The file behind the clip and how its picture sits in the frame. None /
+    # "fit" / None for a clip built by hand, which reads as before: a file
+    # clock starting at zero, conformed to fit, untransformed.
+    media: Optional[MediaRef] = None
+    conform: str = "fit"
+    transform: Optional[Transform] = None
+    # Visual adjustments present on the clip that no preview draws
+    # (adjust-crop, filter-video, ...), by tag name, in document order.
+    effects: Tuple[str, ...] = ()
 
     @property
     def end(self) -> Timecode:
@@ -701,6 +752,11 @@ class ConnectedClip:
     timeline_start: Optional[Timecode] = None
     # A <caption> has no ref and no media; its content is its text.
     text: str = ""
+    # See Clip: the file behind it and how its picture sits in the frame.
+    media: Optional[MediaRef] = None
+    conform: str = "fit"
+    transform: Optional[Transform] = None
+    effects: Tuple[str, ...] = ()
 
     @property
     def duration_seconds(self) -> float:
@@ -723,6 +779,10 @@ class ConnectedClip:
             audio_role=self.role,
             markers=list(self.markers),
             keywords=list(self.keywords),
+            media=self.media,
+            conform=self.conform,
+            transform=self.transform,
+            effects=self.effects,
         )
 
 
@@ -759,6 +819,10 @@ class Transition:
     duration: Timecode
     start: Timecode
     transition_type: str = "cross-dissolve"
+    # How much of the transition runs BEFORE the cut at ``start``. Final Cut
+    # centres a transition on its cut by default, but the document says where
+    # it really begins (its own ``offset``); None means "assume centred".
+    lead: Optional[Timecode] = None
 
 
 @dataclass

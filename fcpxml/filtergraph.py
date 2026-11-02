@@ -4,23 +4,73 @@ Pure — no subprocess, no filesystem access beyond an existence check. The
 execution half lives in fcpxml/render.py so this can be asserted exactly, on
 any machine, with or without ffmpeg installed.
 
-Time is carried as fractions.Fraction end to end. A preview built on float
-seconds drifts against the timeline it claims to represent; at 23.976 the
-drift is visible within a minute, which would make the preview lie about the
-one thing it exists to show.
+THE INVARIANT (0.28.0). The proxy is exactly as long as the timeline, and
+every instant of it is either the timeline's own picture or a black
+substitute that the report names. Output time IS timeline time. Everything
+below exists to keep that true:
+
+* Source time is read on the ASSET's clock. A clip's ``start`` is written on
+  the clock that begins at ``<asset start>`` (a camera's timecode, 3600s for
+  01:00:00:00), so the file position is ``start - origin``. A still has no
+  clock at all: it is looped, never seeked.
+* Connected clips are placed by ``timeline_start``, which the parser
+  resolves from the parent's clock. Their raw ``offset`` is in the PARENT's
+  local time and is only the fallback for a hand-built model.
+* Gaps, and anything on the spine with no picture, render as black for
+  their full duration instead of collapsing.
+* Transitions are drawn the way Final Cut draws them: on the media OUTSIDE
+  both clips' used ranges, with no change to the timeline's length. The
+  outgoing stream runs on past its out-point into its tail handle, the
+  incoming one starts before its in-point in its head handle. Where the file
+  has no handle the edge frame is held, and the report says so.
+* A clip whose file has no picture where the timeline asks for one becomes
+  black (spine) or is not drawn (lane), with a note, instead of an input
+  that yields no frames and empties the whole render.
+
+Time is carried as fractions.Fraction end to end and quantised to output
+frames ONCE, cumulatively (``_frame``), so per-piece rounding never adds up
+to drift. A preview built on float seconds drifts against the timeline it
+claims to represent; at 23.976 the drift is visible within a minute.
 """
 
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Optional
 
 from fcpxml.media_intel import media_src_to_path
+
+# The proxy's frame rate. Fixed: the proxy exists to be cheap to make and
+# quick to scrub, and every quantisation below is to this grid.
+FPS = 24
+
+_IMAGE_EXTENSIONS = (
+    ".png", ".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff", ".bmp",
+    ".gif", ".psd", ".exr", ".webp", ".dpx", ".tga",
+)
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    """What a probe of the actual file found. Overrides the FCPXML's claims.
+
+    ``duration`` is None for a still (it has no end) or when unmeasurable.
+    """
+
+    duration: Optional[Fraction] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    still: bool = False
+    has_video: bool = True
 
 
 @dataclass(frozen=True)
 class Segment:
-    """One piece of source media placed on the timeline."""
+    """One piece of the timeline: a clip's source media placed on it, or a gap.
+
+    ``src_in``/``src_out`` are the FCPXML's own source times, on the asset's
+    clock. ``file_in`` is where that is in the file.
+    """
 
     source: str
     src_in: Fraction
@@ -29,10 +79,33 @@ class Segment:
     lane: int
     label: str
     missing: bool = False
+    origin: Fraction = Fraction(0)
+    still: bool = False
+    kind: str = "clip"  # "clip" | "gap"
+    file_duration: Optional[Fraction] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    conform: str = "fit"
+    transform: Any = None
+    effects: tuple = ()
+    has_video: bool = True
 
     @property
     def duration(self) -> Fraction:
         return self.src_out - self.src_in
+
+    @property
+    def tl_out(self) -> Fraction:
+        return self.tl_in + self.duration
+
+    @property
+    def file_in(self) -> Fraction:
+        """Where ``src_in`` is in the file (a still has one picture: 0)."""
+        return Fraction(0) if self.still else self.src_in - self.origin
+
+    def file_time(self, into: Fraction) -> Fraction:
+        """File position *into* seconds after the clip's in-point."""
+        return Fraction(0) if self.still else self.file_in + into
 
 
 @dataclass(frozen=True)
@@ -40,14 +113,38 @@ class CompiledTransition:
     """A timeline transition resolved onto a spine boundary.
 
     ``boundary`` is the index of the spine segment the transition follows: it
-    joins ``spine[boundary]`` to ``spine[boundary + 1]``. ``kind`` is an
-    ffmpeg xfade name, already checked against the supported set.
+    joins ``spine[boundary]`` to ``spine[boundary + 1]``. ``start``/``end``
+    are output frames; the transition occupies ``[start, end)`` and the cut
+    it straddles lies inside. ``kind`` is an ffmpeg xfade name.
     """
 
     boundary: int
     kind: str
     duration: Fraction
     name: str
+    start: int = 0
+    end: int = 0
+
+
+@dataclass(frozen=True)
+class Piece:
+    """One stream the render reads, in output frames.
+
+    ``source`` None is black. Otherwise ``read_in``/``read_len`` are file
+    seconds to read and ``hold_head`` is how long to hold the first frame
+    before them (a missing head handle). A short tail is held by the
+    compositor, which repeats the last frame.
+    """
+
+    segment: int
+    lane: int
+    start: int
+    frames: int
+    source: Optional[str] = None
+    still: bool = False
+    read_in: Fraction = Fraction(0)
+    read_len: Fraction = Fraction(0)
+    hold_head: Fraction = Fraction(0)
 
 
 @dataclass(frozen=True)
@@ -58,6 +155,19 @@ class FilterGraph:
     total: Fraction
     substitutions: tuple[str, ...]
     transitions: tuple[CompiledTransition, ...] = ()
+    pieces: tuple[Piece, ...] = ()
+    frame: tuple[int, int] = (1920, 1080)
+    lanes: tuple[Piece, ...] = ()
+
+    @property
+    def total_frames(self) -> int:
+        return _frame(self.total)
+
+
+def _frame(t: Fraction) -> int:
+    """Nearest output frame to timeline instant *t* (half rounds up)."""
+    scaled = Fraction(t) * FPS
+    return int((scaled + Fraction(1, 2)).__floor__())
 
 
 def _seconds(tc: Any) -> Fraction:
@@ -82,20 +192,46 @@ def _resolve(media_path: str) -> tuple[str, bool]:
     return path, not Path(path).is_file()
 
 
-def _segment_from(item: Any, lane: int) -> Segment:
+def _segment_from(item: Any, lane: int, probes: Optional[Mapping[str, SourceInfo]]) -> Segment:
     """Build a Segment from a Clip or a ConnectedClip.
 
-    The two models disagree about where timeline position lives. A spine Clip
-    carries it on ``start``; a ConnectedClip carries it on ``offset`` and
-    reuses ``start`` for the source in-point. Reading ``start`` for both would
-    place every lane clip at its source timecode instead of its timeline
-    position, which is silently wrong rather than visibly broken.
+    Position: a spine Clip carries it on ``start``. A ConnectedClip carries it
+    on ``timeline_start`` (resolved by the parser from the parent's clock);
+    its ``offset`` is in the PARENT's local time and is used only when a
+    hand-built model has no ``timeline_start``. Reading ``offset`` for a parsed
+    clip placed every connected clip on a trimmed parent, or on a gap or still
+    whose clock starts at 3600s, somewhere it never appears.
     """
     duration = _seconds(item.duration)
     src_in = _seconds(getattr(item, "source_start", None))
     source, missing = _resolve(getattr(item, "media_path", "") or "")
+    resolved = getattr(item, "timeline_start", None)
     offset = getattr(item, "offset", None)
-    tl_in = _seconds(offset) if offset is not None else _seconds(item.start)
+    if resolved is not None:
+        tl_in = _seconds(resolved)
+    elif offset is not None:
+        tl_in = _seconds(offset)
+    else:
+        tl_in = _seconds(item.start)
+
+    media = getattr(item, "media", None)
+    origin = Fraction(media.origin) if media is not None else Fraction(0)
+    still = bool(media.still) if media is not None else source.lower().endswith(_IMAGE_EXTENSIONS)
+    width = media.width if media is not None else None
+    height = media.height if media is not None else None
+    file_duration = (
+        Fraction(media.duration) if media is not None and media.duration else None
+    )
+    has_video = bool(media.has_video) if media is not None else True
+
+    probe = (probes or {}).get(source) if not missing else None
+    if probe is not None:
+        still = probe.still
+        has_video = probe.has_video
+        width = probe.width or width
+        height = probe.height or height
+        file_duration = probe.duration if not probe.still else None
+
     return Segment(
         source=source,
         src_in=src_in,
@@ -104,6 +240,22 @@ def _segment_from(item: Any, lane: int) -> Segment:
         lane=lane,
         label=item.name,
         missing=missing,
+        origin=origin,
+        still=still,
+        file_duration=file_duration,
+        width=width,
+        height=height,
+        conform=getattr(item, "conform", "fit") or "fit",
+        transform=getattr(item, "transform", None),
+        effects=tuple(getattr(item, "effects", ()) or ()),
+        has_video=has_video,
+    )
+
+
+def _gap(tl_in: Fraction, length: Fraction) -> Segment:
+    return Segment(
+        source="", src_in=Fraction(0), src_out=length, tl_in=tl_in,
+        lane=0, label="gap", kind="gap",
     )
 
 
@@ -117,6 +269,8 @@ _XFADE_KINDS = {
     "dissolve": "fade",
     "fade to color": "fadeblack",
     "fade from color": "fadeblack",
+    "fade-to-black": "fadeblack",
+    "fade-from-black": "fadeblack",
     "dip to color": "fadeblack",
     "wipe": "wipeleft",
     "slide": "slideleft",
@@ -124,12 +278,19 @@ _XFADE_KINDS = {
 
 
 def _xfade_kind(transition: Any) -> tuple[str, bool]:
-    """Return (xfade transition name, was it recognised?)."""
-    for field in (
-        getattr(transition, "transition_type", "") or "",
+    """Return (xfade transition name, was it recognised?).
+
+    The NAME is read first: it is what the document says the transition is.
+    ``transition_type`` only speaks for a hand-built model; the parser leaves
+    it empty, because its "cross-dissolve" default used to vouch for every
+    transition Final Cut wrote, so "Color Panels" previewed as a dissolve
+    without a word.
+    """
+    for value in (
         getattr(transition, "name", "") or "",
+        getattr(transition, "transition_type", "") or "",
     ):
-        kind = _XFADE_KINDS.get(field.strip().lower())
+        kind = _XFADE_KINDS.get(value.strip().lower())
         if kind is not None:
             return kind, True
     return "fade", False
@@ -138,14 +299,16 @@ def _xfade_kind(transition: Any) -> tuple[str, bool]:
 def _place_transitions(
     transitions: list[Any], spine: list[Segment]
 ) -> tuple[list[CompiledTransition], list[str]]:
-    """Resolve each transition onto a spine boundary it can actually run on.
+    """Resolve each transition onto the spine boundary it straddles.
 
-    A transition is compiled when it sits within its own duration of a
-    boundary between two present, non-empty segments, that boundary is still
-    free, and its length fits inside both neighbours. Everything else is
-    returned as a substitution string rather than dropped, because the
-    operator has to be told the preview shows a hard cut where the timeline
-    has a dissolve.
+    A transition occupies ``[cut - lead, cut - lead + duration)``: by default
+    centred on its cut, or wherever its own offset put it. It needs a cut
+    within its own duration, a boundary not already spoken for, and both
+    neighbours present. It must start after the outgoing clip starts and end
+    before the incoming one ends; Final Cut guarantees that for anything it
+    exports, so a transition that overruns is clipped to fit and reported.
+    Its length is never squeezed to its neighbours' length: it draws on their
+    handles, not on their used ranges.
     """
     boundaries = [spine[index + 1].tl_in for index in range(len(spine) - 1)]
     compiled: list[CompiledTransition] = []
@@ -171,7 +334,8 @@ def _place_transitions(
             continue
 
         index = min(range(len(boundaries)), key=lambda i: abs(boundaries[i] - at))
-        if abs(boundaries[index] - at) > length:
+        cut = boundaries[index]
+        if abs(cut - at) > length:
             note(f"no spine cut within {float(length):.2f}s of it")
             continue
         if index in taken:
@@ -181,99 +345,351 @@ def _place_transitions(
         if before.missing or after.missing:
             note("a clip on one side of it is missing its media")
             continue
-        fits = min(length, before.duration, after.duration)
-        if fits <= 0:
-            note("a clip on one side of it is empty")
+
+        lead_tc = getattr(transition, "lead", None)
+        lead = _seconds(lead_tc) if lead_tc is not None else length / 2
+        lead = min(max(lead, Fraction(0)), length)
+        start, end = _frame(cut - lead), _frame(cut - lead + length)
+        low, high = _frame(before.tl_in), _frame(after.tl_out)
+        clipped = (max(start, low + 1), min(end, high - 1))
+        if clipped[1] - clipped[0] < 1 or not clipped[0] <= _frame(cut) <= clipped[1]:
+            note("its neighbours are too short to hold it")
             continue
-        if fits < length:
+        if clipped != (start, end):
             notes.append(
-                f"{name!r} at {float(at):.2f}s shortened to "
-                f"{float(fits):.2f}s to fit its neighbours"
+                f"{name!r} at {float(at):.2f}s clipped to "
+                f"{(clipped[1] - clipped[0]) / FPS:.2f}s: it ran past the end of "
+                f"{before.label!r} or {after.label!r}"
             )
+            start, end = clipped
         if not recognised:
             notes.append(
                 f"{name!r} at {float(at):.2f}s rendered as a dissolve "
                 f"(no xfade equivalent for this transition)"
             )
         taken.add(index)
-        compiled.append(
-            CompiledTransition(boundary=index, kind=kind, duration=fits, name=name)
-        )
+        compiled.append(CompiledTransition(
+            boundary=index, kind=kind, duration=Fraction(end - start, FPS),
+            name=name, start=start, end=end,
+        ))
 
     compiled.sort(key=lambda c: c.boundary)
-    return compiled, notes
+    # Two transitions on either side of one short clip may not overlap: the
+    # second xfade would start before the first has finished with the clip.
+    kept: list[CompiledTransition] = []
+    for transition in compiled:
+        previous = kept[-1] if kept else None
+        if previous is not None and previous.boundary == transition.boundary - 1 \
+                and transition.start < previous.end:
+            notes.append(
+                f"{transition.name!r} at {transition.start / FPS:.2f}s rendered as "
+                f"a hard cut (it overlaps {previous.name!r} across "
+                f"{spine[transition.boundary].label!r})"
+            )
+            continue
+        kept.append(transition)
+    return kept, notes
 
 
-def compile_timeline(timeline: Any) -> FilterGraph:
+def _availability(segment: Segment, want_in: Fraction, want_len: Fraction):
+    """(read_in, read_len, hold_head, hold_tail) for a file span, or None.
+
+    None means the file has no picture anywhere in the span. ``file_duration``
+    None is "unknown": trusted rather than clamped, as before 0.28.
+    """
+    if segment.still:
+        return Fraction(0), want_len, Fraction(0), Fraction(0)
+    end = segment.file_duration
+    read_in = max(Fraction(0), want_in)
+    read_out = want_in + want_len if end is None else min(end, want_in + want_len)
+    if read_out - read_in < Fraction(1, 2 * FPS):
+        return None
+    return read_in, read_out - read_in, read_in - want_in, (want_in + want_len) - read_out
+
+
+def _picture_notes(segment: Segment) -> list[str]:
+    """What about this clip's picture the proxy does not draw."""
+    unread = list(segment.effects)
+    t = segment.transform
+    if t is not None:
+        if t.rotation:
+            unread.append("rotation")
+        if any(t.anchor):
+            unread.append("anchor")
+        if t.animated:
+            unread.append("keyframed transform (drawn at rest)")
+        if t.scale[0] < 0 or t.scale[1] < 0:
+            unread.append("flip")
+    return unread
+
+
+def compile_timeline(
+    timeline: Any,
+    probes: Optional[Mapping[str, SourceInfo]] = None,
+    *,
+    with_transitions: bool = True,
+    with_lanes: bool = True,
+) -> FilterGraph:
     """Build a FilterGraph from a parsed Timeline.
 
-    Spine clips are ordered by timeline position and carry lane 0. Connected
-    clips keep their own lane: positive is video above the spine, negative is
-    audio below.
-
-    Transitions are compiled onto the spine boundaries they straddle and
-    rendered with ffmpeg's xfade. One that cannot be placed there — no cut
-    near it, media missing on one side, a boundary already spoken for — is
-    recorded as a substitution instead, so the operator is told the preview
-    shows a hard cut where their timeline has a dissolve. A silent
-    substitution would make the preview lie, which is worse than having no
-    preview at all.
+    ``probes`` maps a source path to what a probe of the real file found
+    (render.py supplies it); without it the FCPXML's own asset data is used.
+    ``with_transitions`` / ``with_lanes`` are the render's fallbacks: when
+    ffmpeg refuses the full graph it is rebuilt without them, and the report
+    says which was dropped.
     """
     clips = sorted(getattr(timeline, "clips", None) or [], key=lambda c: _seconds(c.start))
-    spine: list[Segment] = [_segment_from(clip, 0) for clip in clips]
-    segments: list[Segment] = list(spine)
+    spine_clips = [_segment_from(clip, 0, probes) for clip in clips]
 
+    # Holes in the spine (gaps, spine titles, generators) are black, and keep
+    # their time. Before 0.28 they collapsed and everything after a gap came
+    # early.
+    spine: list[Segment] = []
+    cursor = Fraction(0)
+    for segment in spine_clips:
+        if segment.tl_in > cursor:
+            spine.append(_gap(cursor, segment.tl_in - cursor))
+        spine.append(segment)
+        cursor = max(cursor, segment.tl_out)
+    declared = _seconds(getattr(timeline, "duration", None))
+    if declared > cursor:
+        spine.append(_gap(cursor, declared - cursor))
+        cursor = declared
+    total = cursor
+
+    notes: list[str] = []
+    lanes: list[Segment] = []
     for connected in getattr(timeline, "connected_clips", None) or []:
-        segments.append(_segment_from(connected, connected.lane))
-
-    compiled, notes = _place_transitions(
-        list(getattr(timeline, "transitions", None) or []), spine
-    )
-
-    # An xfade overlaps its two neighbours, so the render is shorter than the
-    # sum of the cuts by exactly the compiled transition lengths. total is
-    # what render.py reads the artifact back against; it has to say so.
-    for lane_segment in (s for s in segments if s.lane > 0):
-        if lane_segment.missing:
+        lane = getattr(connected, "lane", 1)
+        if lane <= 0:
+            continue
+        segment = _segment_from(connected, lane, probes)
+        kind = getattr(connected, "clip_type", "asset-clip")
+        if kind in ("title", "caption") or not getattr(connected, "media_path", ""):
+            what = "a title" if kind == "title" else "a caption" if kind == "caption" else "no media"
             notes.append(
-                f"lane {lane_segment.lane} clip {lane_segment.label!r} not drawn "
-                f"(its media is missing)"
+                f"lane {lane} clip {segment.label!r} not drawn ({what}: "
+                f"the proxy renders footage only)"
             )
-        else:
-            notes.append(
-                f"lane {lane_segment.lane} clip {lane_segment.label!r} drawn "
-                f"full-frame (transform, scale, crop and opacity are not read)"
-            )
-    if any(s.lane < 0 for s in segments):
+            continue
+        lanes.append(segment)
+    if any(getattr(c, "lane", 0) < 0 for c in getattr(timeline, "connected_clips", None) or []):
         notes.append("audio lanes are not mixed: this preview is video only")
 
-    total = sum((s.duration for s in spine), Fraction(0)) - sum(
-        (c.duration for c in compiled), Fraction(0)
+    compiled, transition_notes = (
+        _place_transitions(list(getattr(timeline, "transitions", None) or []), spine)
+        if with_transitions else ([], [])
+    )
+    if not with_transitions and getattr(timeline, "transitions", None):
+        transition_notes = [
+            f"every transition rendered as a hard cut ({len(timeline.transitions)} "
+            f"dropped after ffmpeg refused the crossfade graph)"
+        ]
+    notes = transition_notes + notes
+
+    left = {t.boundary + 1: t for t in compiled}
+    right = {t.boundary: t for t in compiled}
+    pieces: list[Piece] = []
+    undrawn: list[str] = []
+    for index, segment in enumerate(spine):
+        own_start, own_end = _frame(segment.tl_in), _frame(segment.tl_out)
+        start = left[index].start if index in left else own_start
+        end = right[index].end if index in right else own_end
+        frames = end - start
+        if frames <= 0:
+            continue
+        if segment.kind == "gap":
+            pieces.append(Piece(segment=index, lane=0, start=start, frames=frames))
+            continue
+        if segment.missing or not segment.has_video:
+            why = "its media is missing" if segment.missing else "its media has no picture"
+            notes.append(f"{segment.label!r} at {float(segment.tl_in):.2f}s shown black ({why})")
+            pieces.append(Piece(segment=index, lane=0, start=start, frames=frames))
+            continue
+        into = Fraction(start, FPS) - segment.tl_in
+        span = Fraction(frames, FPS)
+        available = _availability(segment, segment.file_time(into), span)
+        if available is None:
+            length = (
+                f"the file is {float(segment.file_duration):.2f}s long"
+                if segment.file_duration is not None else "the file is shorter"
+            )
+            notes.append(
+                f"{segment.label!r} at {float(segment.tl_in):.2f}s shown black "
+                f"(no picture at {float(segment.file_time(into)):.2f}s in its file; {length})"
+            )
+            pieces.append(Piece(segment=index, lane=0, start=start, frames=frames))
+            continue
+        read_in, read_len, hold_head, hold_tail = available
+        if hold_head > 0:
+            notes.append(
+                f"{segment.label!r} at {float(segment.tl_in):.2f}s holds its first frame "
+                f"for {float(hold_head):.2f}s (its file has no picture before "
+                f"{float(read_in):.2f}s{', so the transition into it has no head handle' if index in left else ''})"
+            )
+        if hold_tail > Fraction(1, FPS):
+            notes.append(
+                f"{segment.label!r} at {float(segment.tl_in):.2f}s holds its last frame "
+                f"for {float(hold_tail):.2f}s (its file ends at "
+                f"{float(read_in + read_len):.2f}s{', so the transition out of it has no tail handle' if index in right else ''})"
+            )
+        unread = _picture_notes(segment)
+        if unread:
+            undrawn.append(f"{segment.label!r} ({', '.join(unread)})")
+        pieces.append(Piece(
+            segment=index, lane=0, start=start, frames=frames, source=segment.source,
+            still=segment.still, read_in=read_in, read_len=read_len, hold_head=hold_head,
+        ))
+
+    lane_pieces: list[Piece] = []
+    ordered_lanes = sorted(lanes, key=lambda s: (s.lane, s.tl_in))
+    if with_lanes:
+        for position, segment in enumerate(ordered_lanes):
+            start, end = _frame(segment.tl_in), _frame(segment.tl_out)
+            if end - start <= 0:
+                continue
+            if segment.missing:
+                notes.append(
+                    f"lane {segment.lane} clip {segment.label!r} not drawn (its media is missing)"
+                )
+                continue
+            if not segment.has_video:
+                notes.append(
+                    f"lane {segment.lane} clip {segment.label!r} not drawn (its media has no picture)"
+                )
+                continue
+            available = _availability(segment, segment.file_in, Fraction(end - start, FPS))
+            if available is None:
+                notes.append(
+                    f"lane {segment.lane} clip {segment.label!r} not drawn (no picture at "
+                    f"{float(segment.file_in):.2f}s in its file)"
+                )
+                continue
+            read_in, read_len, hold_head, _ = available
+            unread = _picture_notes(segment)
+            if unread:
+                undrawn.append(f"lane {segment.lane} {segment.label!r} ({', '.join(unread)})")
+            lane_pieces.append(Piece(
+                segment=len(spine) + position, lane=segment.lane, start=start,
+                frames=end - start, source=segment.source, still=segment.still,
+                read_in=read_in, read_len=read_len, hold_head=hold_head,
+            ))
+    elif any(not s.missing for s in lanes):
+        notes.append(
+            f"{len(lanes)} connected video clip(s) not drawn (dropped after ffmpeg "
+            f"refused the compositing graph)"
+        )
+    if undrawn:
+        notes.append(
+            "drawn without what the proxy cannot render: " + "; ".join(undrawn)
+        )
+
+    frame = (
+        int(getattr(timeline, "width", 1920) or 1920),
+        int(getattr(timeline, "height", 1080) or 1080),
     )
     return FilterGraph(
-        segments=tuple(segments),
+        segments=tuple(spine) + tuple(ordered_lanes),
         total=total,
         substitutions=tuple(notes),
         transitions=tuple(compiled),
+        pieces=tuple(pieces),
+        frame=frame,
+        lanes=tuple(lane_pieces),
     )
 
 
-def _output_seconds(graph: FilterGraph, timeline_seconds: Fraction) -> Fraction:
-    """Where a timeline instant lands in the rendered file.
+def canvas_size(graph: FilterGraph, height: int) -> tuple[int, int]:
+    """The proxy's pixel size: *height* tall at the SEQUENCE's aspect, even."""
+    if not 1 <= height <= 2160:
+        raise ValueError(f"height must be between 1 and 2160, got {height}")
+    seq_w, seq_h = graph.frame
+    canvas_h = max(2, height - height % 2)
+    canvas_w = max(2, int(round(canvas_h * seq_w / seq_h / 2)) * 2)
+    return canvas_w, canvas_h
 
-    Every compiled crossfade overlaps its two neighbours, so the render is
-    shorter than the timeline by that much from the cut onwards. An overlay
-    placed at its raw timeline time would drift later and later behind the
-    spine it is supposed to sit on.
+
+def placement(graph: FilterGraph, segment: Segment, height: int) -> tuple[int, int, int, int]:
+    """(width, height, x, y) of *segment*'s picture on the proxy canvas.
+
+    Final Cut conforms a clip to the sequence frame first (``fit`` letterboxes,
+    ``fill`` crops, ``none`` keeps native pixels), then applies the
+    transform: ``scale``, then ``position`` in percent of the frame height
+    from the centre, y up. A clip of unknown size is assumed to be the
+    sequence's own size.
     """
-    spine = [s for s in graph.segments if s.lane == 0]
-    shift = Fraction(0)
-    for transition in graph.transitions:
-        if transition.boundary + 1 >= len(spine):
-            continue
-        if timeline_seconds >= spine[transition.boundary + 1].tl_in:
-            shift += transition.duration
-    return max(Fraction(0), timeline_seconds - shift)
+    canvas_w, canvas_h = canvas_size(graph, height)
+    seq_w, seq_h = graph.frame
+    src_w = segment.width or seq_w
+    src_h = segment.height or seq_h
+    if segment.conform == "fill":
+        conform = max(Fraction(seq_w, src_w), Fraction(seq_h, src_h))
+    elif segment.conform == "none":
+        conform = Fraction(1)
+    else:
+        conform = min(Fraction(seq_w, src_w), Fraction(seq_h, src_h))
+    t = segment.transform
+    scale_x = abs(Fraction(t.scale[0]).limit_denominator(10000)) if t is not None else Fraction(1)
+    scale_y = abs(Fraction(t.scale[1]).limit_denominator(10000)) if t is not None else Fraction(1)
+    pixels = Fraction(canvas_h, seq_h)
+
+    def even(value: Fraction) -> int:
+        return max(2, int(round(value / 2)) * 2)
+
+    width = even(src_w * conform * scale_x * pixels)
+    height_px = even(src_h * conform * scale_y * pixels)
+    pos_x, pos_y = (t.position if t is not None else (0.0, 0.0))
+    centre_x = Fraction(canvas_w, 2) + Fraction(pos_x).limit_denominator(10000) / 100 * canvas_h
+    centre_y = Fraction(canvas_h, 2) - Fraction(pos_y).limit_denominator(10000) / 100 * canvas_h
+    return width, height_px, int(round(centre_x - Fraction(width, 2))), int(round(centre_y - Fraction(height_px, 2)))
+
+
+def _input_args(piece: Piece) -> list[str]:
+    if piece.still:
+        # A still has no clock: loop its one picture for as long as it plays.
+        # Seeking into it (the pre-0.28 "-ss 3600") finds nothing at all.
+        return [
+            "-loop", "1", "-framerate", str(FPS),
+            "-t", f"{float(Fraction(piece.frames + 2, FPS)):.6f}", "-i", piece.source,
+        ]
+    # -ss before -i is the fast seek; -t bounds the read so a two-second cut
+    # out of an hour-long source costs two seconds of decode.
+    return [
+        "-ss", f"{float(piece.read_in):.6f}",
+        "-t", f"{float(piece.read_len):.6f}",
+        "-i", piece.source,
+    ]
+
+
+def _picture_chain(label_in: str, piece: Piece, size: tuple[int, int], label_out: str,
+                   pix_fmt: str = "yuv420p") -> str:
+    width, height = size
+    hold = (
+        f",tpad=start_mode=clone:start_duration={float(piece.hold_head):.6f}"
+        if piece.hold_head > 0 else ""
+    )
+    return (
+        f"{label_in}fps={FPS},scale={width}:{height},setsar=1,format={pix_fmt}"
+        f"{hold},setpts=PTS-STARTPTS{label_out}"
+    )
+
+
+def lane_tracks(graph: FilterGraph) -> list[list[Piece]]:
+    """Lane pieces grouped into tracks that never overlap in time.
+
+    One track per lane number in compositing order (lane 1 under lane 2),
+    and a further track above it for any clip that overlaps another on the
+    same lane, which Final Cut never writes but a hand-built model can.
+    """
+    tracks: list[tuple[int, list[Piece]]] = []
+    for piece in sorted(graph.lanes, key=lambda p: (p.lane, p.start)):
+        for lane, track in tracks:
+            if lane == piece.lane and track[-1].start + track[-1].frames <= piece.start:
+                track.append(piece)
+                break
+        else:
+            tracks.append((piece.lane, [piece]))
+    return [track for _, track in tracks]
 
 
 def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[str]:
@@ -282,109 +698,107 @@ def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[
     An argument list, never a shell string: no user-supplied value is ever
     interpreted by a shell.
 
-    Compiled transitions become xfade links between adjacent spine segments;
-    every other join is a straight concat. A transition whose neighbour was
-    dropped for missing media is skipped here — compile_timeline has already
-    reported it.
-
-    Video lanes are composited over the spine with an overlay chain, each one
-    enabled only for the window it occupies and shifted by any crossfade that
-    shortened the timeline before it. They are drawn full-frame: this module
-    does not read transforms, so a picture-in-picture previews as a full-frame
-    cutaway, and compile_timeline says so. Audio lanes are not mixed — the
-    whole graph is video only.
+    Every spine piece is drawn onto a black canvas of the sequence's aspect
+    for exactly its own frame count, so pieces of any size, rate or format
+    join cleanly and the canvas shows what Final Cut's conform would. Pieces
+    join with concat, or with xfade where a transition was compiled; the
+    xfade offset is the transition's own start, because output time is
+    timeline time. Video lanes composite as one transparent track per lane
+    number (see lane_tracks), each in step with the base from frame 0.
     """
-    if not 1 <= height <= 2160:
-        raise ValueError(f"height must be between 1 and 2160, got {height}")
-
-    spine = [s for s in graph.segments if s.lane == 0 and not s.missing]
-    if not spine:
+    canvas_w, canvas_h = canvas_size(graph, height)
+    # A gap-based edit (every picture on a lane over a gap, issue #23) is
+    # renderable; only a timeline with no picture anywhere is not.
+    if not graph.pieces or not (any(p.source for p in graph.pieces) or graph.lanes):
         raise ValueError("nothing renderable: every spine clip is missing its media")
 
     args: list[str] = ["ffmpeg", "-hide_banner", "-nostdin", "-y"]
-    for seg in spine:
-        # -ss before -i is the fast seek; -t bounds the read so a two-second
-        # cut out of an hour-long source costs two seconds of decode.
-        args += [
-            "-ss", str(float(seg.src_in)),
-            "-t", str(float(seg.duration)),
-            "-i", seg.source,
-        ]
-
-    chains = [
-        f"[{index}:v]scale=-2:{height},setsar=1,fps=24[v{index}]"
-        for index in range(len(spine))
-    ]
-
-    # Spine indices shift when missing media is dropped, so a transition is
-    # only applied when BOTH of the segments it joined survived the filter.
-    kept = {
-        original: filtered
-        for filtered, original in enumerate(
-            index for index, seg in enumerate(graph.segments)
-            if seg.lane == 0 and not seg.missing
+    chains: list[str] = []
+    inputs = 0
+    for number, piece in enumerate(graph.pieces):
+        black = (
+            f"color=c=black:s={canvas_w}x{canvas_h}:r={FPS},format=yuv420p,"
+            f"trim=end_frame={piece.frames},setpts=PTS-STARTPTS"
         )
-    }
-    links: dict[int, CompiledTransition] = {}
-    for transition in graph.transitions:
-        left, right = kept.get(transition.boundary), kept.get(transition.boundary + 1)
-        if left is not None and right == left + 1:
-            links[left] = transition
+        if piece.source is None:
+            chains.append(f"{black}[p{number}]")
+            continue
+        args += _input_args(piece)
+        width, height_px, x, y = placement(graph, graph.segments[piece.segment], height)
+        chains.append(_picture_chain(f"[{inputs}:v]", piece, (width, height_px), f"[s{number}]"))
+        chains.append(f"{black}[b{number}]")
+        # eof_action=repeat holds the last frame when a file ends short.
+        chains.append(
+            f"[b{number}][s{number}]overlay=x={x}:y={y}:eof_action=repeat,"
+            f"trim=end_frame={piece.frames},setpts=PTS-STARTPTS,format=yuv420p[p{number}]"
+        )
+        inputs += 1
 
-    if not links:
-        concat_inputs = "".join(f"[v{i}]" for i in range(len(spine)))
-        chains.append(f"{concat_inputs}concat=n={len(spine)}:v=1:a=0[vout]")
+    by_segment = {piece.segment: number for number, piece in enumerate(graph.pieces)}
+    linked = {
+        by_segment[t.boundary]: t for t in graph.transitions
+        if t.boundary in by_segment and by_segment.get(t.boundary + 1) == by_segment[t.boundary] + 1
+    }
+    count = len(graph.pieces)
+    final = "[base]" if graph.lanes else "[vout]"
+    if not linked:
+        chains.append(
+            "".join(f"[p{i}]" for i in range(count)) + f"concat=n={count}:v=1:a=0{final}"
+        )
     else:
-        # Fold left to right, carrying the running length: xfade's offset is
-        # measured from the start of everything accumulated so far, not from
-        # the start of the segment it is fading out of.
-        accumulated = "[v0]"
-        length = spine[0].duration
-        for index in range(1, len(spine)):
-            label = "[vout]" if index == len(spine) - 1 else f"[x{index}]"
-            transition = links.get(index - 1)
+        accumulated = "[p0]"
+        for number in range(1, count):
+            label = final if number == count - 1 else f"[x{number}]"
+            transition = linked.get(number - 1)
             if transition is None:
-                chains.append(
-                    f"{accumulated}[v{index}]concat=n=2:v=1:a=0{label}"
-                )
-                length += spine[index].duration
+                chains.append(f"{accumulated}[p{number}]concat=n=2:v=1:a=0{label}")
             else:
-                offset = length - transition.duration
                 chains.append(
-                    f"{accumulated}[v{index}]xfade=transition={transition.kind}"
-                    f":duration={float(transition.duration):.6f}"
-                    f":offset={float(offset):.6f}{label}"
+                    f"{accumulated}[p{number}]xfade=transition={transition.kind}"
+                    f":duration={float(Fraction(transition.end - transition.start, FPS)):.6f}"
+                    f":offset={float(Fraction(transition.start, FPS)):.6f}{label}"
                 )
-                length += spine[index].duration - transition.duration
             accumulated = label
 
-    lanes = sorted(
-        (s for s in graph.segments if s.lane > 0 and not s.missing),
-        key=lambda s: (s.lane, s.tl_in),
-    )
-    if lanes:
-        # The spine's own last label becomes the base the lanes sit on.
-        chains[-1] = chains[-1].replace("[vout]", "[base]")
-        base = "[base]"
-        for offset, lane_segment in enumerate(lanes):
-            index = len(spine) + offset
-            args += [
-                "-ss", str(float(lane_segment.src_in)),
-                "-t", str(float(lane_segment.duration)),
-                "-i", lane_segment.source,
-            ]
-            starts = _output_seconds(graph, lane_segment.tl_in)
-            ends = starts + lane_segment.duration
-            label = "[vout]" if offset == len(lanes) - 1 else f"[o{index}]"
-            chains.append(
-                f"[{index}:v]scale=-2:{height},setsar=1,fps=24,"
-                f"setpts=PTS-STARTPTS+{float(starts):.6f}/TB[l{index}]"
+    # Each lane track is ONE transparent stream from frame 0: transparent
+    # gaps concatenated with each clip's picture placed on a transparent
+    # canvas. It starts with the base and runs in step with it, so no
+    # overlay ever waits on a stream whose first frame is in the future.
+    # ffmpeg 6.1 dropped exactly that kind of overlay without a word when
+    # it came second in a chain (the 0.28 lane check caught it on CI).
+    base = "[base]"
+    tracks = lane_tracks(graph)
+    clear = f"color=c=black@0.0:s={canvas_w}x{canvas_h}:r={FPS},format=yuva420p"
+    for number, track in enumerate(tracks):
+        parts: list[str] = []
+        cursor = 0
+        for piece in track:
+            if piece.start > cursor:
+                label = f"[t{number}g{len(parts)}]"
+                chains.append(
+                    f"{clear},trim=end_frame={piece.start - cursor},setpts=PTS-STARTPTS{label}"
+                )
+                parts.append(label)
+            args += _input_args(piece)
+            width, height_px, x, y = placement(graph, graph.segments[piece.segment], height)
+            source, canvas, label = (
+                f"[t{number}s{len(parts)}]", f"[t{number}c{len(parts)}]", f"[t{number}p{len(parts)}]"
             )
+            chains.append(_picture_chain(f"[{inputs}:v]", piece, (width, height_px), source, "yuva420p"))
+            chains.append(f"{clear},trim=end_frame={piece.frames},setpts=PTS-STARTPTS{canvas}")
             chains.append(
-                f"{base}[l{index}]overlay=eof_action=pass:"
-                f"enable='between(t,{float(starts):.6f},{float(ends):.6f})'{label}"
+                f"{canvas}{source}overlay=x={x}:y={y}:eof_action=repeat:format=yuv420,"
+                f"trim=end_frame={piece.frames},setpts=PTS-STARTPTS,format=yuva420p{label}"
             )
-            base = label
+            parts.append(label)
+            cursor = piece.start + piece.frames
+            inputs += 1
+        stream = f"[track{number}]"
+        chains.append(f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0{stream}")
+        out = "[vout]" if number == len(tracks) - 1 else f"[o{number}]"
+        # eof_action=pass: once a track's last clip ends, the base shows.
+        chains.append(f"{base}{stream}overlay=x=0:y=0:eof_action=pass:format=yuv420{out}")
+        base = out
 
     args += [
         "-filter_complex", ";".join(chains),
