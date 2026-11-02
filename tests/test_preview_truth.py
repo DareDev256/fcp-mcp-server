@@ -130,7 +130,7 @@ def test_case1_a_transition_longer_than_its_neighbour_renders(media, tmp_path):
 ''', "66200/3000s")
     result, out = _render(tl, tmp_path, "t")
     assert result["error"] is None, result["error"]
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
     # The whole timeline, not the timeline minus the transition.
     assert result["expected"] == Fraction(66200, 3000)
     assert abs(result["drift"]) <= render.DURATION_TOLERANCE
@@ -149,7 +149,7 @@ def test_case2_a_png_still_alone_on_the_spine_renders_the_still(media, tmp_path)
     result, out = _render(tl, tmp_path, "s")
     assert result["error"] is None, result["error"]
     assert result["duration"] is not None  # was: "Duration could NOT be read back"
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
     # adjust-conform none is native pixels: this 320x180 still sits at its own
     # size in the middle of a 1920x1080 frame, black around it.
     centre = subprocess.run(
@@ -181,7 +181,7 @@ def test_case3_connected_clips_appear_where_the_timeline_puts_them(media, tmp_pa
     result, out = _render(tl, tmp_path, "l")
     assert result["error"] is None, result["error"]
     assert result["expected"] == Fraction(8)
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
     assert [v for _, v, _ in result["lanes"]] == [True, True]
     assert _is(_rgb(out, 2.0), "red")      # Red: timeline 1s-3s
     assert not _is(_rgb(out, 3.5), "red")  # gone again before the gap
@@ -202,7 +202,7 @@ def test_a_transformed_lane_is_drawn_at_its_scale_and_position(media, tmp_path):
         </gap>
 ''', "6000/3000s")
     result, out = _render(tl, tmp_path, "pip")
-    assert result["error"] is None and result["verified"] is True
+    assert result["error"] is None and result["verified"] is True, (result["error"], result["drift"], result["lanes"], result["substitutions"])
     quarters = {}
     for name, crop in (("tl", "crop=iw/2:ih/2:0:0"), ("br", "crop=iw/2:ih/2:iw/2:ih/2")):
         raw = subprocess.run(
@@ -225,7 +225,7 @@ def test_timecoded_media_is_read_from_the_file_not_from_its_timecode(media, tmp_
     graph = filtergraph.compile_timeline(tl)
     assert graph.pieces[0].read_in == Fraction(2)  # 3602s on the asset clock
     result, out = _render(tl, tmp_path, "tc")
-    assert result["error"] is None and result["verified"] is True
+    assert result["error"] is None and result["verified"] is True, (result["error"], result["drift"], result["lanes"], result["substitutions"])
 
 
 @needs_ffmpeg
@@ -236,7 +236,7 @@ def test_a_clip_past_the_end_of_its_file_is_named_black_not_fatal(media, tmp_pat
 ''', "12000/3000s")
     result, out = _render(tl, tmp_path, "short")
     assert result["error"] is None, result["error"]
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
     assert any("'Past'" in n and "shown black" in n and "6.00s long" in n for n in result["substitutions"])
     assert _is(_rgb(out, 1.0), "black")
 
@@ -250,7 +250,7 @@ def test_an_audio_only_clip_on_the_spine_is_black_not_fatal(media, tmp_path):
     result, out = _render(tl, tmp_path, "audio")
     assert result["error"] is None, result["error"]
     assert any("'Tone'" in n and "no picture" in n for n in result["substitutions"])
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
 
 
 @needs_ffmpeg
@@ -261,7 +261,7 @@ def test_a_short_head_handle_holds_the_first_frame_and_says_so(media, tmp_path):
         <asset-clip ref="a2" offset="6000/3000s" name="B" start="0s" duration="6000/3000s" format="r1"/>
 ''', "12000/3000s")
     result, _ = _render(tl, tmp_path, "hold")
-    assert result["error"] is None and result["verified"] is True
+    assert result["error"] is None and result["verified"] is True, (result["error"], result["drift"], result["lanes"], result["substitutions"])
     assert any("'B'" in n and "holds its first frame" in n and "head handle" in n
                for n in result["substitutions"])
 
@@ -330,7 +330,7 @@ def test_ffmpeg_refusing_the_crossfade_graph_falls_back_to_hard_cuts(media, tmp_
     assert result["transitions"] == ()
     assert any("ffmpeg refused the full graph" in n for n in result["substitutions"])
     assert any("rendered as a hard cut" in n for n in result["substitutions"])
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
 
 
 # --- the parser half ---------------------------------------------------------
@@ -401,7 +401,7 @@ def test_a_gap_between_clips_keeps_its_time(media, tmp_path):
         <asset-clip ref="a4" offset="12000/3000s" name="Red" start="0s" duration="6000/3000s" format="r2"/>
 ''', "18000/3000s")
     result, out = _render(tl, tmp_path, "gap")
-    assert result["error"] is None and result["verified"] is True
+    assert result["error"] is None and result["verified"] is True, (result["error"], result["drift"], result["lanes"], result["substitutions"])
     assert result["expected"] == Fraction(6)
     assert _is(_rgb(out, 1.0), "blue")
     assert _is(_rgb(out, 3.0), "black")
@@ -430,7 +430,7 @@ def test_clips_of_different_shapes_render_onto_one_canvas(media, tmp_path, with_
 ''', "12000/3000s")
     result, out = _render(tl, tmp_path, f"shapes{int(with_transition)}")
     assert result["error"] is None, result["error"]
-    assert result["verified"] is True
+    assert result["verified"] is True, (result["drift"], result["lanes"], result["substitutions"])
     centre = subprocess.run(
         ["ffmpeg", "-v", "error", "-ss", "3.5", "-i", str(out), "-frames:v", "1",
          "-vf", "crop=8:8:iw/2-4:ih/2-4,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
