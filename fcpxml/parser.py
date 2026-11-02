@@ -188,6 +188,10 @@ class FCPXMLParser:
                 'format': asset.get('format', ''),
                 'hasVideo': asset.get('hasVideo', '1') == '1',
                 'hasAudio': asset.get('hasAudio', '1') == '1',
+                # The DTD leaves hasAudio #IMPLIED. Final Cut writes
+                # hasAudio="1" whenever an asset has sound, so absence is read
+                # as none here; a probe of the real file overrides it anyway.
+                'declaresAudio': asset.get('hasAudio') == '1',
             }
 
         # <media> resources: a multicam (angles, each a small storyline) or a
@@ -280,14 +284,30 @@ class FCPXMLParser:
         still = asset.get('hasVideo', True) and (
             duration == 0 or src.endswith(_STILL_EXTENSIONS)
         )
+        # <video> and <audio> each play ONE component of the asset: a
+        # <video> element's sound is not heard (its audio, when used, is a
+        # sibling <audio> element), and an <audio> element has no picture.
         return MediaRef(
             origin=origin,
             duration=None if still else duration,
             width=size[0] if size else None,
             height=size[1] if size else None,
             still=bool(still),
-            has_video=bool(asset.get('hasVideo', True)),
+            has_video=bool(asset.get('hasVideo', True)) and elem.tag != 'audio',
+            has_audio=bool(asset.get('declaresAudio')) and not still and elem.tag != 'video',
         )
+
+    @staticmethod
+    def _volume_of(elem: ET.Element) -> Optional[float]:
+        """<adjust-volume amount="-6dB"> in dB, None when absent or unreadable."""
+        v = elem.find('adjust-volume')
+        if v is None:
+            return None
+        text = (v.get('amount') or '').strip().lower().removesuffix('db').strip()
+        try:
+            return float(text) if text else None
+        except ValueError:
+            return None
 
     @staticmethod
     def _pair(text: Optional[str], default: tuple) -> tuple:
@@ -408,6 +428,7 @@ class FCPXMLParser:
             conform=conform,
             transform=transform,
             effects=effects,
+            volume_db=self._volume_of(elem),
         )
 
         clip.markers.extend(self._collect_markers(elem, offset, source_start.frames))
@@ -609,7 +630,7 @@ class FCPXMLParser:
             ref_id=ref, parent_clip_name=parent_name,
             timeline_start=timeline_start, text=text,
             media=self._media_ref_for(elem), conform=conform,
-            transform=transform, effects=effects,
+            transform=transform, effects=effects, volume_db=self._volume_of(elem),
         )
 
         connected.markers.extend(

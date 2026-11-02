@@ -110,6 +110,7 @@ def probe_source(path: str) -> Optional[SourceInfo]:
     if not data:
         return None
     video = next((st for st in data.get("streams", []) if st.get("codec_type") == "video"), None)
+    audio = any(st.get("codec_type") == "audio" for st in data.get("streams", []))
     form = data.get("format", {})
     names = set((form.get("format_name") or "").split(","))
     still = bool(video) and (
@@ -125,15 +126,35 @@ def probe_source(path: str) -> Optional[SourceInfo]:
         height=int(video["height"]) if video and video.get("height") else None,
         still=still,
         has_video=video is not None,
+        has_audio=audio,
     )
+
+
+def probe_audio_duration(path: str) -> Optional[Fraction]:
+    """Length of the first audio stream of *path*, None when it has none."""
+    if shutil.which("ffprobe") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+             "stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    raw = (result.stdout or "").strip().splitlines()
+    try:
+        return Fraction(raw[0]).limit_denominator(100000) if result.returncode == 0 and raw else None
+    except (ValueError, ZeroDivisionError):
+        return None
 
 
 def _probes(timeline: Any) -> dict:
     """One probe per distinct source file on the timeline."""
     seen: dict = {}
-    items = list(getattr(timeline, "clips", None) or []) + [
-        c for c in getattr(timeline, "connected_clips", None) or [] if getattr(c, "lane", 0) > 0
-    ]
+    items = list(getattr(timeline, "clips", None) or []) + list(
+        getattr(timeline, "connected_clips", None) or []
+    )
     from fcpxml.media_intel import media_src_to_path
 
     for item in items:
@@ -266,11 +287,13 @@ def render_proxy(
         name = str(getattr(timeline, "name", "timeline")).replace("/", "_")
         out_path = str(cache_dir() / f"{name}_proxy.mp4")
 
-    attempts = [dict(with_transitions=True, with_lanes=True)]
+    attempts = [dict(with_transitions=True, with_lanes=True, with_audio=True)]
+    if graph.audio:
+        attempts.append(dict(with_transitions=True, with_lanes=True, with_audio=False))
     if graph.transitions:
-        attempts.append(dict(with_transitions=False, with_lanes=True))
+        attempts.append(dict(with_transitions=False, with_lanes=True, with_audio=False))
     if graph.lanes:
-        attempts.append(dict(with_transitions=False, with_lanes=False))
+        attempts.append(dict(with_transitions=False, with_lanes=False, with_audio=False))
     errors: list = []
     result = None
     for options in attempts:
@@ -309,6 +332,15 @@ def render_proxy(
     drift = duration - graph.total
     lanes = verify_lanes(graph, out_path, height) if graph.lanes else []
     substitutions = list(graph.substitutions)
+    heard = True
+    if graph.audio:
+        audio_length = probe_audio_duration(out_path)
+        heard = audio_length is not None and abs(audio_length - graph.total) <= DURATION_TOLERANCE
+        if not heard:
+            substitutions.append(
+                "audio was mixed but the file's audio track is "
+                + ("missing" if audio_length is None else f"{float(audio_length):.3f}s long")
+            )
     if errors:
         substitutions.insert(0, f"ffmpeg refused the full graph ({errors[0]}); rendered the fallback below")
     return {
@@ -320,7 +352,7 @@ def render_proxy(
         "transitions": graph.transitions,
         "skipped": skipped,
         "error": None,
-        "verified": abs(drift) <= DURATION_TOLERANCE and all(v is not False for _, v, _ in lanes),
+        "verified": abs(drift) <= DURATION_TOLERANCE and heard and all(v is not False for _, v, _ in lanes),
         "lanes": lanes,
     }
 
