@@ -12,6 +12,7 @@ import logging
 import re
 import shutil
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -223,6 +224,48 @@ def _grid_or_observed(bpm: float, observed: list, duration: float) -> dict:
     return {"bpm": round(60.0 / period, 3), "beats": grid, "source": "grid",
             "grid": True, "confidence": round(confidence, 3),
             "observed_count": len(observed), "period": round(period, 6)}
+
+
+def file_in_point(clip) -> Fraction:
+    """Where a clip's in-point is in its FILE, in exact seconds.
+
+    A clip's ``source_start`` is on its ASSET's clock, which begins at
+    ``<asset start>``: a camera clip with 01:00:00:00 timecode has an origin
+    of 3600s and a ``start`` of 3602s for two seconds in. Anything ffmpeg,
+    Whisper or PySceneDetect measured is in file time, from 0. Comparing the
+    two directly found no silence, no scene cut and no transcript word in
+    any timecoded clip, and reported that as "nothing found" (0.29.0). A
+    still has one picture, at 0. A clip with no ``media`` (hand-built, or an
+    mc-clip / ref-clip whose clock is the <media>'s) keeps the old reading.
+    """
+    tc = getattr(clip, "source_start", None)
+    if tc is None:
+        source = Fraction(0)
+    elif getattr(tc, "_exact_seconds", None) is not None:
+        source = Fraction(tc._exact_seconds)
+    else:
+        source = Fraction(tc.seconds).limit_denominator(1_000_000)
+    media = getattr(clip, "media", None)
+    if media is None:
+        return source
+    if media.still:
+        return Fraction(0)
+    return source - Fraction(media.origin)
+
+
+def asset_origin_seconds(resources: dict, ref: str) -> float:
+    """``<asset start>`` in seconds for an element's ref, 0 when unknown.
+
+    The XML-level twin of :func:`file_in_point`, for handlers that work on a
+    writer's elements rather than parsed clips. A ref that is not an asset
+    (an mc-clip's or ref-clip's <media>) reads 0, as before.
+    """
+    from fcpxml.rational import parse_seconds
+
+    try:
+        return float(parse_seconds((resources.get(ref) or {}).get("start")))
+    except ValueError:
+        return 0.0
 
 
 def media_src_to_path(src: str) -> str:

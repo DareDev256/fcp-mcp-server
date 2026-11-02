@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-02
+
+0.28.0 fixed the renderer reading Final Cut's clocks as the file's clock.
+Every other tool that reads media had the same mistake, and on a timecoded
+clip it did not fail: it reported nothing. Measured before the fix on one
+8-second ProRes clip written with and without a 01:00:00:00 timecode track
+(asset `start="3600s"`, the way Final Cut writes camera media): without
+timecode, 1 silence span and 1 scene cut; with it, 0 and 0.
+
+A minor version because these operations' output changes on timecoded
+media: they now find what is there.
+
+### Fixed
+- **`detect_media_silence` / `remove_media_silence`** find and cut silence
+  in timecoded clips. Silence is measured in file time and the clip's
+  in-point is on the asset clock; they are now compared on one clock
+  (`media_intel.file_in_point`, and `asset_origin_seconds` for the
+  element-level handlers).
+- **`detect_scenes` / `scenes_to_markers` / `scenes_split`** find the cuts in
+  timecoded clips. The source time in the report is shown on the asset's
+  clock, as Final Cut shows source timecode.
+- **`edit_by_transcript` / `remove_filler_words`** find their words in
+  timecoded clips (a transcript is file time).
+- **`find_shots` / `find_to_timeline`** match transcript words and captions
+  in timecoded clips, and `find_to_timeline` writes the selects reel's
+  in-points back on the ASSET clock (3605s, not 5s), so Final Cut reads the
+  clip where the hit is, not an hour before the media begins.
+- **`view`** reads a timecoded clip's transcript words and thumbnail from the
+  right place in the file; the payload carries `file_start` beside
+  `source_start`. **`gen`** conditions B-roll and extend on the frame at
+  that file time.
+- A clip with no parsed media (hand-built models, mc-clip and ref-clip,
+  whose clock is the `<media>`'s) reads exactly as before.
+
 ## [0.28.0] - 2026-11-02
 
 `preview_render` rebuilt around one rule: **the proxy is exactly as long as

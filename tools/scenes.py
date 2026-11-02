@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fcpxml import index as _index
 from fcpxml import progress as _progress
-from fcpxml.media_intel import media_src_to_path
+from fcpxml.media_intel import file_in_point, media_src_to_path
 from fcpxml.scenes import BACKENDS, backends_available, detect_scenes
 from tools import _common
 from tools._common import parse_project, text_result
@@ -88,7 +88,7 @@ async def _cuts_per_clip(tl, args: dict):
         if result is None:
             skipped.append((clip.name, "unanalyzable (no scene backend could read the media)"))
             continue
-        src_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
+        src_start = file_in_point(clip)
         src_end = src_start + Fraction(clip.duration._exact_seconds)
         inside = [c for c in result["cuts"] if src_start < Fraction(c).limit_denominator(1_000_000) < src_end]
         found.append((clip, inside, result["backend"]))
@@ -96,7 +96,7 @@ async def _cuts_per_clip(tl, args: dict):
 
 
 def _timeline_seconds(clip, source_cut: float) -> Fraction:
-    src_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
+    src_start = file_in_point(clip)
     return Fraction(clip.start._exact_seconds) + (Fraction(source_cut).limit_denominator(1_000_000) - src_start)
 
 
@@ -127,7 +127,11 @@ async def handle_detect_scenes(args: dict):
     rows = []
     for clip, cuts, backend in found:
         for c in cuts:
-            rows.append([clip.name, f"{c:.3f}s", _fmt(_timeline_seconds(clip, c))])
+            # Shown on the asset's clock, as Final Cut shows source timecode;
+            # matched and placed in file time (media_intel.file_in_point).
+            asset_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
+            shown = Fraction(c).limit_denominator(1_000_000) + (asset_start - file_in_point(clip))
+            rows.append([clip.name, f"{float(shown):.3f}s", _fmt(_timeline_seconds(clip, c))])
     if rows:
         out += "\n## Cuts\n" + srv._markdown_table(["Clip", "Source time", "Timeline time"], rows) + "\n"
         out += "\n*Next: `scenes_to_markers` to mark them, or `scenes_split` to cut the clips there.*"
@@ -169,7 +173,7 @@ async def handle_scenes_split(args: dict):
     for clip, cuts, _ in found:
         if not cuts:
             continue
-        src_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
+        src_start = file_in_point(clip)
         points = []
         for c in cuts:
             rel = Fraction(c).limit_denominator(1_000_000) - src_start
