@@ -368,8 +368,12 @@ def test_a_video_lane_is_overlaid_for_its_own_window_only(tmp_path):
     args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4", height=360)
     chain = args[args.index("-filter_complex") + 1]
 
-    assert "setpts=PTS-STARTPTS+24/(24*TB)[l0]" in chain
-    assert "overlay=x=0:y=0:eof_action=pass:enable='between(n,24,47)'[vout]" in chain
+    # One transparent track from frame 0: 24 clear frames, then the clip's
+    # 24 frames, composited over the base in step with it.
+    assert "format=yuva420p,trim=end_frame=24,setpts=PTS-STARTPTS[t0g0]" in chain
+    assert "[t0g0][t0p1]concat=n=2:v=1:a=0[track0]" in chain
+    assert "[base][track0]overlay=x=0:y=0:eof_action=pass:format=yuv420[vout]" in chain
+    assert "enable=" not in chain
     # The lane's source is opened as its own input, after the spine's.
     assert args.count("-i") == 2
 
@@ -387,8 +391,8 @@ def test_a_crossfade_before_a_lane_no_longer_moves_it(tmp_path):
     )
     args = graph_to_args(compile_timeline(tl), "/tmp/out.mp4")
     chain = args[args.index("-filter_complex") + 1]
-    assert "setpts=PTS-STARTPTS+48/(24*TB)" in chain
-    assert "enable='between(n,48,59)'" in chain
+    assert "format=yuva420p,trim=end_frame=48,setpts=PTS-STARTPTS[t0g0]" in chain
+    assert "trim=end_frame=12,setpts=PTS-STARTPTS,format=yuva420p[t0p1]" in chain
 
 
 def test_a_lane_whose_media_is_missing_is_not_drawn_but_is_reported(tmp_path):
@@ -458,7 +462,26 @@ def test_two_video_lanes_stack_in_lane_order(tmp_path):
         graph_to_args(compile_timeline(tl), "/tmp/out.mp4").index("-filter_complex") + 1
     ]
     # lane 1 composites onto the spine, lane 2 onto the result of lane 1.
-    assert "[base][l0]overlay" in chain
-    assert "[o0][l1]overlay" in chain and chain.endswith("[vout]")
+    assert "[base][track0]overlay" in chain
+    assert "[o0][track1]overlay" in chain and chain.endswith("[vout]")
     graph = compile_timeline(tl)
     assert [graph.segments[p.segment].label for p in graph.lanes] == ["under", "top"]
+
+
+def test_clips_on_one_lane_share_a_track_unless_they_overlap(tmp_path):
+    from fcpxml.filtergraph import lane_tracks
+
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"\x00")
+    tl = _timeline(
+        [_clip("a", 0, 96, path=str(media))],
+        connected_clips=[
+            _lane("one", 1, 0, 24, str(media)),
+            _lane("two", 1, 48, 24, str(media)),
+            _lane("clash", 1, 60, 24, str(media)),
+            _lane("high", 2, 0, 24, str(media)),
+        ],
+    )
+    graph = compile_timeline(tl)
+    labels = [[graph.segments[p.segment].label for p in track] for track in lane_tracks(graph)]
+    assert labels == [["one", "two"], ["clash"], ["high"]]

@@ -661,16 +661,35 @@ def _input_args(piece: Piece) -> list[str]:
     ]
 
 
-def _picture_chain(label_in: str, piece: Piece, size: tuple[int, int], label_out: str) -> str:
+def _picture_chain(label_in: str, piece: Piece, size: tuple[int, int], label_out: str,
+                   pix_fmt: str = "yuv420p") -> str:
     width, height = size
     hold = (
         f",tpad=start_mode=clone:start_duration={float(piece.hold_head):.6f}"
         if piece.hold_head > 0 else ""
     )
     return (
-        f"{label_in}fps={FPS},scale={width}:{height},setsar=1,format=yuv420p"
+        f"{label_in}fps={FPS},scale={width}:{height},setsar=1,format={pix_fmt}"
         f"{hold},setpts=PTS-STARTPTS{label_out}"
     )
+
+
+def lane_tracks(graph: FilterGraph) -> list[list[Piece]]:
+    """Lane pieces grouped into tracks that never overlap in time.
+
+    One track per lane number in compositing order (lane 1 under lane 2),
+    and a further track above it for any clip that overlaps another on the
+    same lane, which Final Cut never writes but a hand-built model can.
+    """
+    tracks: list[tuple[int, list[Piece]]] = []
+    for piece in sorted(graph.lanes, key=lambda p: (p.lane, p.start)):
+        for lane, track in tracks:
+            if lane == piece.lane and track[-1].start + track[-1].frames <= piece.start:
+                track.append(piece)
+                break
+        else:
+            tracks.append((piece.lane, [piece]))
+    return [track for _, track in tracks]
 
 
 def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[str]:
@@ -684,7 +703,8 @@ def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[
     join cleanly and the canvas shows what Final Cut's conform would. Pieces
     join with concat, or with xfade where a transition was compiled; the
     xfade offset is the transition's own start, because output time is
-    timeline time. Video lanes overlay the result for their own frames.
+    timeline time. Video lanes composite as one transparent track per lane
+    number (see lane_tracks), each in step with the base from frame 0.
     """
     canvas_w, canvas_h = canvas_size(graph, height)
     # A gap-based edit (every picture on a lane over a gap, issue #23) is
@@ -740,22 +760,45 @@ def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[
                 )
             accumulated = label
 
+    # Each lane track is ONE transparent stream from frame 0: transparent
+    # gaps concatenated with each clip's picture placed on a transparent
+    # canvas. It starts with the base and runs in step with it, so no
+    # overlay ever waits on a stream whose first frame is in the future.
+    # ffmpeg 6.1 dropped exactly that kind of overlay without a word when
+    # it came second in a chain (the 0.28 lane check caught it on CI).
     base = "[base]"
-    for offset, piece in enumerate(graph.lanes):
-        segment = graph.segments[piece.segment]
-        args += _input_args(piece)
-        width, height_px, x, y = placement(graph, segment, height)
-        label = "[vout]" if offset == len(graph.lanes) - 1 else f"[o{offset}]"
-        chains.append(
-            _picture_chain(f"[{inputs}:v]", piece, (width, height_px), "")
-            + f",trim=end_frame={piece.frames},setpts=PTS-STARTPTS+{piece.start}/({FPS}*TB)[l{offset}]"
-        )
-        chains.append(
-            f"{base}[l{offset}]overlay=x={x}:y={y}:eof_action=pass:"
-            f"enable='between(n,{piece.start},{piece.start + piece.frames - 1})'{label}"
-        )
-        base = label
-        inputs += 1
+    tracks = lane_tracks(graph)
+    clear = f"color=c=black@0.0:s={canvas_w}x{canvas_h}:r={FPS},format=yuva420p"
+    for number, track in enumerate(tracks):
+        parts: list[str] = []
+        cursor = 0
+        for piece in track:
+            if piece.start > cursor:
+                label = f"[t{number}g{len(parts)}]"
+                chains.append(
+                    f"{clear},trim=end_frame={piece.start - cursor},setpts=PTS-STARTPTS{label}"
+                )
+                parts.append(label)
+            args += _input_args(piece)
+            width, height_px, x, y = placement(graph, graph.segments[piece.segment], height)
+            source, canvas, label = (
+                f"[t{number}s{len(parts)}]", f"[t{number}c{len(parts)}]", f"[t{number}p{len(parts)}]"
+            )
+            chains.append(_picture_chain(f"[{inputs}:v]", piece, (width, height_px), source, "yuva420p"))
+            chains.append(f"{clear},trim=end_frame={piece.frames},setpts=PTS-STARTPTS{canvas}")
+            chains.append(
+                f"{canvas}{source}overlay=x={x}:y={y}:eof_action=repeat:format=yuv420,"
+                f"trim=end_frame={piece.frames},setpts=PTS-STARTPTS,format=yuva420p{label}"
+            )
+            parts.append(label)
+            cursor = piece.start + piece.frames
+            inputs += 1
+        stream = f"[track{number}]"
+        chains.append(f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0{stream}")
+        out = "[vout]" if number == len(tracks) - 1 else f"[o{number}]"
+        # eof_action=pass: once a track's last clip ends, the base shows.
+        chains.append(f"{base}{stream}overlay=x=0:y=0:eof_action=pass:format=yuv420{out}")
+        base = out
 
     args += [
         "-filter_complex", ";".join(chains),

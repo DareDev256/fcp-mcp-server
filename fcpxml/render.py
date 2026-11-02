@@ -204,9 +204,10 @@ def verify_lanes(graph, out_path: str, height: int) -> list:
             piece.read_in, piece.read_in + into - piece.hold_head
         )
         # The expected frame takes the render's own pixel route (scaled, then
-        # yuv420p, then grey). Straight from a 10-bit ProRes to grey, ffmpeg
-        # 6.1 applies a different range conversion than the yuv420p proxy
-        # went through, and a correctly drawn lane measured 27/255 apart.
+        # yuv420p, then grey), so the comparison measures whether the clip is
+        # THERE, not how two colour conversions differ. (On ffmpeg 6.1 this
+        # check reported a 10-bit ProRes lane NOT drawn at 27/255, and it was
+        # right: the frame was black. See filtergraph.lane_tracks.)
         expected = _grey(
             piece.source, source_at,
             f"scale={width}:{height_px},setsar=1,format=yuv420p,"
