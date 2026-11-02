@@ -36,6 +36,12 @@ different length wherever there are transitions or gaps.
   middle of each lane clip's window is cut out of the proxy at the clip's
   placement and compared with its source; the report says `Seen in the
   render`, `NOT drawn` or `Not checked` (and why) per clip.
+- **Video lanes composite as one transparent track per lane number**, each
+  running in step with the base from frame 0 (transparent gaps between its
+  clips), instead of one overlay per clip with a time-shifted stream and an
+  enable window. On ffmpeg 6.1 the old shape drew the first lane clip and
+  silently dropped a later one chained after it; the new lane check caught
+  it on CI before release. It is also one blend pass per lane, not per clip.
 - **A render is VERIFIED only when the artifact is within one proxy frame
   of the timeline and every checked lane was seen.** A proxy ffmpeg wrote
   with no readable video is now an error, not a "Rendered:" line, and no
