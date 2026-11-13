@@ -108,3 +108,30 @@ def test_every_display_name_is_the_one_name():
 @pytest.mark.parametrize("path", ["README.md", "skills/fcpxml/SKILL.md", "docs/MCP_ECOSYSTEM.md"])
 def test_the_old_display_name_is_gone(path):
     assert "FCPXML MCP" not in (REPO / path).read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The logo at small sizes is the no-glyph mark
+# ---------------------------------------------------------------------------
+
+SMALL_PX = 96
+IMG = re.compile(r'<img[^>]*src="([^"]*logo[^"]*)"[^>]*width="(\d+)"')
+
+
+def small_logos_with_glyphs(text: str) -> list[str]:
+    """Every logo drawn at SMALL_PX or less that is not the no-glyph mark."""
+    return [f"{src} at {w}px" for src, w in IMG.findall(text) if int(w) <= SMALL_PX and "logo-small" not in src]
+
+
+def test_a_small_logo_is_the_no_glyph_mark():
+    assert IMG.findall((REPO / "README.md").read_text(encoding="utf-8")), "the README header logo moved"
+    assert small_logos_with_glyphs((REPO / "README.md").read_text(encoding="utf-8")) == []
+    import sys
+    sys.path.insert(0, str(REPO / "scripts"))
+    import logo
+    assert logo.SMALL == SMALL_PX
+    assert "<polyline" not in logo.svg(glyphs=False) and "<polyline" in logo.svg()
+
+
+def test_the_small_logo_rule_can_go_red():
+    assert small_logos_with_glyphs('<img src="docs/assets/logo-400.png" width="72" height="72">')

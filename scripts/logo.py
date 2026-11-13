@@ -3,7 +3,8 @@
     uv run --with playwright scripts/logo.py        # from the repo root
 
 Writes ``docs/assets/logo.svg`` and ``docs/assets/logo-400.png`` (transparent
-outside the tile). The layout is the 0.14 logo's, three lanes, three clips,
+outside the tile), and the no-glyph mark ``logo-small.svg`` / ``logo-small-400.png``
+for anything drawn at ``SMALL`` px or less (the README header, the card). The layout is the 0.14 logo's, three lanes, three clips,
 a playhead through the middle clip and two ``</>`` glyphs, redrawn in code so
 its colours are tokens (``fcpxml/palette.py``) instead of a purple bitmap that
 could only be recoloured by hand. The glyphs are strokes, not text, so the SVG
@@ -12,7 +13,7 @@ looks the same wherever it is rendered.
 Small sizes: the tile is a lifted grey with black lane slots, so it still
 reads as a tile on a true-black page at 52 to 58 px (a black tile vanished
 there), and ``svg(glyphs=False)`` drops the ``</>`` marks for anything drawn
-at 64 px or smaller, where they turn to noise. The social card uses that one.
+at 96 px or smaller, where they turn to noise.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ sys.path.insert(0, str(REPO))
 from fcpxml import palette  # noqa: E402
 
 ASSETS = REPO / "docs" / "assets"
-SMALL = 64  # px: at or below this, draw without the glyphs
+SMALL = 96  # px: at or below this, use the no-glyph mark (logo-small.*)
 
 
 def svg(glyphs: bool = True) -> str:
@@ -62,15 +63,16 @@ def main() -> None:
     from playwright.sync_api import sync_playwright
 
     ASSETS.mkdir(parents=True, exist_ok=True)
-    drawing = svg()
-    (ASSETS / "logo.svg").write_text(drawing + "\n", encoding="utf-8")
+    outputs = {"logo": svg(), "logo-small": svg(glyphs=False)}
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 400, "height": 400})
-        page.set_content(f'<html><body style="margin:0;background:transparent">{drawing}</body></html>')
-        page.screenshot(path=str(ASSETS / "logo-400.png"), omit_background=True)
+        for name, drawing in outputs.items():
+            (ASSETS / f"{name}.svg").write_text(drawing + "\n", encoding="utf-8")
+            page.set_content(f'<html><body style="margin:0;background:transparent">{drawing}</body></html>')
+            page.screenshot(path=str(ASSETS / f"{name}-400.png"), omit_background=True)
         browser.close()
-    print("docs/assets/logo.svg, docs/assets/logo-400.png")
+    print("docs/assets/logo{,-small}.svg, docs/assets/logo{,-small}-400.png")
 
 
 if __name__ == "__main__":

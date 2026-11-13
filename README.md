@@ -1,4 +1,4 @@
-<img src="docs/assets/logo-400.png" width="72" height="72" alt="">
+<img src="docs/assets/logo-small-400.png" width="72" height="72" alt="">
 
 # fcp-mcp-server
 
