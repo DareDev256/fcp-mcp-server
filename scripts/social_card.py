@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO))
 from fcpxml import palette  # noqa: E402
 
 sys.path.insert(0, str(REPO / "scripts"))
+import image_text  # noqa: E402
 import logo  # noqa: E402
 
 ASSETS = REPO / "docs" / "assets"
@@ -50,9 +51,10 @@ def html(frame_png: bytes) -> str:
     shot = "data:image/png;base64," + base64.b64encode(frame_png).decode("ascii")
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   html, body {{ margin: 0; width: {WIDTH}px; height: {HEIGHT}px; overflow: hidden; background: {t("ground")}; }}
-  body {{ position: relative; font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
-         color: {t("ink")}; }}
-  #head {{ position: absolute; left: 56px; right: 56px; top: 40px; display: grid;
+  /* One centred column, header over picture: no empty band whatever the picture's height. */
+  body {{ font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif; color: {t("ink")};
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; }}
+  #head {{ width: 1168px; box-sizing: border-box; padding: 0 6px; display: grid;
           grid-template-columns: auto 1fr auto; column-gap: 18px; row-gap: 10px; align-items: center; }}
   #mark {{ width: 58px; height: 58px; grid-row: 1 / span 2; align-self: start; }}
   #mark svg {{ width: 58px; height: 58px; display: block; }}
@@ -62,7 +64,7 @@ def html(frame_png: bytes) -> str:
   #promise {{ grid-column: 2 / span 2; margin: 0; font-size: 25px; line-height: 1.2; font-weight: 600;
              letter-spacing: -0.01em; }}
   #subtitle {{ grid-column: 2 / span 2; margin: -4px 0 0; font-size: 17px; color: {t("mute")}; }}
-  #shot {{ position: absolute; left: 50%; transform: translateX(-50%); bottom: 34px; width: 1168px;
+  #shot {{ width: 1168px; flex: none;
           border: 1px solid {t("line")}; border-radius: 14px; overflow: hidden; background: {t("ground")}; }}
   #shot img {{ display: block; width: 100%; }}
 </style></head><body>
@@ -123,6 +125,8 @@ def main() -> int:
         page.set_content(page_html)
         page.wait_for_load_state("load")
         problems = collisions(page.evaluate(MEASURE))
+        # nothing a release would make wrong: no price, model id, frame size, version or star count
+        problems += image_text.stale_in(page.evaluate("document.body.innerText"))
         if problems:
             browser.close()
             print("refusing to write the card:\n  " + "\n  ".join(problems), file=sys.stderr)

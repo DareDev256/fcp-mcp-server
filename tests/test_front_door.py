@@ -135,3 +135,46 @@ def test_a_small_logo_is_the_no_glyph_mark():
 
 def test_the_small_logo_rule_can_go_red():
     assert small_logos_with_glyphs('<img src="docs/assets/logo-400.png" width="72" height="72">')
+
+
+# ---------------------------------------------------------------------------
+# Nothing a release would make wrong is baked into an image
+# ---------------------------------------------------------------------------
+
+def _image_text():
+    import sys
+    sys.path.insert(0, str(REPO / "scripts"))
+    import image_text
+    return image_text
+
+
+@pytest.mark.parametrize("baked", [
+    "fal/kling-2.5 · $0.70 · refused until confirm=true",   # the 0.31 first-pass hero
+    "ui://fcp/timeline · MCP Apps · 1920×1200",
+    "generated: gemini/omni-1.2-flash — a skyline",
+    "v0.13" + ".1",
+    "71 stars",
+])
+def test_the_image_guard_sees_stale_text(baked):
+    assert _image_text().stale_in(baked)
+
+
+@pytest.mark.parametrize("clean", [
+    "Session cut", "4 clips · 37.0s", "2 rests cut · 6.33s removed", "00:00:10:00", "uvx fcp-mcp-server",
+    "Edit Final Cut Pro by talking to Claude, and watch the cut change.",
+    "quoted under the cap, refused until confirm=true",
+])
+def test_the_image_guard_passes_plain_text(clean):
+    assert _image_text().stale_in(clean) == []
+
+
+def test_the_app_may_state_its_own_frame_size():
+    it = _image_text()
+    assert it.stale_in("Session cut 7 clips · 30.667s · 1920×1080 @ 24fps", scope="app") == []
+    assert it.stale_in("1920×1080", scope="host")
+
+
+def test_both_image_builders_use_the_guard():
+    assert "image_text.stale_in(" in (REPO / "scripts" / "social_card.py").read_text(encoding="utf-8")
+    assert "image_text.patterns(" in (REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8")
+    assert "refuseStale(" in (REPO / "demo" / "hero" / "record.js").read_text(encoding="utf-8")

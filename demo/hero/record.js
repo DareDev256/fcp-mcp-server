@@ -235,6 +235,19 @@ async function hiddenNames(frame) {
     .filter((e) => e.getBoundingClientRect().right > document.getElementById("chat").getBoundingClientRect().right + 0.5)
     .map((e) => e.textContent));
   if (overflow.length) await refuse("chat lines wider than their column: " + JSON.stringify(overflow));
+  // Every text check runs on the finished frame BEFORE the capture, so a
+  // refusal costs seconds, not a full recording.
+  await page.evaluate((ms) => window.__seek(ms), states.loop_start * 1000);
+  await refuseStale("the hero", await page.evaluate(() => document.body.innerText), "host");
+  for (let i = 0; i < states.states.length; i++) {
+    await refuseStale(`app state ${i}`, await page.frameLocator("#app" + i).locator("body").evaluate((b) => b.innerText), "app");
+  }
+  const footerHit = await page.evaluate(() => {
+    const f = document.getElementById("mock").getBoundingClientRect();
+    const lines = [...document.querySelectorAll("#claude .line")].map((e) => e.getBoundingClientRect());
+    return lines.some((l) => l.bottom > f.top - 6);
+  });
+  if (footerHit) await refuse("the footer note runs into the tool calls");
   // Fonts and thumbnails settle before the first frame.
   await page.waitForTimeout(500);
   const total = Math.round(states.duration * FPS);
@@ -250,16 +263,6 @@ async function hiddenNames(frame) {
   const inside = cap.x >= frameBox.x + 1 + sv.x && cap.x + cap.width <= frameBox.x + 1 + sv.x + sv.w &&
                  cap.y >= frameBox.y + 1 + sv.y && cap.y + cap.height <= frameBox.y + 1 + sv.y + sv.h;
   if (!inside) await refuse("the caption pill is not inside the SERVER panel: " + JSON.stringify({ cap, sv }));
-  await refuseStale("the hero", await page.evaluate(() => document.body.innerText), "host");
-  for (let i = 0; i < states.states.length; i++) {
-    await refuseStale(`app state ${i}`, await page.frameLocator("#app" + i).locator("body").evaluate((b) => b.innerText), "app");
-  }
-  const footerHit = await page.evaluate(() => {
-    const f = document.getElementById("mock").getBoundingClientRect();
-    const lines = [...document.querySelectorAll("#claude .line")].map((e) => e.getBoundingClientRect());
-    return lines.some((l) => l.bottom > f.top - 6);
-  });
-  if (footerHit) await refuse("the footer note runs into the tool calls");
   const ox = frameBox.x + 1, oy = frameBox.y + 1;
   const hit = sv.words.find((q) => cap.x < ox + q.x + q.w && ox + q.x < cap.x + cap.width &&
                                    cap.y < oy + q.y + q.h && oy + q.y < cap.y + cap.height);

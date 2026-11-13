@@ -10,15 +10,16 @@ reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 [![Final Cut Pro for Mac 10.4 to 12.4](https://img.shields.io/static/v1?label=Final%20Cut%20Pro&message=Mac%2010.4%E2%80%9312.4&color=33EBFF&labelColor=000000)](#compatibility)
 [![License: MIT](https://img.shields.io/static/v1?label=license&message=MIT&color=33EBFF&labelColor=000000)](LICENSE)
 
-[![Watch Claude cut: one prompt on the left with the seven tool calls Claude made, and on the right the ui://fcp/timeline app re-rendering after each one. The take loses its dead air, four section markers appear on the ruler, and a generated B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+[![Watch Claude cut a gym session: one prompt on the left with the seven tool calls Claude made, and on the right the ui://fcp/timeline app re-rendering after each one. The long squat set loses its rests, four lift markers appear on the ruler, and a B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
 
 *One prompt, seven tool calls, and the timeline re-rendered inline after each
 write. The loop opens on the finished cut, then plays the calls in order
 ([MP4](docs/assets/hero-watch-claude-cut.mp4),
 [full-size still](docs/assets/hero-still.png)). Every frame is the real
-`ui://fcp/timeline` app drawing a real `view_timeline` result; the B-roll
-provider is mocked and the recording says so on screen. Re-recorded with
-[`demo/hero/build.py`](demo/hero/build.py).*
+`ui://fcp/timeline` app drawing a real `view_timeline` result, cut from the
+author's own gym session (its audio is a test tone, so the rests are real
+silence). The B-roll provider is mocked for this recording and the frame
+says so on screen. Re-recorded with [`demo/hero/build.py`](demo/hero/build.py).*
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a
 host with MCP Apps draws it inline: lanes, thumbnails, markers, transcript
