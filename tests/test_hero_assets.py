@@ -183,11 +183,17 @@ def dissolve_frames(frames: list[list[int]], holds: list[int]) -> list[int]:
     return bad
 
 
+# A held picture: under 0.1 grey levels from its neighbours (an unchanging
+# frame of this encode measures 0.00 to 0.02). A small-region dissolve moves
+# about 0.3 a frame, so a looser line would count its frames as holds.
+HELD_STEP = 0.1
+
+
 def mp4_dissolves(path: Path, box, skip_last: int = 0) -> list[int]:
     frames = mp4_grey_frames(path, box)
     if skip_last:
         frames = frames[:-skip_last]
-    still = [mean_step(frames[i], frames[i + 1]) < 0.6 for i in range(len(frames) - 1)]
+    still = [mean_step(frames[i], frames[i + 1]) < HELD_STEP for i in range(len(frames) - 1)]
     holds = [i for i in range(1, len(frames) - 1) if still[i - 1] and still[i]]
     return dissolve_frames(frames, holds)
 

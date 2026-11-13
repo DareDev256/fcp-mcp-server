@@ -411,7 +411,7 @@ def encode(work: Path) -> None:
     first = Image.open(frames[0]).convert("RGB")
     # The loop's seam, the one crossfade: the last SEAM seconds blend into frame 0.
     n = round(seam * fps)
-    for i, f in enumerate(frames[-n:], 1):
+    for i, f in enumerate(frames[-n:] if n else [], 1):  # (frames[-0:] would be every frame)
         Image.blend(Image.open(f).convert("RGB"), first, i / n).save(f)
     grey = [Image.open(f).convert("L").resize((160, 96)) for f in frames]
     diff = lambda a, b: ImageStat.Stat(ImageChops.difference(a, b)).mean[0]  # noqa: E731
