@@ -159,6 +159,28 @@ def test_the_image_guard_sees_stale_text(baked):
     assert _image_text().stale_in(baked)
 
 
+OWN_EXAMPLE = {
+    "a price": "$0.70",
+    "a model or provider id": "fal/kling-2.5",
+    "a frame size": "1920×1200",
+    "a version": "v0.13" + ".1",
+    "a star count": "71 stars",
+}
+
+
+@pytest.mark.parametrize("label", sorted(OWN_EXAMPLE))
+def test_each_rule_catches_its_own_example(label):
+    """One example per rule, caught BY that rule: a rule removed from the
+    guard cannot hide behind another rule matching the same string."""
+    it = _image_text()
+    assert label in it.STALE, f"the guard lost its rule for {label}"
+    assert any(hit.startswith(label + ":") for hit in it.stale_in(OWN_EXAMPLE[label])), label
+
+
+def test_every_rule_has_an_example():
+    assert set(_image_text().STALE) == set(OWN_EXAMPLE)
+
+
 @pytest.mark.parametrize("clean", [
     "Session cut", "4 clips · 37.0s", "2 rests cut · 6.33s removed", "00:00:10:00", "uvx fcp-mcp-server",
     "Edit Final Cut Pro by talking to Claude, and watch the cut change.",

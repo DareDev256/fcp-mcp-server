@@ -188,6 +188,15 @@ def test_the_scrim_is_full_before_the_text_starts():
     assert full <= text, f"the scrim is still fading where the text starts ({full}px > {text}px)"
 
 
+def test_text_over_a_thumbnail_is_the_label_colour():
+    """The role text sits on the same scrim: mute grey there read about 3:1."""
+    from fcpxml import timeline_app
+
+    html = timeline_app.render_app_html()
+    rule = re.search(r"\.clip\.has-thumb \.role \{([^}]*)\}", html)
+    assert rule and "color: var(--on-media)" in rule.group(1)
+
+
 def test_the_scrim_rules_can_go_red():
     """Mutation checks: a 25% scrim fails the arithmetic, and a fade that
     ends below the text top fails the layout rule."""
