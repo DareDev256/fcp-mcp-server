@@ -265,7 +265,8 @@ def _label_contrast(browser, html: str) -> float:
     # where the text is drawn, inset 2px: the box sits at a fractional x, so its edge
     # columns catch a sliver of the clip border beside it
     band = shot.crop((2, int(top) + 1, shot.width - 2, shot.height - 1))
-    brightest = max(band.getdata(), key=sum)
+    raw = band.tobytes()  # RGB triples; getdata() is deprecated from Pillow 13
+    brightest = max((tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)), key=sum)
     return palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % brightest)
 
 
@@ -280,6 +281,32 @@ def test_the_scrim_check_goes_red_without_the_scrim(browser):
                           "background: linear-gradient(transparent, var(--shade));")
     assert broken != html
     assert _label_contrast(browser, broken) < 4.5
+
+
+def _spine_tile_height(browser) -> float:
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    try:
+        page.set_content(timeline_app.render_app_html())
+        page.evaluate("p => window.__fcpApp.setPayload(p)", _payload("sample.fcpxml"))
+        return page.evaluate("() => document.querySelector('.lane.spine .clip').getBoundingClientRect().height")
+    finally:
+        page.close()
+
+
+def thumbnail_problem(short_side: int, tile_height: float) -> str | None:
+    """A thumbnail's short side is at least twice the tile it fills, so it is
+    sharp on a 2x display instead of upscaled (round 4: 54 px in a 48 px tile)."""
+    if short_side < 2 * tile_height:
+        return f"{short_side} px thumbnails for a {tile_height:.0f} px tile: under 2x"
+    return None
+
+
+def test_thumbnails_are_twice_the_tile(browser):
+    assert thumbnail_problem(timeline_app.THUMBNAIL_SHORT_SIDE, _spine_tile_height(browser)) is None
+
+
+def test_the_thumbnail_check_goes_red_at_the_old_size(browser):
+    assert thumbnail_problem(54, _spine_tile_height(browser)) is not None
 
 
 # ---------------------------------------------------------------------------

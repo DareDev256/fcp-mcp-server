@@ -422,7 +422,7 @@ def encode(work: Path) -> None:
     write_gif(gif, picks, box["w"], Image, crop)
     if gif.stat().st_size > GIF_MAX_BYTES:
         sys.exit(f"the GIF is {gif.stat().st_size / 1e6:.2f} MB at {box['w']} px, over the "
-                 f"{GIF_MAX_BYTES / 1e6:.0f} MB cap: shorten the story or lower GIF_FPS")
+                 f"{GIF_MAX_BYTES / 1e6:.1f} MB cap: shorten the story or lower GIF_FPS")
     for p in (mp4, gif):
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
 
