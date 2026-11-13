@@ -22,7 +22,10 @@ been captured in Claude Desktop for this release
   waveform plate and trace, the README hero, the social card, the logo and
   the README badges all read it. Out: the amber, pink, purple, green, yellow
   and default blue of the legacy render, the warm-brown title clip, the
-  purple logo tile and the six badge colours.
+  purple logo tile and the six badge colours. The one other cyan is the
+  badges' `#33EBFF`, kept because the contrast rule needs it: shields.io
+  picks white text on `#00E5FF` (1.8:1) and `#333` just past it (8.7:1).
+  The tokens file says so. The card frame is flattened onto the ground.
 - **The `view` app follows the host's theme** (`hostContext.theme`, else the
   OS preference): a white ground with the same cyan as a fill and the darker
   cyan for text and lines. Clip labels sit on a scrim only over a thumbnail.
@@ -55,6 +58,13 @@ been captured in Claude Desktop for this release
   "00:00:2("; marker names take a second row before giving up, so a marker
   is no longer dropped without a trace; the view fits the whole sequence
   (zoom to fit), and the gap hatch is drawn on gaps only.
+- **Nothing in the `view` app touches.** The playhead starts under the two
+  marker rows, so a marker at the playhead keeps its flag and name (at 390
+  its head sat on "Opening"); ruler times clear the head by 9 px; the lanes
+  end 8 px above the border (the last lane's clips sat 2 to 4 px from it).
+  Disabled buttons read at 4.5:1 (the mute token on the button fill, where a
+  45% opacity read 4.1:1). Thumbnails are extracted at 108 px on the short
+  side, twice what a spine tile shows.
 - **The legacy `preview://` page**: clip fills read at 3:1 against their
   lane with a thin accent strip on top, and a name that does not fit its
   block is hidden (pure CSS; the page has no script) instead of cut to "O.".
@@ -69,32 +79,43 @@ been captured in Claude Desktop for this release
 - **The README hero is cut from the author's own gym session** (the SLVLING
   form pass, where he is the only person in frame): "Session cut" with Bench,
   Squat (the long set), Press and Finish, its audio a test tone so the rests
-  are real silence; four silent 360x640 proxies (0.5 MB) live in
-  `demo/hero/footage/`. The B-roll is one real Gemini Omni Flash generation
-  bought once (`build.py --generate`, prompt only, capped at US$0.70, never
-  bought twice) and replayed on every build; this recording's attempt was
-  refused by the API before generating (HTTP 403), so nothing was spent and
-  the tile is a stand-in that says MOCKED in its own pixels and in the footer.
-  The GIF is 1920 px wide and under 5 MB, and the first decoded frame of
-  both the GIF and the MP4 is the finished cut (the MP4 also carries it as its
-  attached poster). No price, model id, frame size or version is printed in
-  the hero or the card: `scripts/image_text.py` makes both builders refuse.
+  are real silence; four silent 640x360 proxies (0.7 MB) live in
+  `demo/hero/footage/`, each a 16:9 band of the portrait original placed so
+  the bar sits above the label in its thumbnail. The B-roll is one real
+  Gemini Omni Flash generation bought once (`build.py --generate`, prompt
+  only, capped at US$0.70, never bought twice) and replayed on every build;
+  this recording's attempt was refused by the API before generating (HTTP
+  403), so nothing was spent and the tile is a stand-in: the clip is named
+  "B-roll (mocked)", its marker "mock b-roll: Toronto skyline at dusk", it
+  carries a solid MOCK pill (accent ink on the accent fill, measured onto the
+  tile and never over its label) and the footer says so. The README GIF is
+  the timeline alone, 1000 px wide so the app's 10 to 11 px type is 20 to 22
+  px in it, and under 5 MB; the prompt and the six calls are README text
+  under it, and the MP4 keeps the chat beside the app. The first decoded
+  frame of both is the finished cut (the MP4 also carries it as its attached
+  poster). No price, model id, frame size or version is printed in the hero
+  or the card: `scripts/image_text.py` makes both builders refuse.
 - **The README hero opens on the finished cut.** The GIF opens on it and then
   plays the story; the MP4 does too, and carries the finished frame as its
   poster (an attached picture). The GIF's first frame had been fixed by hand in a51c13b
-  and a rebuild would have lost it; the generator does it now. The demo was
-  recomposed: a taller window so the SERVER panel ends inside it, the
-  "re-rendered from" caption inside that panel, short source names so every
-  clip name fits, neutral grey stills for thumbnails (nothing competes with
-  the cyan), and a 10 s B-roll. The recorder refuses to write a frame with a
-  hidden name, a chat line wider than its column, a cut SERVER panel or a
-  caption outside it.
+  and a rebuild would have lost it; the generator does it now. The story
+  starts on the imported four-clip cut (the import is setup), so there is no
+  empty "Waiting for a timeline" stage, and each write cross-fades in 180 ms
+  (the full-height wipe is gone). The demo was recomposed: a taller window so
+  the SERVER panel ends inside it, the "re-rendered from" caption inside that
+  panel, short source names so every clip name fits, and a 10 s B-roll. The
+  recorder refuses to write a frame with a hidden name, a chat line wider
+  than its column, a cut SERVER panel, a caption outside it, or a MOCK pill
+  off its tile or over its label; `build.py` refuses a GIF over 5 MB rather
+  than narrow it.
 
 ### Added (tooling, no new operations)
 - `scripts/social_card.py`: the 1280x640 GitHub card from the palette and a
-  real frame (the prompt and tool calls beside the finished timeline,
-  `docs/assets/card-frame.png`), with no version and no star count; it
-  refuses to write a card whose text wraps, collides or leaves the card.
+  real frame (the prompt and four tool calls beside the finished timeline's
+  ruler and lanes, scaled 1.75x with no header or zoom buttons,
+  `docs/assets/card-frame.png`), with no version and no star count; the
+  install chip sits on the subtitle's row, its right edge on the picture's;
+  it refuses to write a card whose text wraps, collides or leaves the card.
   `scripts/check_social_preview.py` compares what github.com serves with it.
 - `scripts/logo.py`: the logo redrawn in code from the tokens (SVG + PNG).
 - `scripts/pypi_readme.py` and two publish steps: the README's relative
@@ -116,7 +137,8 @@ been captured in Claude Desktop for this release
   through 0.31.0; one name, `fcp-mcp-server`, with the subtitle "reads and
   writes FCPXML, no plugin, no patch" under the bold benefit line; three
   badges on one hue with dark text; the logo (a PNG, so PyPI shows it), with
-  a lifted grey tile that still reads at 52 px on black; the hero GIF inline.
+  a lifted grey tile that still reads at 52 px on black; the hero GIF inline
+  with the prompt and the calls as text under it.
 
 ### Tests
 - `test_palette.py`: every colour in a surface file is a token; tokens are
@@ -141,9 +163,16 @@ been captured in Claude Desktop for this release
 - The badge colour must be past shields.io's dark-text line (white on
   `#00E5FF` read at 1.8:1), the version badge must be dynamic, block fills
   must read at 3:1, and the PyPI check refuses an SVG from the repository.
-- `test_hero_assets.py`: the MP4's first DECODED frame (not its poster) and
-  the GIF's first frame match the finished still; a story frame is seen as
-  different; the GIF is at least 1440 wide and under 5 MB.
+- `test_hero_assets.py`: the MP4's first DECODED frame (not its poster)
+  matches the finished still and the GIF's first frame the same crop of it; a
+  story frame is seen as different in each; the GIF is the timeline crop (at
+  least 1000 wide, not the whole frame) and under 5 MB; the card frame has no
+  transparency.
+- `test_front_door.py`: the README's call list under the hero is the calls
+  `demo/hero/build.py` records, in its order.
+- `test_app_labels.py`: the playhead's head touching any visible label, its
+  line covering a marker flag, or a clip within 6 px of the track's bottom
+  border fails it; `test_palette.py`: disabled buttons at 4.5:1 in both modes.
 - The label scrim: composited over white, yellow, cyan and black frames at
   4.5:1, full before the text starts, and measured on a rendered clip over a
   pure white thumbnail; the stale-image patterns and both builders using them;
