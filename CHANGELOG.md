@@ -70,9 +70,15 @@ been captured in Claude Desktop for this release
   a gap: the pieces of a split clip start where that footage sat and slide
   together, the clips after them slide left, a new clip is laid in from its
   left edge, and new markers land whole, one after another, left to right.
-  400 ms ease-out; only position, size and (in steps) visibility animate,
-  never opacity; a clip's name stays hidden while its clip is too narrow for
-  all of it; `prefers-reduced-motion` jumps. Web Animations, so a recorder
+  An undo moves back the same way: pieces that came from one clip merge into
+  it from the span they covered, a clip with no successor shrinks out where
+  it was (its name hidden as it goes), and markers with none leave in turn,
+  right to left. 400 ms ease-out; only position, size, colour and (in steps)
+  visibility animate, never opacity. A clip's scrim is drawn the whole time;
+  its name is held transparent while the clip is narrower than the name and
+  fades in over 120 ms once it fits (the moment solved from the motion's own
+  easing curve), so no frame shows a cut name and none drops a name that
+  fits. `prefers-reduced-motion` jumps. Web Animations, so a recorder
   can pause and seek them. The frame redraws on a width change only (hosts
   resize to the content's height after a render, which used to redraw and
   cut the motion short).
@@ -81,7 +87,14 @@ been captured in Claude Desktop for this release
   instead of pushing the spine and the panels under it down.
 - **A ruler tick is its time.** A tick whose time does not fit the view is
   dropped whole, line and all (a 30 s tick at the end of a 30.7 s cut showed
-  with no label).
+  with no label). Ticks sit on whole seconds of the timecode they print: a
+  timecode second at 23.98 is 1001/1000 of a real one, so a tick placed on
+  real seconds read 00:00:29:23. A ruler time the playhead's line or head
+  would cut through is hidden while it is there (at 390 with a clip selected
+  it cut "00:00:0|0:00").
+- **Thumbnails tile along a clip at their own aspect,** repeated at the
+  clip's height like Final Cut's filmstrip, instead of one frame stretched
+  to the clip (about 2.5x wide on the hero's long set).
 - **The legacy `preview://` page**: clip fills read at 3:1 against their
   lane with a thin accent strip on top, and a name that does not fit its
   block is hidden (pure CSS; the page has no script) instead of cut to "O.".
@@ -96,54 +109,63 @@ been captured in Claude Desktop for this release
 - **The README hero is cut from the author's own gym session** (the SLVLING
   form pass, where he is the only person in frame): "Session cut" with Bench,
   Squat (the long set), Press and Finish, its audio a test tone so the rests
-  are real silence; four silent 640x360 proxies (0.7 MB) live in
-  `demo/hero/footage/`, each a 16:9 band of the portrait original placed so
-  the bar sits above the label in its thumbnail (bench, press and finish 6 s;
-  three 5 s squat sets with 2 s rests, so every name fits at phone width,
-  cut and uncut). The B-roll is one real
-  Gemini Omni Flash generation bought once (`build.py --generate`, prompt
-  only, capped at US$0.70, never bought twice) and replayed on every build;
-  this recording's attempt was refused by the API before generating (HTTP
-  403), so nothing was spent and the tile is a stand-in: the clip is named
-  "B-roll (mocked)", its marker "mock b-roll: Toronto skyline at dusk", it
-  carries a solid MOCK pill (accent ink on the accent fill, measured onto the
-  tile, moving with it, never over its label) and the footer says so. The
-  README GIF is its own cut: the ruler and lanes alone, inside the panel, the
-  app laid out at 440 CSS px and drawn at 3x, so its 10 to 11 px type is 30 to
-  33 px in a 1070 px GIF (10 px when a phone shows it 358 px wide; the
-  recorder refuses under that); 9.1 s: the finished cut 3 s, the imported
-  cut 1.5 s, then the edit, the markers and the B-roll, about 2 s each;
-  0.8 MB. The prompt and the six calls are README text under it, and the
-  MP4 keeps the chat beside the app. The first decoded frame of both is the
-  finished cut (the MP4 also carries it as its attached poster). No price,
-  model id, frame size or version is printed in the hero or the card:
-  `scripts/image_text.py` makes both builders refuse.
-- **The README hero opens on the finished cut.** The GIF opens on it and then
-  plays the story; the MP4 does too, and carries the finished frame as its
-  poster (an attached picture). The GIF's first frame had been fixed by hand in a51c13b
-  and a rebuild would have lost it; the generator does it now. One app
-  instance receives the four results in order, so every change is the app's
-  own motion; no frame holds two renders (the round-4 hero cross-faded whole
-  renders: "SqSquat", two SELECTION headers). The chat and the timeline are
-  in step: the timeline appears with the `view` call, a second in (no
-  "Waiting for a timeline" stage), and each later call lands 0.1 s before its
-  edit starts to move. The demo was recomposed: an 860x640 window so the
-  SERVER panel ends inside it, the "re-rendered from" caption inside that
-  panel, short source names so every clip name fits, and a 10 s B-roll. The
-  recorder refuses to write a frame with a hidden name (in any state, in the
-  MP4's, the GIF's or the card's layout), a chat line wider than its column,
-  a cut SERVER panel, a caption outside it, or a MOCK pill off its tile or
-  over its label; `build.py` refuses a GIF over 5 MB rather than narrow it.
+  are real silence. Four silent 640x360 proxies live in
+  `demo/hero/footage/`, each joined from segments of the same three clips so
+  that its midpoint, where the app takes its thumbnail, shows its own lift:
+  Bench him sitting up on the pad, Squat three 5 s sets (standing, half way
+  down, at the bottom) with 1.5 s rests, Press the arm driving the bar,
+  Finish the floor and the plates (5.5, 18, 5 and 5.5 s, so every name fits
+  at phone width, cut and uncut). The B-roll is one real Gemini Omni Flash
+  generation bought once (`build.py --generate`, prompt only, capped at
+  US$0.70, never bought twice) and replayed on every build; this recording's
+  attempt was refused by the API before generating (HTTP 403), so nothing
+  was spent and the tile is a stand-in: the clip is named "B-roll (mocked)",
+  its marker "mock b-roll: Toronto skyline at dusk", and it carries a solid
+  MOCK badge (accent ink on the accent fill, inside the tile, revealed as it
+  grows, never over its label). No price, model id, frame size or version is
+  printed in the hero or the card: `scripts/image_text.py` makes both
+  builders refuse.
+- **The README hero is a composed stage around the real timeline view.**
+  Four rounds recorded the whole chat client, where the timeline was 14% of
+  the frame. Now the `ui://fcp/timeline` view alone (the app as served, one
+  instance fed the four real `view_timeline` results in order) is drawn 2.24x
+  on true black, its ruler and lanes covering 69% of a 1280x736 frame, with
+  no SELECTION or SERVER panel and no empty panel at any point. Above it one
+  prompt line types, then a chip names each call as it runs (the calls in the
+  README's `hero-calls` block, which a test ties to the recording). Every
+  change in the view is the app's own motion; a virtual camera (a CSS
+  transform on the stage, eased, at most 1.08x, never a crop of the output)
+  pushes onto what each edit changes. 10.2 s at 30 fps: frame 0 is the
+  finished cut and the poster (the MP4 also carries it as an attached
+  picture); the app's undo rewinds to the imported cut; the edit, the
+  markers and the B-roll each move for about half a second; every hold has
+  typing in it and the longest is 1.17 s; the last 0.3 s crossfades into
+  frame 0, the only crossfade. The MP4 (0.9 MB) and the GIF (960 wide,
+  15 fps, 3.4 MB) come from the same frames. The recorder refuses any frame
+  with a doubled, dropped or clipped name (or one cut by the stage's edge,
+  or a leaving clip's name shown cut), a thumbed clip without its scrim, a
+  thumbnail not tiled at its aspect, the view under 60% of the frame or
+  pushed past it, text under 10 px when the frame is shown 358 px wide
+  (measured from every text the view shows in any state: 10.04 px), a
+  caption past the frame, or a name the app had to hide in any state;
+  `build.py` refuses a hold over 1.5 s, a loop whose last frame is not
+  frame 0, and a GIF over 5 MB. The round-5 chat-client recording is kept
+  unedited (`docs/assets/hero-unedited-recording.mp4`) and linked under the
+  hero, whose alt text and caption say what is real (the view, the results,
+  the motion) and what is composed (the stage, the captions, the timing, the
+  camera).
 
 ### Added (tooling, no new operations)
 - `scripts/social_card.py`: the 1280x640 GitHub card from the palette and a
-  real frame: the name, the promise, the subtitle at 26 px with the install
-  chip on its row, the prompt on its own line at 23 px, and the finished
-  timeline's ruler and lanes at 1.75x (`docs/assets/card-frame.png`, no
-  header or zoom buttons, cropped inside the panel), all on one 1040 px
-  column; the tool calls are README text, not card text. No version and no
-  star count; it refuses to write a card whose text wraps, collides or
-  leaves the card.
+  real frame: the logo, the name and the install chip on one row, the
+  promise at 44 px on two balanced lines, and the finished timeline's ruler
+  and lanes at 1.75x (`docs/assets/card-frame.png`, cropped inside the panel
+  to the spine's own border), on one 1120 px column. The subtitle and the
+  prompt are README text: at 390 px a card is shown at 0.3 scale, where they
+  were 4 to 7 px. No version and no star count; it refuses to write a card
+  whose text wraps, collides or leaves the card. The card and the logo are
+  frozen: tests pin their bytes, and the hero build writes the card's
+  picture only with `--card`.
   `scripts/check_social_preview.py` compares what github.com serves with it.
 - `scripts/logo.py`: the logo redrawn in code from the tokens (SVG + PNG).
 - `scripts/pypi_readme.py` and two publish steps: the README's relative
@@ -165,12 +187,14 @@ been captured in Claude Desktop for this release
   Apple); Mac only (Final Cut for iPad has no FCPXML path); the MCP protocol
   as a dated spec version; SpliceKit's last release re-read; the roadmap
   through 0.31.0; one name, `fcp-mcp-server`, with the subtitle "reads and
-  writes FCPXML, no plugin, no patch" under the bold benefit line; two
-  badges on one hue with dark text (PyPI's live version, the license) and a
-  text line "Python 3.10+ · Final Cut Pro for Mac 10.4 to 12.4", so no
-  version range is baked into an image; the logo (a PNG, so PyPI shows it), with
-  a lifted grey tile that still reads at 52 px on black; the hero GIF inline
-  with the prompt and the calls as text under it.
+  writes FCPXML, no plugin, no patch" under the bold benefit line; three
+  badges on one hue with dark text (PyPI's live version, the license, and
+  CI's live tests status, never a baked "passing") and a text line "Python
+  3.10+ · Final Cut Pro for Mac 10.4 to 12.4", so no version range is baked
+  into an image; the logo (a PNG, so PyPI shows it) on a true black tile with
+  a `#2A2A32` hairline, which reads at 16, 32 and 64 px on black, on white
+  and on GitHub's dark grey; the hero GIF inline with the prompt and the
+  calls as text under it.
 
 ### Tests
 - `test_palette.py`: every colour in a surface file is a token; tokens are
@@ -196,13 +220,17 @@ been captured in Claude Desktop for this release
 - The badge colour must be past shields.io's dark-text line (white on
   `#00E5FF` read at 1.8:1), the version badge must be dynamic, block fills
   must read at 3:1, and the PyPI check refuses an SVG from the repository.
-- `test_hero_assets.py`: the MP4's first DECODED frame (not its poster)
-  matches the finished still and the GIF's first frame the same crop of it; a
-  story frame is seen as different in each; the GIF is the timeline alone
-  (at least 1000 wide, not the whole frame) and under 5 MB; every GIF
-  frame's bottom rows are one flat colour, nothing cut by the edge (the
-  first round-4 GIF, with the panel sliced, fails it); the card frame has no
-  transparency.
+- `test_hero_assets.py` (the round-6 stage): the MP4's first DECODED frame
+  (not its poster) is the finished still and the GIF's first frame the same
+  composition scaled, with an instrument check that a later frame reads as
+  different; the poster is also attached; the GIF is under 5 MB; no hold over
+  1.5 s (and the check sees a planted 2 s one); the loop is seamless (red on
+  one cut at 6 s); no frame of the view outside the seam is a dissolve, each
+  in-between frame fitted as a mix of the held pictures either side (a 0.4 s
+  dissolve planted between two holds fails it, and so does the round-4
+  MP4); the view covers 60% and the type reads at 10 px at 358 by the
+  recorder's own numbers; the unedited recording is kept and linked; the
+  card frame has no transparency.
 - `test_front_door.py`: the README's call list under the hero is the calls
   `demo/hero/build.py` records, in its order; the first screen's "Python X+
   · Final Cut Pro for Mac A to B" says what pyproject.toml and the
@@ -210,14 +238,20 @@ been captured in Claude Desktop for this release
 - `test_app_motion.py` (rendered, in the `rendered-labels` job): a split
   clip's pieces start where their footage sat and the gap closes; no
   animation fades (and the check goes red on a planted fade); a new clip
-  grows from nothing with its name hidden until whole; new markers land
-  whole, in turn; reduced motion jumps; the spine's top does not move when
-  lane 1 fills; every visible ruler tick shows its whole time.
-- `test_hero_assets.py`: no frame of the GIF, and no frame of the MP4's
-  timeline, is a dissolve: each in-between frame is fitted as a mix of the
-  held pictures either side; a dissolve leaves 0.17 or less unexplained,
-  the motion 0.5 or more, and both round-4 assets fail it. The GIF runs 7 to
-  11 s with no hold over 3 s.
+  grows from nothing; new markers land whole, in turn; frame by frame at 390
+  every thumbed name keeps its scrim, is never shown cut and fades in within
+  a frame of fitting (red on the round-5 hidden label); a clip 3x wider than
+  its thumbnail repeats it at 16:9 (red when stretched); the playhead never
+  cuts a visible ruler time (selected at 390, inside the first time at 390
+  and 1440); every tick time ends in :00 at 23.98, 29.97 and 24; an undo
+  merges the pieces back from their span, shrinks the laid-in clip out
+  without showing its name cut, and takes the markers off in turn; reduced
+  motion jumps; the spine's top does not move when lane 1 fills; every
+  visible ruler tick shows its whole time.
+- `test_front_door.py`: the social card, its picture and the four logo files
+  are pinned by sha256 (red on a one-byte change), and the hero build passes
+  `--card` only when asked; `test_palette.py`: the tests badge is shields'
+  live workflow status (red on a static "passing").
 - `test_app_labels.py`: the playhead's head touching any visible label, its
   line covering a marker flag, or a clip within 6 px of the track's bottom
   border fails it; `test_palette.py`: disabled buttons at 4.5:1 in both modes.
