@@ -183,7 +183,7 @@ async def _run(args: dict, target_of: Callable[[dict, dict], Target], prompt_def
         f"Media: {media_target} ({float(probe['duration']):.3f}s, {probe['width']}x{probe['height']} "
         f"@ {fps.numerator}/{fps.denominator} fps, probed)",
         f"Placed: lane {placed['lane']} at {float(placed['at']):.3f}s for {float(placed['duration']):.3f}s "
-        f"on a <{placed['host']}>, role `{gen.GENERATED_ROLE}`, marker \"{placed['marker']}\""
+        f"on a <{placed['host']}>, role `{gen.GENERATED_ROLE}`, marker \"{placed['marker']}\" (note: {placed['marker_note']})"
         + (" — conformed to the sequence frame grid and the media length" if placed["conformed"] else "")
         + (" (a <gap> was appended to the spine to reach it)" if placed["gap_added"] else ""),
         f"Saved to: `{output_path}`",
