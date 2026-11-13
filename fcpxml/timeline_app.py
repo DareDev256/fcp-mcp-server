@@ -556,10 +556,13 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // ---- motion between payloads ------------------------------------------------
   // A re-render after an edit MOVES things, the way Final Cut closes a gap: a
   // clip that was split slides its pieces together, the clips after it slide
-  // left, a clip that is new is laid in from its left edge, and a new marker
-  // drops onto the ruler. Only positions and sizes animate, never opacity, so
-  // no frame shows the old layout and the new one at once (tests/test_app_motion.py).
-  // Web Animations, so a recorder can pause and seek them (document.getAnimations()).
+  // left, a clip that is new is laid in from its left edge, and new markers
+  // land one after another, left to right. Only positions and sizes animate
+  // (and visibility, in steps), never opacity, so no frame shows the old
+  // layout and the new one at once; a clip's name stays hidden while its clip
+  // is too narrow for all of it and a marker lands whole, so no frame shows
+  // part of a name (tests/test_app_motion.py). Web Animations, so a recorder
+  // can pause and seek them (document.getAnimations()).
   var MOTION = { duration: 400, easing: "cubic-bezier(0.22, 1, 0.36, 1)" };
   function snapshot() {
     var s = { pps: state.pps, clips: [], keyed: {} };
@@ -582,32 +585,42 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     });
     return hit;
   }
+  var HIDE_UNTIL_SETTLED = [{ visibility: "hidden" }, { visibility: "hidden", offset: 0.999 }, { visibility: "visible" }];
   function animateFrom(s) {
     if (!document.body.animate || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
     document.querySelectorAll("#canvas .clip").forEach(function (e) {
       var c = e.__c, o = c && predecessor(c, s.clips), L = parseFloat(e.style.left), W = parseFloat(e.style.width);
+      var from = 0;
       if (o) {
         // where this piece of footage sat before the edit, at the old scale
-        var fl = o.left + (frac(c.source_start) - frac(o.c.source_start)) * s.pps, fw = Math.max(3, frac(c.duration) * s.pps - 1);
-        if (Math.abs(fl - L) > 0.5 || Math.abs(fw - W) > 0.5)
-          e.animate([{ left: fl + "px", width: fw + "px" }, { left: L + "px", width: W + "px" }], MOTION);
+        var fl = o.left + (frac(c.source_start) - frac(o.c.source_start)) * s.pps;
+        from = Math.max(3, frac(c.duration) * s.pps - 1);
+        if (Math.abs(fl - L) < 0.5 && Math.abs(from - W) < 0.5) return;
+        e.animate([{ left: fl + "px", width: from + "px" }, { left: L + "px", width: W + "px" }], MOTION);
       } else {
-        e.animate([{ width: "0px" }, { width: W + "px" }], MOTION);
+        e.animate([{ width: "0px" }, { width: W + "px" }], MOTION);  // laid in from its left edge
+      }
+      // its name only once the clip is wide enough for all of it
+      var lab = e.querySelector(".label");
+      if (lab && !lab.classList.contains("unfit")) {
+        var rg = document.createRange(); rg.selectNodeContents(lab);
+        if (rg.getBoundingClientRect().width + 14 > from) lab.animate(HIDE_UNTIL_SETTLED, MOTION);  // padding 12 + borders 2
       }
     });
-    var drops = [];
+    var marks = [];
     document.querySelectorAll("#canvas .tick, #canvas .mlabel, #canvas .tmark, #canvas .mk").forEach(function (e) {
       var was = s.keyed[e.__key], L = parseFloat(e.style.left);
       if (was != null) {
         if (Math.abs(was - L) > 0.5 && !e.classList.contains("mk")) e.animate([{ left: was + "px" }, { left: L + "px" }], MOTION);
-      } else if (!e.classList.contains("tick")) drops.push(e);
+      } else if (!e.classList.contains("tick")) marks.push(e);
     });
-    // New markers drop in, left to right; a flag and its clip tick together.
-    var xs = drops.map(function (e) { return e.getBoundingClientRect().left; });
-    var lo = Math.min.apply(null, xs.concat([0])), hi = Math.max.apply(null, xs.concat([1]));
-    drops.forEach(function (e, i) {
-      e.animate([{ transform: "translateY(-16px)" }, { transform: "none" }],
-                { duration: 300, delay: Math.round(160 * (xs[i] - lo) / Math.max(1, hi - lo)), easing: MOTION.easing, fill: "backwards" });
+    // New markers land whole, one after another, left to right (a flag and its
+    // clip tick together): hidden until their turn, never part-drawn.
+    var xs = marks.map(function (e) { return e.getBoundingClientRect().left; });
+    var order = xs.slice().sort(function (a, b) { return a - b; }).filter(function (v, i, a) { return i === 0 || v - a[i - 1] > 1; });
+    marks.forEach(function (e, i) {
+      var turn = order.findIndex(function (v) { return Math.abs(v - xs[i]) <= 1; });
+      if (turn > 0) e.animate([{ visibility: "hidden" }, { visibility: "hidden" }], { duration: turn * 90 });
     });
   }
   var GUTTER = 48, MIN_PPS = 8;
@@ -798,7 +811,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     drawnWidth = window.innerWidth; draw();
   });
   $("scroller").addEventListener("scroll", fitLabels);
-  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION };
+  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION, hideUntilSettled: HIDE_UNTIL_SETTLED };
 
   // ---- boot --------------------------------------------------------------
   state.inHost = window.parent && window.parent !== window;

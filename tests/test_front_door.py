@@ -98,6 +98,41 @@ def test_readme_opens_with_the_name_then_the_benefit_then_the_subtitle():
     assert "no&nbsp;patch" in lines[at + 2]
 
 
+FIRST_SCREEN = re.compile(r"^Python (\d+\.\d+)\+ · Final Cut Pro for Mac (\d+\.\d+) to (\d+\.\d+) ", re.M)
+
+
+def first_screen_problems(readme: str, pyproject: str) -> list[str]:
+    """The requirement line on the first screen (round 5: Python had dropped
+    off it, and Final Cut's range was baked into a badge image) says what
+    pyproject.toml and the Compatibility table say."""
+    head = "\n".join(readme.splitlines()[:16])
+    m = FIRST_SCREEN.search(head)
+    if not m:
+        return ["no 'Python X+ · Final Cut Pro for Mac A to B' line on the first screen"]
+    out = []
+    floor = re.search(r'requires-python = ">=(\d+\.\d+)"', pyproject).group(1)
+    if m.group(1) != floor:
+        out.append(f"first screen says Python {m.group(1)}+, pyproject requires >={floor}")
+    row = re.search(r"^\| Final Cut Pro \| \*\*for Mac\*\* (\d+\.\d+)\+ through (\d+\.\d+)", readme, re.M)
+    if not row or (row.group(1), row.group(2)) != (m.group(2), m.group(3)):
+        out.append(f"first screen says Final Cut {m.group(2)} to {m.group(3)}, the Compatibility table "
+                   f"{row.groups() if row else 'has no row'}")
+    return out
+
+
+def test_the_first_screen_states_the_requirements():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert first_screen_problems(readme, (REPO / "pyproject.toml").read_text(encoding="utf-8")) == []
+
+
+def test_the_requirements_check_can_go_red():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert first_screen_problems(readme.replace("Python 3.10+ ·", "Python 3.9+ ·", 1), pyproject)
+    assert first_screen_problems(readme.replace("for Mac 10.4 to 12.4 (", "for Mac 10.4 to 12.3 (", 1), pyproject)
+    assert first_screen_problems(readme.replace("Python 3.10+ · Final Cut", "Final Cut", 1), pyproject)
+
+
 def recorded_calls(build_source: str) -> list[str]:
     """The calls demo/hero/build.py puts in the hero's chat, in its order."""
     return re.findall(r'\{"at": [\d.]+, "call": "([^"]+)"', build_source)

@@ -2,12 +2,14 @@
 
     uv run --with playwright scripts/social_card.py     # from the repo root
 
-Writes ``docs/assets/social-card.png``. The picture is
-``docs/assets/card-frame.png``: the prompt and the tool calls beside the
-finished ``ui://fcp/timeline`` app, as the hero recorder captured them from a
-real ``view_timeline`` result (``demo/hero/build.py``). "Talking to Claude"
-is the claim, so the conversation is in the picture; the idle selection
-panel is not. Re-record the hero and re-run this to refresh it.
+Writes ``docs/assets/social-card.png``: the name, the promise and the
+subtitle over the prompt ("talking to Claude" is the claim, so what was said
+is on the card, at a size a phone can read) and the picture,
+``docs/assets/card-frame.png``: the finished ``ui://fcp/timeline`` ruler and
+lanes at 1.75x, as the hero recorder captured them from a real
+``view_timeline`` result (``demo/hero/build.py``). The tool calls are in the
+README, not here: at 390 px a list of them was unreadable. Re-record the
+hero and re-run this to refresh it.
 
 The card carries no version and no star count. The card it replaces showed
 a version and a star count that stayed frozen for seventeen releases, because
@@ -42,6 +44,8 @@ WIDTH, HEIGHT = 1280, 640
 
 NAME = "fcp-mcp-server"
 PROMISE = "Edit Final Cut Pro by talking to Claude, and watch the cut change."
+PROMPT = "Cut the rest between sets, mark every lift, and put B-roll over the long set."
+COLUMN = 1040  # the picture's width; everything aligns to it
 SUBTITLE = "reads and writes FCPXML, no plugin, no patch"
 INSTALL = "uvx fcp-mcp-server"
 
@@ -51,25 +55,27 @@ def html(frame_png: bytes) -> str:
     shot = "data:image/png;base64," + base64.b64encode(frame_png).decode("ascii")
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   html, body {{ margin: 0; width: {WIDTH}px; height: {HEIGHT}px; overflow: hidden; background: {t("ground")}; }}
-  /* One centred column, header over picture: no empty band whatever the picture's height. */
+  /* One centred column, the picture's width: header, then what was asked, then the cut. */
   body {{ font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif; color: {t("ink")};
-         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; }}
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; }}
   /* The install chip sits on the subtitle's row, centred on it, its right edge on the picture's
-     right edge: the command reads as the caption of what is below it, and it does not push the
-     subtitle away from the promise (its negative margins keep the row as tall as the text). */
-  #head {{ width: 1168px; box-sizing: border-box; padding: 0 0 0 6px; display: grid;
-          grid-template-columns: auto 1fr auto; column-gap: 20px; row-gap: 10px; align-items: center; }}
+     right edge (its negative margins keep the row as tall as the text). */
+  #head {{ width: {COLUMN}px; box-sizing: border-box; display: grid;
+          grid-template-columns: auto 1fr auto; column-gap: 20px; row-gap: 8px; align-items: center; }}
   #mark {{ width: 64px; height: 64px; grid-row: 1 / span 2; align-self: start; margin-top: 2px; }}
   #mark svg {{ width: 64px; height: 64px; display: block; }}
   #name {{ grid-column: 2 / span 2; font-size: 52px; line-height: 1; font-weight: 700; letter-spacing: -0.035em; margin: 0; }}
-  #promise {{ grid-column: 2 / span 2; margin: 0; font-size: 28px; line-height: 1.2; font-weight: 600;
-             letter-spacing: -0.01em; }}
-  #subtitle {{ grid-column: 2; margin: 0; font-size: 18px; line-height: 1; color: {t("mute")}; }}
+  #promise {{ grid-column: 2 / span 2; margin: 0; font-size: 30px; line-height: 1.15; font-weight: 600;
+             letter-spacing: -0.012em; }}
+  #subtitle {{ grid-column: 2; margin: 0; font-size: 26px; line-height: 1.1; color: {t("mute")}; }}
   #install {{ grid-column: 3; justify-self: end; font: 600 19px/1 ui-monospace, "SF Mono", Menlo, monospace;
              color: {t("accent")}; border: 1px solid {t("line-strong")}; border-radius: 8px; padding: 8px 14px;
              margin: -9px 0; }}
-  #shot {{ width: 1168px; flex: none;
-          border: 1px solid {t("line")}; border-radius: 14px; overflow: hidden; background: {t("ground")}; }}
+  #ask {{ width: {COLUMN}px; margin: 26px 0 14px; display: flex; align-items: baseline; gap: 14px; }}
+  #who {{ font: 600 14px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .14em; color: {t("accent")}; }}
+  #prompt {{ margin: 0; font-size: 23px; line-height: 1.2; font-weight: 500; white-space: nowrap; }}
+  #shot {{ width: {COLUMN}px; flex: none;
+          border: 1px solid {t("line")}; border-radius: 12px; overflow: hidden; background: {t("panel")}; }}
   #shot img {{ display: block; width: 100%; }}
 </style></head><body>
 <div id="head">
@@ -79,6 +85,7 @@ def html(frame_png: bytes) -> str:
   <p id="subtitle">{SUBTITLE}</p>
   <div id="install">{INSTALL}</div>
 </div>
+<div id="ask"><span id="who">YOU</span><p id="prompt">{PROMPT}</p></div>
 <div id="shot"><img alt="" src="{shot}"></div>
 </body></html>"""
 
@@ -91,7 +98,7 @@ MEASURE = """() => {
     range.selectNodeContents(el); const rs = [...range.getClientRects()];
     return { id, x0: Math.min(...rs.map(r => r.left)), y0: Math.min(...rs.map(r => r.top)),
              x1: Math.max(...rs.map(r => r.right)), y1: Math.max(...rs.map(r => r.bottom)), lines: rs.length }; };
-  return { texts: [text("name"), text("promise"), text("subtitle"), box("install")],
+  return { texts: [text("name"), text("promise"), text("subtitle"), box("install"), text("who"), text("prompt")],
            mark: box("mark"), shot: box("shot") };
 }"""
 

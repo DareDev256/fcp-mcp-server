@@ -12,8 +12,10 @@ What it does, in order:
    2026-08-08 gym session, cut by ``footage.py``: he is the only person in
    frame, and no audio was kept because the gym's music is on it) and gives
    each a synthesised test-tone soundtrack. The squat set's tone stops for
-   two rests (6.0-9.5 s and 15.0-18.0 s): that real digital silence is what
-   remove_media_silence cuts. The on-screen note says the audio is a tone.
+   two 2 s rests (5-7 s and 12-14 s) between three 5 s sets: that real
+   digital silence is what remove_media_silence cuts. The on-screen note says
+   the audio is a tone. (The lengths are chosen so every clip's name fits the
+   phone-width GIF, cut and uncut.)
 2. Runs the REAL tool handlers through ``server.call_tool`` — the same entry
    an MCP client reaches — and keeps every ``view_timeline`` result verbatim:
 
@@ -39,13 +41,17 @@ What it does, in order:
 4. Writes ``.work/states.json`` (the prompt, the tool lines, the four
    payload-bearing results, the palette and the patterns no image may
    carry, ``scripts/image_text.py``) plus the ``ui://fcp/timeline`` resource
-   as served, then runs ``record.js`` (Playwright) and encodes
-   ``docs/assets/hero-watch-claude-cut.mp4`` (the whole frame: the chat beside
-   the app) and ``.gif`` (the README's: the timeline alone, cropped so its
-   type stays large at phone width). Both open on the finished cut (frames
-   are captured from ``LOOP_START`` round to it), and the MP4 also carries
-   that frame as its attached poster. A mocked B-roll is relabelled in the
-   file ("B-roll (mocked)", "mock b-roll: ...") and gets a solid MOCK pill.
+   as served, then runs ``record.js`` (Playwright), which sends the four
+   results IN ORDER to one app instance, so every change is the app's own
+   motion (a split clip's pieces slide together, new markers drop in, the
+   B-roll is laid in), never a dissolve between two renders. It encodes
+   ``docs/assets/hero-watch-claude-cut.mp4`` (the chat beside the app; each
+   tool call lands as its edit starts to move) and ``.gif`` (the README's own
+   cut: the ruler and lanes alone, laid out at phone width and drawn at 3x so
+   the app's type is 30 px or more, ~9 s with a hold per step). Both open on
+   the finished cut, and the MP4 also carries that frame as its attached
+   poster. A mocked B-roll is relabelled in the file ("B-roll (mocked)",
+   "mock b-roll: ...") and gets a solid MOCK pill.
 
 Requires ffmpeg/ffprobe on PATH, Pillow (for the GIF: it merges identical
 frames, which ffmpeg's gif muxer does not), and Node with the ``playwright``
@@ -80,20 +86,22 @@ WORK = HERE / ".work"
 FOOTAGE = HERE / "footage"
 ASSETS = REPO / "docs" / "assets"
 FPS = 24
-GIF_FPS = 12
 GIF_MAX_BYTES = 5_000_000
 PROMPT = "Cut the rest between sets, mark every lift, and put B-roll over the long set."
-LOOP_START = 22.0  # seconds into the story where the finished cut is on screen and every line is in
-DURATION = 24.5
+LOOP_START = 15.0  # seconds into the story where the finished cut is on screen and every line is in
+DURATION = 16.5
+# The README GIF's own cut: (state, seconds on screen, moves into it). Frame 0
+# is the finished cut, then the story from the imported cut, one step each.
+GIF_STORY = [(3, 3.0, False), (0, 1.5, False), (1, 2.0, True), (2, 2.0, True), (3, 0.6, True)]
 MOCK_CLIP, MOCK_MARKER = "B-roll (mocked)", "mock b-roll: Toronto skyline at dusk"
 LONG_SET = "Squat"
 
 # name -> (proxy file, seconds used, tone expression or None for a steady quiet tone)
 CLIPS = {
-    "Bench": ("bench.mp4", 5, None),
-    LONG_SET: ("squat.mp4", 22, "0.25*sin(2*PI*220*t)*(between(t,0,6)+between(t,9.5,15)+between(t,18,22))"),
-    "Press": ("press.mp4", 5, None),
-    "Finish": ("finish.mp4", 5, None),
+    "Bench": ("bench.mp4", 6, None),
+    LONG_SET: ("squat.mp4", 19, "0.25*sin(2*PI*220*t)*(between(t,0,5)+between(t,7,12)+between(t,14,19))"),
+    "Press": ("press.mp4", 6, None),
+    "Finish": ("finish.mp4", 6, None),
 }
 
 BROLL_PROMPT = "Toronto skyline at dusk from a rooftop, slow push in"
@@ -303,27 +311,28 @@ def main() -> None:
     assert journaled >= 4, r_history
 
     made = "provider mocked" if mode == "mock" else "generated"
-    # The cut was imported (generate · import_edl_json) before the prompt: the
-    # story opens on it, so the stage is never empty, and the chat lists the
-    # six calls Claude makes in answer.
+    # The cut was imported (generate · import_edl_json) before the prompt, so
+    # the chat lists the six calls Claude makes in answer. Each line lands as
+    # its re-render starts to move (record.js starts the motion 0.1 s after
+    # "at"); the timeline first appears WITH the view call, a second in.
     lines = [
-        {"at": 3.6, "call": "view · view_timeline", "note": "rendered inline (ui://fcp/timeline)", "state": 0},
-        {"at": 6.8, "call": "edit · remove_media_silence",
+        {"at": 1.0, "call": "view · view_timeline", "note": "rendered inline (ui://fcp/timeline)", "state": 0},
+        {"at": 3.8, "call": "edit · remove_media_silence",
          "note": f"{rests} rests cut · {removed} removed", "state": 1},
-        {"at": 10.6, "call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
-        {"at": 14.2, "call": "gen · gen_quote", "note": "quoted under the cap, refused until confirm=true"},
-        {"at": 16.8, "call": "gen · gen_broll",
+        {"at": 6.6, "call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
+        {"at": 9.2, "call": "gen · gen_quote", "note": "quoted under the cap, refused until confirm=true"},
+        {"at": 11.4, "call": "gen · gen_broll",
          "note": f"lane {placed.group(1)} · {float(placed.group(3)):.0f}s over the long set · {made}", "state": 3},
-        {"at": 20.6, "call": "organize · history", "note": f"{journaled} outputs journaled · undo ready"},
+        {"at": 14.0, "call": "organize · history", "note": f"{journaled} outputs journaled · undo ready"},
     ]
     app_html = asyncio.run(server.read_resource(timeline_app.APP_URI))[0].content
     (WORK / "app.html").write_text(app_html, encoding="utf-8")
     (WORK / "states.json").write_text(json.dumps({
         "prompt": PROMPT, "lines": lines, "states": states, "duration": DURATION,
-        "loop_start": LOOP_START, "start_state": 0, "palette": palette.as_json()["dark"],
+        "loop_start": LOOP_START, "palette": palette.as_json()["dark"],
+        "gif_story": [{"state": st, "hold": hold, "moves": moves} for st, hold, moves in GIF_STORY],
         "mock_clip": MOCK_CLIP if mode == "mock" else None,
         "footer": f"{FOOTAGE_NOTE} {NOTES[mode]}",
-        "card_calls": ["edit · remove_media_silence", "mark · batch_add_markers", "gen · gen_broll", "organize · history"],
         "stale": {"host": image_text.patterns("host"), "app": image_text.patterns("app")},
     }), encoding="utf-8")
     for name, text in [("import", r_import), ("silence", r_silence), ("mark", r_mark), ("quote", r_quote),
@@ -409,20 +418,20 @@ def encode(work: Path) -> None:
         from PIL import Image
     except ImportError:
         sys.exit("Pillow is needed to write the GIF: uv run --with pillow demo/hero/build.py")
-    # The README GIF is the timeline alone (record.js's gif-frames: the frames
-    # cut to the app's header, ruler and lanes, each state clipped at its own
-    # timeline): the chat moves into the README as text, and the app's own
-    # 10-11 px type is 20-22 px in a 1000 px GIF instead of a few px on a phone.
-    sources = sorted((work / "gif-frames").glob("*.png"))
-    picks = [sources[min(len(sources) - 1, round(i * 30 / GIF_FPS))] for i in range(round(len(sources) * GIF_FPS / 30))]
+    # The README GIF is its own cut (record.js's gif-frames: the ruler and lanes
+    # alone, laid out at phone width and drawn at 3x), one PNG per distinct
+    # picture with how long it stays (durations.json): a hold is one frame.
+    gif_dir = work / "gif-frames"
+    holds = json.loads((gif_dir / "durations.json").read_text())
+    sources = [gif_dir / name for name, _ in holds]
     Image.open(sources[0]).convert("RGB").save(ASSETS / "hero-timeline-still.png")  # frame 0: the finished cut
     width = Image.open(sources[0]).width
-    # Always the full width: a narrower GIF would shrink the type the crop
+    # Always the full width: a narrower GIF would shrink the type the cut
     # exists to keep, so over the cap is a refusal, not a resize.
-    write_gif(gif, picks, width, Image)
+    write_gif(gif, sources, width, Image, [ms for _, ms in holds])
     if gif.stat().st_size > GIF_MAX_BYTES:
         sys.exit(f"the GIF is {gif.stat().st_size / 1e6:.2f} MB at {width} px, over the "
-                 f"{GIF_MAX_BYTES / 1e6:.1f} MB cap: shorten the story or lower GIF_FPS")
+                 f"{GIF_MAX_BYTES / 1e6:.1f} MB cap: shorten the story")
     for p in (mp4, gif):
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
 
@@ -437,7 +446,7 @@ def flatten(path: Path) -> None:
         ground.convert("RGB").save(path)
 
 
-def write_gif(gif: Path, picks: list[Path], width: int, image_module) -> None:
+def write_gif(gif: Path, picks: list[Path], width: int, image_module, durations: list[int]) -> None:
     Image = image_module  # noqa: N806
 
     def small(path: Path):
@@ -450,7 +459,7 @@ def write_gif(gif: Path, picks: list[Path], width: int, image_module) -> None:
         sheet.paste(im, (0, i * im.height))
     quant = sheet.quantize(colors=128, method=Image.Quantize.MEDIANCUT)
     frames_q = [small(p).quantize(palette=quant, dither=Image.Dither.FLOYDSTEINBERG) for p in picks]
-    frames_q[0].save(gif, save_all=True, append_images=frames_q[1:], duration=round(1000 / GIF_FPS), loop=0, disposal=1)
+    frames_q[0].save(gif, save_all=True, append_images=frames_q[1:], duration=durations, loop=0, disposal=1)
     with Image.open(gif) as g:
         total_ms = 0
         for i in range(g.n_frames):

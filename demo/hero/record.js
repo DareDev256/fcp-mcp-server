@@ -2,37 +2,43 @@
 //
 //   node demo/hero/record.js <work dir> <frames dir> <assets dir>
 //
-// Loads the ui://fcp/timeline shell (work/app.html, exactly as the server
-// serves it) once per timeline state, speaks the MCP Apps draft protocol to
-// each copy (ui/initialize -> ui/notifications/initialized -> the real
-// view_timeline result as ui/notifications/tool-result), and lays a chat
-// column beside it. The page is a pure function of time: window.__seek(ms)
-// positions every element, so each captured frame is exact and a slow
-// screenshot cannot drift the animation. Frames are 860x600 CSS pixels at a
-// device scale of 2 (1720x1200): the app gets 500 CSS pixels, so its own
-// 10-11px type is 20-22 px in a README GIF only 1000 px wide.
+// Three pictures of the REAL ui://fcp/timeline shell (work/app.html, exactly
+// as the server serves it). Each is ONE app instance driven through the MCP
+// Apps draft protocol (ui/initialize -> ui/notifications/initialized, then
+// the real view_timeline results as ui/notifications/tool-result, in order),
+// so every change between results is the app's own motion: a split clip's
+// pieces slide together, new markers drop in, the B-roll is laid in. The app
+// animates with Web Animations; this recorder pauses each one and sets its
+// time per frame, so every frame is a pure function of the story clock and
+// no frame ever holds two renders at once.
+// (No screenshot here passes `animations: "disabled"`: Playwright would
+// fast-forward the app's motion to its end and every frame would be settled.)
 //
-// The story opens on the imported cut (states.start_state), so there is no
-// empty stage; each write cross-fades (180 ms) to the re-rendered timeline.
-// Every colour is a palette token handed over in states.json
-// (fcpxml/palette.py); none is typed here. Frames are captured from
-// states.loop_start round to it, so frame 0 of the MP4 and the GIF is the
-// finished cut. Written beside the frames: gif-frames/, the same frames
-// cut to the timeline (header, ruler, lanes) with every state clipped at its
-// own timeline's foot, for the README GIF. The assets dir gets
-// hero-still.png (the finished frame) and
-// card-frame.png (four calls beside the ruler and lanes at 1.75x).
+// 1. <frames dir>      the MP4: the chat beside the app, 860x640 CSS at 2x
+//                      (1720x1280). Each tool call lands in the chat as its
+//                      re-render starts to move (0.1 s later); the timeline
+//                      first appears with the view call, a second in.
+// 2. work/gif-frames/  the README GIF, its own cut: the ruler and lanes only,
+//                      cropped inside the panel, the app laid out at 440 CSS
+//                      px (a phone's width once its gutter is cropped) and
+//                      drawn at 3x, so its 10-11 px type is 30-33 px. One PNG
+//                      per distinct picture; durations.json says how long
+//                      each stays. Frame 0 is the finished cut.
+// 3. <assets dir>      hero-still.png (the MP4's frame 0, the finished cut),
+//                      card-frame.png (the finished ruler and lanes at 1.75x,
+//                      for scripts/social_card.py) and hero-layout.json (where
+//                      the timeline sits in the MP4, for tests/test_hero_assets.py).
 //
-// A mocked B-roll tile (states.mock_clip) carries a solid MOCK pill at its
-// top right, measured onto the tile, never over its label.
+// A mocked B-roll tile (states.mock_clip) carries a solid MOCK pill, placed
+// INSIDE the tile so it moves with it, never over its label.
 //
 // It REFUSES (exit 1) rather than record a frame anyone would have to excuse:
-// a chat line wider than its column, a clip or marker name the app had to
-// hide, a SERVER panel cut by the window, the caption pill outside it or
-// over its text, the MOCK pill off its tile or over its label, the footer
-// over the tool calls, or any text that would go stale in an image (a
-// price, a model id, a frame size, a version: scripts/image_text.py,
-// handed over in states.stale).
+// a clip or marker name the app had to hide (in any state, in any of the
+// three layouts), a chat line wider than its column, a SERVER panel cut by
+// the window, the caption outside it or over its text, the MOCK pill off its
+// tile or over its label (or no tile to put it on), the footer over the tool
+// calls, or any text that would go stale in an image (a price, a model id, a
+// frame size, a version: scripts/image_text.py, handed over in states.stale).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -48,26 +54,26 @@ function loadPlaywright() {
 const [work, framesDir, assetsDir] = process.argv.slice(2);
 const states = JSON.parse(fs.readFileSync(path.join(work, "states.json"), "utf8"));
 const app = fs.readFileSync(path.join(work, "app.html"), "utf8");
-const FPS = 30, W = 860, H = 600, SCALE = 2, FADE = 0.18;
+const FPS = 30, W = 860, H = 640, SCALE = 2, LEAD = 0.1;  // a re-render moves LEAD s after its call lands
+const GIF_APP_W = 440, GIF_ZOOM = 1.5, GIF_STEP_MS = 40;
+const CARD_APP_W = 480, CARD_ZOOM = 1.75;
+const GUTTER = 48;  // the app's lane-tag column (fcpxml/timeline_app.py)
 const last = states.states.length - 1;
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 const tokens = Object.entries(states.palette).map(([k, v]) => `--${k}:${v};`).join(" ");
-const appFrame = (id, i) => `<iframe class="app" id="${id}" data-state="${i}" sandbox="allow-scripts" srcdoc="${esc(app)}"></iframe>`;
+const appFrame = (id, style = "") => `<iframe class="app" id="${id}" style="${style}" sandbox="allow-scripts" srcdoc="${esc(app)}"></iframe>`;
 
-// The host side of the MCP Apps handshake, shared by both pages.
+// The host side of the MCP Apps handshake. Results are not pushed here: the
+// recorder delivers them one by one (deliver()), in order, to the same app.
 const protocol = `
-  const STATES = ${JSON.stringify(states.states)};
   window.__ready = {};
   window.addEventListener("message", (ev) => {
     const m = ev.data; if (!m || m.jsonrpc !== "2.0") return;
     const f = [...document.querySelectorAll("iframe.app")].find((x) => x.contentWindow === ev.source); if (!f) return;
-    const i = Number(f.dataset.state), post = (msg) => f.contentWindow.postMessage(msg, "*");
+    const post = (msg) => f.contentWindow.postMessage(msg, "*");
     if (m.method === "ui/initialize") { post({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-11-21", hostContext: { theme: "dark" } } }); return; }
-    if (m.method === "ui/notifications/initialized") {
-      post({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: { result: { content: [{ type: "text", text: STATES[i].result }] } } });
-      window.__ready[f.id] = true; return;
-    }
+    if (m.method === "ui/notifications/initialized") { window.__ready[f.id] = true; return; }
     if (m.method === "tools/call") post({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "(stub host: not recorded)" }] } });
   });`;
 
@@ -77,9 +83,7 @@ const chatCss = `
   .call { font: 600 12.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--ink); white-space:nowrap; }
   .call:before { content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent);
     margin-right:8px; vertical-align:1px; }
-  .note { color:var(--mute); font-size:11.5px; margin-left:14px; margin-top:1px; white-space:nowrap; }
-  .pill { position:absolute; font: 700 8px/1 ui-monospace, Menlo, monospace; letter-spacing:.08em; color:var(--accent-ink);
-    background:var(--accent-fill); padding:2px 4px; border-radius:3px; z-index:7; white-space:nowrap; }`;
+  .note { color:var(--mute); font-size:11.5px; margin-left:14px; margin-top:1px; white-space:nowrap; }`;
 
 const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   :root { ${tokens} }
@@ -99,10 +103,9 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     border-top:1px solid var(--line); padding-top:7px; }
   #stage { position:absolute; left:332px; top:48px; right:28px; bottom:28px; }
   #frame { position:absolute; inset:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--ground); }
-  .app { position:absolute; inset:0; width:100%; height:100%; border:0; opacity:0; background:var(--ground); }
-  body.gif .app { clip-path: inset(0 0 var(--below, 0px) 0); -webkit-mask-image: var(--fade-mask, none); mask-image: var(--fade-mask, none); }
+  .app { position:absolute; inset:0; width:100%; height:100%; border:0; background:var(--ground); }
   #cap { position:absolute; font: 600 11px/1 ui-monospace, Menlo, monospace; color:var(--accent); white-space:nowrap;
-    background:var(--panel); padding:5px 8px; border-radius:6px; border:1px solid var(--line-strong); opacity:0; z-index:5; }
+    background:var(--panel); padding:5px 8px; border-radius:6px; border:1px solid var(--line-strong); visibility:hidden; z-index:5; }
 </style></head><body>
 <div id="top"><span><b>fcp-mcp-server</b> · watch Claude cut</span><span>ui://fcp/timeline · MCP Apps</span></div>
 <div id="chat">
@@ -112,95 +115,55 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   </div>
   <div id="mock">${states.footer}</div>
 </div>
-<div id="stage"><div id="frame">${states.states.map((s, i) => appFrame("app" + i, i)).join("")}<div id="cap"></div><div class="pill" id="mockpill" style="opacity:0">MOCK</div></div></div>
+<div id="stage"><div id="frame">${appFrame("app", "visibility:hidden")}<div id="cap"></div></div></div>
 <script>
   ${protocol}
   const LINES = ${JSON.stringify(states.lines)};
   const PROMPT = ${JSON.stringify(states.prompt)};
-  const START = ${JSON.stringify(states.start_state)}, LAST = ${last};
-  window.__capAt = [];   // per state: where the SERVER panel sits inside #frame (measured by the recorder)
-  window.__pillAt = null; // where the MOCK pill sits on the mocked tile, in the last state
-  window.__footRel = null; // per state: its timeline's foot from the iframe's top (the GIF pass)
-  const frames = STATES.map((s, i) => document.getElementById("app" + i));
+  window.__capAt = null;  // where the SERVER panel's top right sits inside #frame (measured by the recorder)
   const clamp = (v) => Math.max(0, Math.min(1, v));
   const ease = (v) => { v = clamp(v); return v < .5 ? 2 * v * v : 1 - Math.pow(-2 * v + 2, 2) / 2; };
-  const T = { youIn: 0.3, typeStart: 0.5, typeEnd: 3.0, claudeIn: 3.3, fade: ${FADE} };
-  window.__seek = function (ms) {
-    const t = ms / 1000;
-    document.getElementById("you").style.opacity = ease((t - T.youIn) / 0.3);
+  const T = { youIn: 0.05, typeStart: 0.15, typeEnd: 0.85, claudeIn: 0.9 };
+  // The chat and the caption at story time t; the app itself is set by the
+  // recorder (which result it has, how far its motion has run).
+  window.__seek = function (t, shown, since, lineIndex) {
+    document.getElementById("you").style.opacity = ease((t - T.youIn) / 0.15);
     const n = Math.round(clamp((t - T.typeStart) / (T.typeEnd - T.typeStart)) * PROMPT.length);
-    const caret = t >= T.youIn && t < T.typeEnd + 0.6 && (Math.floor(t * 2.5) % 2 === 0) ? '<span class="caret"></span>' : "";
+    const caret = t < T.typeEnd + 0.3 && (Math.floor(t * 5) % 2 === 0) ? '<span class="caret"></span>' : "";
     document.getElementById("prompt").innerHTML = PROMPT.slice(0, n) + caret;
-    document.getElementById("cwho").style.opacity = ease((t - T.claudeIn) / 0.4);
-    // The story opens on the imported cut, cross-fading in from the finished
-    // one, so the loop's seam is a 180 ms dissolve, never an empty stage.
-    let shown = START, prevShown = LAST, since = t, lineShown = null;
+    document.getElementById("cwho").style.opacity = ease((t - T.claudeIn) / 0.2);
     LINES.forEach((l, i) => {
-      const p = ease((t - l.at) / 0.45);
+      const p = ease((t - l.at) / 0.25);
       const el = document.getElementById("l" + i);
       el.style.opacity = p; el.style.transform = "translateY(" + (6 - 6 * p) + "px)";
-      if (l.state != null && t >= l.at + 0.25) { prevShown = shown; shown = l.state; since = t - (l.at + 0.25); lineShown = l; }
     });
-    const prog = ease(since / T.fade);
-    frames.forEach((f, i) => {
-      let o = 0;
-      if (i === shown) o = prog;
-      if (i === prevShown && prevShown !== shown && prog < 1) o = 1;
-      if (i === shown && prevShown === shown) o = 1;
-      f.style.opacity = o;
-      f.style.zIndex = i === shown ? 2 : (i === prevShown ? 1 : 0);
-      // GIF pass only (body.gif): going to a SHORTER timeline, the outgoing
-      // one fades out below the incoming one's foot instead of staying whole
-      // under it, so its lower lanes never show as a second row. A mask reads
-      // only alpha: the ground token is just an opaque stop.
-      const fr = window.__footRel;
-      let mask = "none";
-      if (fr && i === prevShown && prevShown !== shown && prog < 1 && fr[shown] < fr[prevShown]) {
-        const keep = "color-mix(in srgb, var(--ground) " + ((1 - prog) * 100).toFixed(1) + "%, transparent)";
-        mask = "linear-gradient(to bottom, var(--ground) 0, var(--ground) " + fr[shown] + "px, " + keep + " " + fr[shown] + "px)";
-      }
-      f.style.setProperty("--fade-mask", mask);
-    });
-    // The caption sits inside the app's SERVER panel, top right, where the
-    // server's own log speaks: it says which call's output is on screen.
+    document.getElementById("app").style.visibility = shown >= 0 ? "visible" : "hidden";
+    // The caption sits in the app's SERVER panel, top right, once the motion
+    // has settled: it says which call's output is on screen.
     const cap = document.getElementById("cap");
-    if (lineShown && window.__capAt[shown]) {
-      const at = window.__capAt[shown];
-      cap.textContent = (shown === 0 ? "rendered from " : "re-rendered from ") + lineShown.call + " output";
-      cap.style.top = at.top + "px"; cap.style.right = at.right + "px";
-      cap.style.opacity = ease((since - 0.2) / 0.4);
-    } else cap.style.opacity = 0;
-    const pill = document.getElementById("mockpill");
-    if (window.__pillAt) {
-      pill.style.left = window.__pillAt.left + "px"; pill.style.top = window.__pillAt.top + "px";
-      pill.style.opacity = shown === LAST ? (prevShown === LAST ? 1 : prog) : (prevShown === LAST ? 1 - prog : 0);
-    }
+    if (shown >= 0 && window.__capAt && since >= 0.45) {
+      cap.textContent = (shown === 0 ? "rendered from " : "re-rendered from ") + LINES[lineIndex].call + " output";
+      cap.style.top = window.__capAt.top + "px"; cap.style.right = window.__capAt.right + "px";
+      cap.style.visibility = "visible";
+    } else cap.style.visibility = "hidden";
   };
 </script></body></html>`;
 
-// The social card's picture: four calls beside the finished timeline's ruler
-// and lanes only (no header, no buttons), scaled 1.75x so it reads at phone
-// width. Real text, the real app, one frame.
-const CARD_W = 1100, CHAT_W = 214, APP_W = 480, ZOOM = 1.75;
+// The README GIF: the app laid out at GIF_APP_W and drawn GIF_ZOOM x larger.
+const gifHost = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  :root { ${tokens} }
+  html,body { margin:0; background:var(--ground); }
+  #gzoom { position:absolute; left:0; top:0; transform-origin:0 0; transform:scale(${GIF_ZOOM}); }
+  #gzoom iframe { position:absolute; left:0; top:0; width:${GIF_APP_W}px; height:620px; border:0; background:var(--ground); }
+</style></head><body><div id="gzoom">${appFrame("gapp")}</div><script>${protocol}</script></body></html>`;
+
+// The social card's picture: the finished ruler and lanes at CARD_ZOOM.
 const cardHost = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   :root { ${tokens} }
-  html,body { margin:0; background:var(--ground); color:var(--ink); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
-  #card { display:flex; gap:22px; align-items:center; width:max-content; box-sizing:border-box; padding:18px;
-    background:var(--ground); }
-  #cchat { width:${CHAT_W}px; flex:none; }
-  #cchat .prompt { margin-bottom:16px; }
-  #cchat .line { margin-bottom:7px; }
-  ${chatCss}
-  #cstage { position:relative; flex:none; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--ground); }
-  #czoom { position:absolute; left:0; top:0; transform-origin:0 0; transform:scale(${ZOOM}); }
-  #czoom iframe { position:absolute; width:${APP_W}px; height:900px; border:0; background:var(--ground); }
-</style></head><body><div id="card">
-  <div id="cchat"><div class="who">You</div><div class="prompt">${states.prompt}</div>
-    <div class="who">Claude · tool calls</div>
-    ${states.card_calls.map((c) => `<div class="line"><div class="call">${c}</div></div>`).join("")}
-  </div>
-  <div id="cstage"><div id="czoom">${appFrame("capp", last)}</div><div class="pill" id="cpill" style="display:none">MOCK</div></div>
-</div><script>${protocol}</script></body></html>`;
+  html,body { margin:0; background:var(--ground); }
+  #czoom { position:absolute; left:0; top:0; transform-origin:0 0; transform:scale(${CARD_ZOOM}); }
+  #czoom iframe { position:absolute; left:0; top:0; width:${CARD_APP_W}px; height:620px; border:0; background:var(--ground); }
+</style></head><body><div id="czoom">${appFrame("capp")}</div><script>${protocol}</script></body></html>`;
 
 async function refuse(msg) { console.error("REFUSED: " + msg); process.exit(1); }
 
@@ -219,27 +182,108 @@ async function refuseStale(where, text, scope) {
   if (hits.length) await refuse(`${where} would bake stale text into the image: ${JSON.stringify(hits)}`);
 }
 
-// Labels the app had to hide in one iframe: a name the viewer cannot read.
-async function hiddenNames(frame) {
-  return frame.locator("body").evaluate(() =>
-    [...document.querySelectorAll(".clip .label.unfit, .mlabel.unfit")].map((e) => e.textContent || e.title));
+// ---- one app instance, results delivered in order ---------------------------
+
+const toolResult = (i) => ({ jsonrpc: "2.0", method: "ui/notifications/tool-result",
+  params: { result: { content: [{ type: "text", text: states.states[i].result }] } } });
+
+async function appFrameOf(page, id) { return (await page.$("#" + id)).contentFrame(); }
+
+async function waitReady(page, id) {
+  await page.waitForFunction((id) => window.__ready[id] === true, id, { timeout: 20000 });
 }
 
-// The mocked tile and its label's text box, in the iframe's own coordinates.
-async function mockTile(frame) {
-  if (!states.mock_clip) return null;
-  return frame.locator("body").evaluate((b, name) => {
-    const clip = [...document.querySelectorAll(".clip")].find((c) => (c.title || "").startsWith(name + " ·"));
-    if (!clip) return null;
-    const r = clip.getBoundingClientRect(), label = clip.querySelector(".label"), range = document.createRange();
-    range.selectNodeContents(label);
-    const t = range.getBoundingClientRect();
-    return { x: r.left, y: r.top, w: r.width, h: r.height, text: { x: t.left, y: t.top, w: t.width, h: t.height } };
-  }, states.mock_clip);
+// A fresh app (the loop starts over): navigate the iframe and handshake again.
+async function reload(page, ctx) {
+  await page.evaluate((id) => {
+    window.__ready[id] = false;
+    const f = document.getElementById(id), html = f.getAttribute("srcdoc");
+    f.setAttribute("srcdoc", html.endsWith(" ") ? html.trimEnd() : html + " ");
+  }, ctx.id);
+  await waitReady(page, ctx.id);
+  ctx.cur = -1;
 }
 
-function overlaps(a, b, pad) {
-  return a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
+// The result for state i, as the host would send it; the app re-renders and
+// starts its motion, which is paused at once (at 0) for the recorder to seek.
+async function deliver(frame, i) {
+  await frame.evaluate((msg) => {
+    window.dispatchEvent(new MessageEvent("message", { data: msg }));
+    document.getAnimations().forEach((a) => { a.pause(); a.currentTime = 0; });
+  }, toolResult(i));
+  await frame.evaluate(() => Promise.all([...document.images].map((im) => im.decode().catch(() => null))));
+  if (states.mock_clip && i === last && !(await injectPill(frame))) {
+    await refuse(`no clip named "${states.mock_clip}" in the last state to mark as mocked`);
+  }
+}
+
+// Show state `target` with its motion run `ms` milliseconds in (a large ms is
+// the settled picture). Earlier states are delivered first and settled, so
+// the app's log and its motion are those of a real session.
+async function showState(page, ctx, target, ms) {
+  if (target < ctx.cur) await reload(page, ctx);
+  const frame = await appFrameOf(page, ctx.id);
+  while (ctx.cur < target) {
+    ctx.cur += 1;
+    await deliver(frame, ctx.cur);
+    if (ctx.cur < target) await frame.evaluate(() => document.getAnimations().forEach((a) => a.finish()));
+  }
+  if (target >= 0) await frame.evaluate((ms) => document.getAnimations().forEach((a) => { a.currentTime = ms; }), ms);
+  return frame;
+}
+
+async function motionLength(frame) {
+  return frame.evaluate(() => Math.max(0, ...document.getAnimations().map((a) => a.effect.getComputedTiming().endTime)));
+}
+
+// The MOCK pill goes INSIDE the mocked tile, so it moves and grows with it.
+async function injectPill(frame) {
+  return frame.evaluate(({ name, pal }) => {
+    const clip = [...document.querySelectorAll("#canvas .clip")].find((c) => (c.title || "").startsWith(name + " ·"));
+    if (!clip) return false;
+    const pill = document.createElement("div");
+    pill.className = "hero-mock"; pill.textContent = "MOCK";
+    Object.assign(pill.style, { position: "absolute", top: "4px", right: "4px", zIndex: "3",
+      font: "700 8px/1 ui-monospace, Menlo, monospace", letterSpacing: ".08em", color: pal["accent-ink"],
+      background: pal["accent-fill"], padding: "2px 4px", borderRadius: "3px", whiteSpace: "nowrap" });
+    clip.appendChild(pill);
+    // laid in with its tile: hidden, like the tile's own name, until the tile is whole
+    const lay = clip.getAnimations()[0];
+    if (lay) { const a = pill.animate(window.__fcpApp.hideUntilSettled, lay.effect.getTiming()); a.pause(); a.currentTime = lay.currentTime; }
+    return true;
+  }, { name: states.mock_clip, pal: states.palette });
+}
+
+// Settled-layout checks on one app: no hidden name, the pill on its tile.
+async function layoutProblems(frame, where) {
+  const out = await frame.evaluate(() => {
+    const out = [...document.querySelectorAll(".clip .label.unfit, .mlabel.unfit")]
+      .map((e) => "the app had to hide " + JSON.stringify(e.textContent || e.title));
+    const pill = document.querySelector(".hero-mock");
+    if (pill) {
+      const clip = pill.parentElement, c = clip.getBoundingClientRect(), p = pill.getBoundingClientRect();
+      const r = document.createRange(); r.selectNodeContents(clip.querySelector(".label")); const t = r.getBoundingClientRect();
+      if (p.left < c.left + 4 || p.bottom > c.bottom - 4) out.push("the MOCK pill does not fit on its tile");
+      if (p.left < t.right + 2 && t.left < p.right + 2 && p.top < t.bottom + 2 && t.top < p.bottom + 2) out.push("the MOCK pill would cover the tile's label");
+    }
+    return out;
+  });
+  return out.map((s) => where + ": " + s);
+}
+
+// Each state settled, in order, on a fresh app: every check that must hold.
+// Returns the rightmost ruler text over all states.
+async function checkAllStates(page, ctx, where) {
+  await reload(page, ctx);
+  let textRight = 0;
+  for (let i = 0; i <= last; i++) {
+    const frame = await showState(page, ctx, i, 1e6);
+    const problems = await layoutProblems(frame, `${where}, state ${i}`);
+    if (problems.length) await refuse(problems.join("; "));
+    await refuseStale(`${where}, state ${i}`, await frame.evaluate(() => document.body.innerText), "app");
+    textRight = Math.max(textRight, await rulerTextRight(frame));
+  }
+  return textRight;
 }
 
 (async () => {
@@ -248,154 +292,153 @@ function overlaps(a, b, pad) {
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: SCALE, colorScheme: "dark" });
   page.on("pageerror", (e) => { console.error("page error:", e.message); process.exitCode = 1; });
   await page.setContent(host);
-  await page.waitForFunction((n) => Object.keys(window.__ready).length === n, states.states.length, { timeout: 20000 });
+  await waitReady(page, "app");
+  const ctx = { id: "app", cur: -1 };
+  await checkAllStates(page, ctx, "the MP4");
+
+  // Settled on the finished cut: measure, then every host-side check.
   const frameBox = await page.locator("#frame").boundingBox();
-  const capAt = [];
-  for (let i = 0; i < states.states.length; i++) {
-    const f = page.frameLocator("#app" + i);
-    await f.locator("#scroller").waitFor({ state: "visible", timeout: 10000 });
-    const logged = await f.locator("#log").textContent();
-    if (!/timeline loaded/.test(logged)) throw new Error("state " + i + " did not load a payload: " + logged.slice(0, 200));
-    console.log("state", i, "app log:", logged.split("\n")[0]);
-    const hidden = await hiddenNames(f);
-    if (hidden.length) await refuse(`state ${i}: the app had to hide ${JSON.stringify(hidden)}; give the clips room or shorter names`);
-    const server = await f.locator("#log").evaluate((el) => {
-      // Text boxes, not element boxes: the heading's block is the card's full width.
-      const r = el.closest(".card").getBoundingClientRect();
-      const rects = (node) => { const range = document.createRange(); range.selectNodeContents(node);
-        return [...range.getClientRects()].map((q) => ({ x: q.left, y: q.top, w: q.width, h: q.height })); };
-      return { x: r.left, y: r.top, w: r.width, h: r.height, viewH: document.documentElement.clientHeight,
-               words: [...rects(el.closest(".card").querySelector("h2")), ...rects(el)] };
-    });
-    if (server.y + server.h > server.viewH - 12) await refuse(`state ${i}: the SERVER panel ends at ${server.y + server.h}px, the window at ${server.viewH}px`);
-    capAt.push({ top: server.y + 7, right: frameBox.width - 2 - (server.x + server.w) + 10, box: server });
-  }
-  await page.evaluate((c) => { window.__capAt = c; }, capAt);
-
-  // The MOCK pill: top right of the mocked tile, 4px in, never over its label.
-  const tile = await mockTile(page.frameLocator("#app" + last));
-  if (states.mock_clip && !tile) await refuse(`no clip named "${states.mock_clip}" in the last state to mark as mocked`);
-  if (tile) {
-    const pw = await page.locator("#mockpill").evaluate((e) => [e.offsetWidth, e.offsetHeight]);
-    const pill = { x: tile.x + tile.w - pw[0] - 4, y: tile.y + 4, w: pw[0], h: pw[1] };
-    if (pill.x < tile.x + 4 || pill.y + pill.h > tile.y + tile.h - 4) await refuse("the MOCK pill does not fit on its tile: " + JSON.stringify({ tile, pill }));
-    if (overlaps(pill, tile.text, 2)) await refuse("the MOCK pill would cover the tile's label: " + JSON.stringify({ pill, label: tile.text }));
-    await page.evaluate((p) => { window.__pillAt = { left: p.x, top: p.y }; }, pill);
-  }
-
-  // Every text check runs on the finished frame BEFORE the capture, so a
-  // refusal costs seconds, not a full recording.
-  await page.evaluate((ms) => window.__seek(ms), states.loop_start * 1000);
+  const appFr = await appFrameOf(page, "app");
+  const server = await appFr.evaluate(() => {
+    const card = document.getElementById("log").closest(".card"), r = card.getBoundingClientRect();
+    const rects = (node) => { const range = document.createRange(); range.selectNodeContents(node);
+      return [...range.getClientRects()].map((q) => ({ x: q.left, y: q.top, w: q.width, h: q.height })); };
+    return { x: r.left, y: r.top, w: r.width, h: r.height, viewH: document.documentElement.clientHeight,
+             words: [...rects(card.querySelector("h2")), ...rects(document.getElementById("log"))] };
+  });
+  if (server.y + server.h > server.viewH - 12) await refuse(`the SERVER panel ends at ${server.y + server.h}px, the window at ${server.viewH}px`);
+  await page.evaluate((c) => { window.__capAt = c; }, { top: server.y + 7, right: frameBox.width - 2 - (server.x + server.w) + 10 });
+  const lineOf = (t) => {
+    let shown = -1, since = 0, li = 0;
+    states.lines.forEach((l, i) => { if (l.state != null && t >= l.at + LEAD) { shown = l.state; since = t - (l.at + LEAD); li = i; } });
+    return { shown, since, li };
+  };
+  const end = lineOf(states.loop_start);
+  await page.evaluate(({ t, s }) => window.__seek(t, s.shown, s.since, s.li), { t: states.loop_start, s: end });
   await refuseStale("the hero", await page.evaluate(() => document.body.innerText), "host");
-  for (let i = 0; i < states.states.length; i++) {
-    await refuseStale(`app state ${i}`, await page.frameLocator("#app" + i).locator("body").evaluate((b) => b.innerText), "app");
-  }
   const footerHit = await page.evaluate(() => {
     const f = document.getElementById("mock").getBoundingClientRect();
-    const lines = [...document.querySelectorAll("#claude .line")].map((e) => e.getBoundingClientRect());
-    return lines.some((l) => l.bottom > f.top - 6);
+    return [...document.querySelectorAll("#claude .line")].some((e) => e.getBoundingClientRect().bottom > f.top - 6);
   });
   if (footerHit) await refuse("the footer note runs into the tool calls");
   const overflow = await page.evaluate(() => [...document.querySelectorAll("#chat .call, #chat .note")]
     .filter((e) => e.getBoundingClientRect().right > document.getElementById("chat").getBoundingClientRect().right + 0.5)
     .map((e) => e.textContent));
   if (overflow.length) await refuse("chat lines wider than their column: " + JSON.stringify(overflow));
-  const cap = await page.locator("#cap").boundingBox(), sv = capAt[last].box;
+  const cap = await page.locator("#cap").boundingBox();
   const ox = frameBox.x + 1, oy = frameBox.y + 1;
-  const inside = cap.x >= ox + sv.x && cap.x + cap.width <= ox + sv.x + sv.w && cap.y >= oy + sv.y && cap.y + cap.height <= oy + sv.y + sv.h;
-  if (!inside) await refuse("the caption pill is not inside the SERVER panel: " + JSON.stringify({ cap, sv }));
-  const hit = sv.words.find((q) => cap.x < ox + q.x + q.w && ox + q.x < cap.x + cap.width &&
-                                   cap.y < oy + q.y + q.h && oy + q.y < cap.y + cap.height);
-  if (hit) await refuse("the caption pill covers the SERVER panel's own text: " + JSON.stringify(hit));
+  const inside = cap && cap.x >= ox + server.x && cap.x + cap.width <= ox + server.x + server.w &&
+                 cap.y >= oy + server.y && cap.y + cap.height <= oy + server.y + server.h;
+  if (!inside) await refuse("the caption is not inside the SERVER panel: " + JSON.stringify({ cap, server }));
+  const hit = server.words.find((q) => cap.x < ox + q.x + q.w && ox + q.x < cap.x + cap.width &&
+                                       cap.y < oy + q.y + q.h && oy + q.y < cap.y + cap.height);
+  if (hit) await refuse("the caption covers the SERVER panel's own text: " + JSON.stringify(hit));
+  const sc = await appFr.locator("#scroller").boundingBox();
+  fs.writeFileSync(path.join(assetsDir, "hero-layout.json"), JSON.stringify({
+    mp4: { size: [W * SCALE, H * SCALE], timeline: [sc.x, sc.y, sc.width, sc.height].map((v) => Math.round(v * SCALE)) },
+  }) + "\n");
 
-  // The README GIF is the timeline alone: header, ruler and lanes of the
-  // finished state, down to 6px under its timeline (half the gap to the
-  // SELECTION panel, so not a sliver of that panel shows). Earlier states
-  // have shorter timelines, so in the GIF pass each state's iframe is
-  // clipped at its OWN foot: a cross-fade then blends two clean timelines,
-  // and no panel is ever sliced by the crop's bottom edge.
-  const foot = [];
-  for (let i = 0; i < states.states.length; i++) {
-    const sb = await page.frameLocator("#app" + i).locator("#scroller").boundingBox();
-    foot.push(sb.y + sb.height + 6);
-  }
-  const taller = foot.findIndex((f) => f > foot[last] + 0.5);
-  if (taller >= 0) await refuse(`state ${taller}'s timeline is taller than the finished one: the GIF crop would cut it`);
-  await page.evaluate((f) => {
-    document.querySelectorAll("iframe.app").forEach((el) => {
-      el.style.setProperty("--below", (el.getBoundingClientRect().bottom - f[Number(el.dataset.state)]) + "px");
-    });
-    const top = document.querySelector("iframe.app").getBoundingClientRect().top;
-    window.__footRel = f.map((y) => y - top);
-  }, foot);
-  const gifClip = { x: frameBox.x, y: frameBox.y, width: frameBox.width, height: foot[last] - frameBox.y };
-  const gifDir = path.join(work, "gif-frames");
-  fs.rmSync(gifDir, { recursive: true, force: true });
-  fs.mkdirSync(gifDir);
-
-  await page.waitForTimeout(500);  // fonts and thumbnails settle before the first frame
+  // The MP4, from the finished cut (frame 0) round the loop.
+  await page.waitForTimeout(300);
   const total = Math.round(states.duration * FPS);
-  const offset = Math.round(states.loop_start * FPS) % total;  // frame 0 = the finished cut
+  const offset = Math.round(states.loop_start * FPS) % total;
   for (let k = 0; k < total; k++) {
-    await page.evaluate((ms) => window.__seek(ms), (((k + offset) % total) / FPS) * 1000);
-    const name = String(k).padStart(5, "0") + ".png";
-    await page.screenshot({ path: path.join(framesDir, name), animations: "disabled" });
-    await page.evaluate(() => document.body.classList.add("gif"));
-    await page.screenshot({ path: path.join(gifDir, name), clip: gifClip, animations: "disabled" });
-    await page.evaluate(() => document.body.classList.remove("gif"));
+    const t = ((k + offset) % total) / FPS, s = lineOf(t);
+    await showState(page, ctx, s.shown, s.since * 1000);
+    await page.evaluate(({ t, s }) => window.__seek(t, s.shown, s.since, s.li), { t, s });
+    await page.screenshot({ path: path.join(framesDir, String(k).padStart(5, "0") + ".png") });
     if (k % 150 === 0) console.log("frame", k, "/", total);
   }
-  if (assetsDir) {
-    await page.evaluate((ms) => window.__seek(ms), states.loop_start * 1000);
-    await page.screenshot({ path: path.join(assetsDir, "hero-still.png"), animations: "disabled" });
-    await writeCardFrame(browser);
-  }
+  await showState(page, ctx, end.shown, 1e6);
+  await page.evaluate(({ t, s }) => window.__seek(t, s.shown, s.since, s.li), { t: states.loop_start, s: end });
+  await page.screenshot({ path: path.join(assetsDir, "hero-still.png") });
+  console.log("mp4 frames:", total);
+
+  await writeGif(browser);
+  await writeCardFrame(browser);
   await browser.close();
-  console.log("frames:", total);
 })().catch((e) => { console.error(e); process.exit(1); });
 
-async function writeCardFrame(browser) {
-  const card = await browser.newPage({ viewport: { width: CARD_W, height: 900 }, deviceScaleFactor: SCALE, colorScheme: "dark" });
-  await card.setContent(cardHost);
-  await card.waitForFunction(() => window.__ready.capp === true, null, { timeout: 20000 });
-  const cf = card.frameLocator("#capp");
-  await cf.locator("#scroller").waitFor({ state: "visible", timeout: 10000 });
-  await card.waitForTimeout(300);
-  // Crop to the scroller (ruler + lanes), down to the last lane's border:
-  // shift the iframe so it fills the stage, with no empty band at its foot.
-  const sc = await cf.locator("#scroller").evaluate((el) => { const r = el.getBoundingClientRect();
-    const lanes = [...el.querySelectorAll(".lane")].map((l) => l.getBoundingClientRect().bottom);
-    return { x: r.left, y: r.top, w: r.width, h: Math.min(r.height, Math.max(...lanes) - r.top + 1) }; });
-  await card.evaluate(({ sc, zoom }) => {
-    const stage = document.getElementById("cstage"), iframe = document.querySelector("#czoom iframe");
-    iframe.style.left = -sc.x + "px"; iframe.style.top = -sc.y + "px";
-    stage.style.width = Math.round(sc.w * zoom) + "px"; stage.style.height = Math.round(sc.h * zoom) + "px";
-  }, { sc, zoom: ZOOM });
-  await card.waitForTimeout(300);
-  const hidden = await hiddenNames(cf);
-  if (hidden.length) await refuse("card: the app had to hide " + JSON.stringify(hidden));
-  const tile = await mockTile(cf);
-  if (tile) {
-    await card.evaluate(({ tile, sc, zoom }) => {
-      const pill = document.getElementById("cpill");
-      pill.style.display = "block";
-      pill.style.left = ((tile.x + tile.w - sc.x) * zoom - pill.offsetWidth - 5) + "px";
-      pill.style.top = ((tile.y - sc.y) * zoom + 5) + "px";
-    }, { tile, sc, zoom: ZOOM });
-    const clash = await card.evaluate(({ tile, sc, zoom }) => {
-      const p = document.getElementById("cpill").getBoundingClientRect(), s = document.getElementById("cstage").getBoundingClientRect();
-      const t = { x: s.left + (tile.text.x - sc.x) * zoom, y: s.top + (tile.text.y - sc.y) * zoom, w: tile.text.w * zoom, h: tile.text.h * zoom };
-      return p.left < t.x + t.w + 2 && t.x < p.right + 2 && p.top < t.y + t.h + 2 && t.y < p.bottom + 2;
-    }, { tile, sc, zoom: ZOOM });
-    if (clash) await refuse("card: the MOCK pill would cover the tile's label");
+// The right edge of the ruler text the app shows in this state (ticks and
+// marker names), in the iframe's coordinates: the GIF's crop must hold it.
+async function rulerTextRight(frame) {
+  return frame.evaluate(() => Math.max(0, ...[...document.querySelectorAll(".tick, .mlabel")]
+    .filter((e) => !e.classList.contains("unfit")).map((e) => {
+      const r = document.createRange(); r.selectNodeContents(e); return r.getBoundingClientRect().right; })));
+}
+
+// Inside the panel: from just left of the playhead to just past the end of
+// the sequence and the ruler text (or the scroller's inner right edge), ruler
+// top to the spine.
+async function timelineBox(frame, gutter, textRight = 0) {
+  return frame.evaluate(({ gutter, G, textRight }) => {
+    const sc = document.getElementById("scroller").getBoundingClientRect(), st = window.__fcpApp.state;
+    const lanes = [...document.querySelectorAll(".lane")].map((l) => l.getBoundingClientRect().bottom);
+    const [n, d] = String(st.payload.duration).split("/").map(Number), dur = d ? n / d : n;
+    const endX = G + st.pps * dur;  // the app's x(duration), in canvas pixels
+    const left = sc.left + 1 + (gutter ? 0 : G - 8);
+    // (clear of the scroller's rounded corners: radius 8)
+    const right = Math.min(sc.right - 9, Math.max(sc.left + 1 + endX + (gutter ? 12 : 8), textRight + 2));
+    return { x: left, y: sc.top + 1, w: right - left, h: Math.max(...lanes) + 3 - (sc.top + 1) };
+  }, { gutter, G: GUTTER, textRight });
+}
+
+async function writeGif(browser) {
+  const gp = await browser.newPage({ viewport: { width: Math.ceil(GIF_APP_W * GIF_ZOOM) + 8, height: Math.ceil(620 * GIF_ZOOM) },
+                                     deviceScaleFactor: SCALE, colorScheme: "dark" });
+  await gp.setContent(gifHost);
+  await waitReady(gp, "gapp");
+  const ctx = { id: "gapp", cur: -1 };
+  const textRight = await checkAllStates(gp, ctx, "the GIF");
+  const box = await timelineBox(await appFrameOf(gp, "gapp"), false, textRight);
+  // The point of the GIF: the app's 10 px ruler type at 10 px or more when a
+  // phone shows the GIF 358 px wide.
+  const atPhone = 10 * 358 / box.w;
+  if (atPhone < 10) await refuse(`the GIF's crop is ${box.w.toFixed(1)} CSS px wide: its 10 px type would be ${atPhone.toFixed(2)} px at 358`);
+  const clip = { x: box.x * GIF_ZOOM, y: box.y * GIF_ZOOM, width: box.w * GIF_ZOOM, height: box.h * GIF_ZOOM };
+  const dir = path.join(work, "gif-frames");
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir);
+  const holds = [];
+  const shoot = async (ms) => {
+    const name = String(holds.length).padStart(5, "0") + ".png";
+    await gp.screenshot({ path: path.join(dir, name), clip });
+    holds.push([name, ms]);
+  };
+  for (const seg of states.gif_story) {
+    const holdMs = Math.round(seg.hold * 1000);
+    if (!seg.moves) {
+      await showState(gp, ctx, seg.state, 1e6);  // an earlier state: a fresh app, settled
+      await shoot(holdMs);
+      continue;
+    }
+    const frame = await showState(gp, ctx, seg.state, 0);
+    const len = Math.ceil(await motionLength(frame));
+    let used = 0;
+    for (let ms = 0; ms < len; ms += GIF_STEP_MS) {
+      await frame.evaluate((ms) => document.getAnimations().forEach((a) => { a.currentTime = ms; }), ms);
+      await shoot(GIF_STEP_MS);
+      used += GIF_STEP_MS;
+    }
+    await frame.evaluate(() => document.getAnimations().forEach((a) => { a.currentTime = 1e6; }));
+    await shoot(Math.max(GIF_STEP_MS, holdMs - used));
   }
-  await refuseStale("the card frame", await card.evaluate(() => document.body.innerText), "host");
-  await refuseStale("the card's app", await cf.locator("body").evaluate((b) => b.innerText), "app");
-  const cardOverflow = await card.evaluate(() => [...document.querySelectorAll("#cchat .call")]
-    .filter((e) => e.getBoundingClientRect().right > document.getElementById("cchat").getBoundingClientRect().right + 0.5)
-    .map((e) => e.textContent));
-  if (cardOverflow.length) await refuse("card: chat lines wider than their column: " + JSON.stringify(cardOverflow));
-  await card.locator("#card").screenshot({ path: path.join(assetsDir, "card-frame.png"), animations: "disabled", omitBackground: false });
-  await card.close();
-  console.log("still + card frame written to", assetsDir);
+  fs.writeFileSync(path.join(dir, "durations.json"), JSON.stringify(holds));
+  console.log(`gif: ${holds.length} pictures, ${Math.round(clip.width * SCALE)}x${Math.round(clip.height * SCALE)} px,`,
+              `type ${10 * GIF_ZOOM * SCALE}-${11 * GIF_ZOOM * SCALE} px, ${holds.reduce((a, h) => a + h[1], 0) / 1000}s`);
+  await gp.close();
+}
+
+async function writeCardFrame(browser) {
+  const cp = await browser.newPage({ viewport: { width: Math.ceil(CARD_APP_W * CARD_ZOOM) + 8, height: Math.ceil(620 * CARD_ZOOM) },
+                                     deviceScaleFactor: SCALE, colorScheme: "dark" });
+  await cp.setContent(cardHost);
+  await waitReady(cp, "capp");
+  const ctx = { id: "capp", cur: -1 };
+  const textRight = await checkAllStates(cp, ctx, "the card");
+  const box = await timelineBox(await appFrameOf(cp, "capp"), true, textRight);
+  await cp.screenshot({ path: path.join(assetsDir, "card-frame.png"),
+                        clip: { x: box.x * CARD_ZOOM, y: box.y * CARD_ZOOM, width: box.w * CARD_ZOOM, height: box.h * CARD_ZOOM } });
+  await cp.close();
+  console.log("card frame written");
 }

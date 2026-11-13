@@ -7,10 +7,11 @@
 reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server?label=PyPI&color=33EBFF&labelColor=000000)](https://pypi.org/project/fcp-mcp-server/)
-[![Final Cut Pro for Mac 10.4 to 12.4](https://img.shields.io/static/v1?label=Final%20Cut%20Pro&message=Mac%2010.4%E2%80%9312.4&color=33EBFF&labelColor=000000)](#compatibility)
 [![License: MIT](https://img.shields.io/static/v1?label=license&message=MIT&color=33EBFF&labelColor=000000)](LICENSE)
 
-[![Watch Claude cut a gym session in the ui://fcp/timeline app, which re-renders inline after each tool call: the long squat set loses its rests, a marker appears on the ruler for each lift, and a B-roll clip marked MOCK lands on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+Python 3.10+ · Final Cut Pro for Mac 10.4 to 12.4 ([compatibility](#compatibility))
+
+[![The ui://fcp/timeline app re-rendering after each of Claude's edits to a gym session: the long squat set splits and its pieces slide together as the rests are cut, a marker lands on the ruler for each lift, and a B-roll clip marked MOCK is laid in on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
 
 **You:** Cut the rest between sets, mark every lift, and put B-roll over the
 long set.
@@ -27,13 +28,15 @@ long set.
 6. `organize · history` lists every journaled output, each one undoable
 <!-- /hero-calls -->
 
-*The loop opens on the finished cut, then plays the calls in order
+*The GIF opens on the finished cut, then replays the three edits: the rests
+close, the markers land, the B-roll is laid in
 ([MP4 with the chat beside the app](docs/assets/hero-watch-claude-cut.mp4),
 [full-size still](docs/assets/hero-still.png)). Every frame is the real
-`ui://fcp/timeline` app drawing a real `view_timeline` result, cut from the
-author's own gym session (its audio is a test tone, so the rests are real
-silence). The B-roll provider is mocked for this recording: the clip is
-named "B-roll (mocked)" and carries a MOCK badge. Re-recorded with
+`ui://fcp/timeline` app drawing a real `view_timeline` result, and every
+move is the app's own animation between two results, cut from the author's
+own gym session (its audio is a test tone, so the rests are real silence).
+The B-roll provider is mocked for this recording: the clip is named "B-roll
+(mocked)" and carries a MOCK badge. Re-recorded with
 [`demo/hero/build.py`](demo/hero/build.py).*
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a

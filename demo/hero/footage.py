@@ -28,10 +28,10 @@ OUT = Path(__file__).resolve().parent / "footage"
 # wide tiles (object-fit: cover) then show the lift above the label, not the
 # wall or the floor, and 640x360 matches the 16:9 sequence it is cut into.
 CUTS = {
-    "bench": ("2026-08-08_video-5348_singular_display.mov", 12, 5, 0.61),
-    "squat": ("2026-08-08_IMG_0128.MOV", 172, 22, 0.18),
-    "press": ("2026-08-08_video-5107_singular_display.mov", 26, 5, 0.54),
-    "finish": ("2026-08-08_video-5348_singular_display.mov", 80, 5, 0.63),
+    "bench": ("2026-08-08_video-5348_singular_display.mov", 12, 6, 0.61),
+    "squat": ("2026-08-08_IMG_0128.MOV", 172, 19, 0.18),
+    "press": ("2026-08-08_video-5107_singular_display.mov", 26, 6, 0.54),
+    "finish": ("2026-08-08_video-5348_singular_display.mov", 80, 6, 0.63),
 }
 
 

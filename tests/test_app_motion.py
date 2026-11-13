@@ -181,21 +181,43 @@ def test_the_fade_check_goes_red(browser):
         page.close()
 
 
-def test_a_new_clip_is_laid_in_and_a_new_marker_drops_in(browser):
+def _with_two_markers(p: dict) -> dict:
+    """The lane-one cut plus a second new marker, on Finish (to its right)."""
+    q = _with_lane_one(p)
+    fin = next(c for c in q["clips"] if c["name"] == "Finish")
+    fin["markers"] = [{"name": "Finish", "start": fin["start"], "kind": "chapter"}]
+    return q
+
+
+NAMES = """() => {
+  const vis = (e) => getComputedStyle(e).visibility !== 'hidden';
+  const clip = [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'B-roll');
+  return { width: clip.getBoundingClientRect().width, name: vis(clip.querySelector('.label')),
+           flags: [...document.querySelectorAll('.mlabel')].filter(vis).map(e => e.textContent) };
+}"""
+
+
+def test_a_new_clip_is_laid_in_and_new_markers_land_whole_in_turn(browser):
     a = _split(_base())
     page = _page(browser)
     try:
         page.evaluate("p => window.__fcpApp.setPayload(p)", a)
-        page.evaluate(SET, _with_lane_one(a))
+        page.evaluate(SET, _with_two_markers(a))
         page.evaluate(SEEK, 0)
-        broll = page.evaluate("() => [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'B-roll').getBoundingClientRect().width")
-        flag = page.evaluate("() => [...document.querySelectorAll('.mlabel')].find(e => e.textContent === 'b-roll').getAnimations().length")
+        start = page.evaluate(NAMES)
+        steps = page.evaluate("""() => [...document.querySelectorAll('.mlabel')].flatMap(e => e.getAnimations()
+            .flatMap(a => a.effect.getKeyframes().flatMap(k => Object.keys(k).filter(p => !['offset', 'easing', 'composite', 'computedOffset'].includes(p)))))""")
         page.evaluate(SEEK, MOTION_MS + 200)
-        grown = page.evaluate("() => [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'B-roll').getBoundingClientRect().width")
+        end = page.evaluate(NAMES)
     finally:
         page.close()
-    assert broll < 3 < grown
-    assert flag == 1
+    # the tile grows from nothing, its name hidden until it is whole
+    assert start["width"] < 3 < end["width"]
+    assert start["name"] is False and end["name"] is True
+    # the first marker lands at once, the one to its right in turn; whole, never part-drawn
+    assert "b-roll" in start["flags"] and "Finish" not in start["flags"]
+    assert {"b-roll", "Finish"} <= set(end["flags"])
+    assert set(steps) == {"visibility"}
 
 
 def test_reduced_motion_jumps(browser):

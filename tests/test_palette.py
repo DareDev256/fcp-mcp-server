@@ -11,7 +11,8 @@ impossible to add quietly:
 - ``rgb()``/``rgba()`` literals are refused outright (spell it as a token);
 - a token must be a neutral grey, or the cyan accent, or the danger red;
 - every text pair reads at 4.5:1 or better in both modes;
-- the README's badges are three, on the token values.
+- the README's badges are at most three, on the token values, and none
+  carries a version or a version range unless PyPI supplies it.
 
 Each scanner is also run against a planted violation (``#f59e0b`` back in a
 surface), so the check is seen going red, not only green.
@@ -22,7 +23,7 @@ from __future__ import annotations
 import colorsys
 import re
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 
@@ -282,12 +283,13 @@ def test_the_badge_text_rule_can_go_red():
     assert palette.shields_brightness(palette.dark("accent")) <= palette.SHIELDS_DARK_TEXT_ABOVE
 
 
-VERSION = re.compile(r"v?\d+\.\d+\.\d+")
+VERSION = re.compile(r"\d+\.\d+")
 
 
 def stale_version_badges(urls: list[str]) -> list[str]:
-    """A badge that prints a version must ask PyPI for it, never carry it."""
-    return [u for u in urls if "/pypi/v/" not in u and VERSION.search(urlparse(u).path + urlparse(u).query)]
+    """A badge that prints a version, or a range of them ("10.4-12.4"), must
+    ask PyPI for it, never carry it: an image cannot be grepped or tested."""
+    return [u for u in urls if "/pypi/v/" not in u and VERSION.search(unquote(urlparse(u).path + urlparse(u).query))]
 
 
 def test_the_version_badge_is_dynamic():
@@ -298,6 +300,9 @@ def test_the_version_badge_is_dynamic():
 
 def test_the_dynamic_rule_can_go_red():
     assert stale_version_badges(["https://img.shields.io/static/v1?label=PyPI&message=v0.30.0&color=33EBFF"])
+    # the round-4 Final Cut badge: a range baked into an image
+    assert stale_version_badges(["https://img.shields.io/static/v1?label=Final%20Cut%20Pro"
+                                 "&message=Mac%2010.4%E2%80%9312.4&color=33EBFF&labelColor=000000"])
 
 
 def test_the_badge_rule_can_go_red():
