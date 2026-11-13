@@ -790,7 +790,13 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   function log(s) { var l = $("log"); l.textContent = (s + "\n" + l.textContent).slice(0, 6000); }
   $("zin").addEventListener("click", function () { state.pps *= 1.5; draw(); });
   $("zout").addEventListener("click", function () { state.pps = Math.max(2, state.pps / 1.5); draw(); });
-  window.addEventListener("resize", function () { if (state.payload) { draw(); } });
+  // Redraw on a WIDTH change only: hosts resize the frame to its content's
+  // height after every render, and a redraw then would cut short the motion.
+  var drawnWidth = window.innerWidth;
+  window.addEventListener("resize", function () {
+    if (!state.payload || window.innerWidth === drawnWidth) return;
+    drawnWidth = window.innerWidth; draw();
+  });
   $("scroller").addEventListener("scroll", fitLabels);
   window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION };
 

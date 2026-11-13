@@ -114,6 +114,9 @@ def _page(browser, width=1440, reduced=False):
     return page
 
 
+# Set and pause in ONE evaluate: under load the 400 ms can pass between two
+# round trips, and a finished animation is no longer in getAnimations().
+SET = "p => { window.__fcpApp.setPayload(p); document.getAnimations().forEach(a => { a.pause(); a.currentTime = 0; }); }"
 SEEK = """ms => { const all = document.getAnimations(); all.forEach(a => { a.pause(); a.currentTime = ms; }); return all.length; }"""
 CLIPS = """() => [...document.querySelectorAll('#canvas .clip')].map(e => ({
   name: e.__c.name, src: e.__c.source_start, left: parseFloat(getComputedStyle(e).left), width: e.getBoundingClientRect().width }))"""
@@ -127,7 +130,7 @@ def test_a_split_clip_starts_where_its_footage_sat_and_closes_the_gap(browser):
         page.evaluate("p => window.__fcpApp.setPayload(p)", a)
         old = {c["name"]: c for c in page.evaluate(CLIPS)}
         pps = page.evaluate("() => window.__fcpApp.state.pps")
-        page.evaluate("p => window.__fcpApp.setPayload(p)", b)
+        page.evaluate(SET, b)
         assert page.evaluate(SEEK, 0) > 0, "no motion at all"
         start = page.evaluate(CLIPS)
         page.evaluate(SEEK, MOTION_MS)
@@ -157,9 +160,9 @@ def test_motion_never_fades(browser):
     page = _page(browser)
     try:
         page.evaluate("p => window.__fcpApp.setPayload(p)", a)
-        page.evaluate("p => window.__fcpApp.setPayload(p)", _split(a))
+        page.evaluate(SET, _split(a))
         problems = motion_problems(page)
-        page.evaluate("p => window.__fcpApp.setPayload(p)", _with_lane_one(_split(a)))
+        page.evaluate(SET, _with_lane_one(_split(a)))
         problems += motion_problems(page)
         kinds = page.evaluate("() => document.getAnimations().length")
     finally:
@@ -183,7 +186,7 @@ def test_a_new_clip_is_laid_in_and_a_new_marker_drops_in(browser):
     page = _page(browser)
     try:
         page.evaluate("p => window.__fcpApp.setPayload(p)", a)
-        page.evaluate("p => window.__fcpApp.setPayload(p)", _with_lane_one(a))
+        page.evaluate(SET, _with_lane_one(a))
         page.evaluate(SEEK, 0)
         broll = page.evaluate("() => [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'B-roll').getBoundingClientRect().width")
         flag = page.evaluate("() => [...document.querySelectorAll('.mlabel')].find(e => e.textContent === 'b-roll').getAnimations().length")
@@ -200,7 +203,7 @@ def test_reduced_motion_jumps(browser):
     page = _page(browser, reduced=True)
     try:
         page.evaluate("p => window.__fcpApp.setPayload(p)", a)
-        page.evaluate("p => window.__fcpApp.setPayload(p)", _split(a))
+        page.evaluate(SET, _split(a))
         n = page.evaluate("() => document.getAnimations().length")
     finally:
         page.close()
@@ -219,7 +222,7 @@ def test_the_spine_stays_put_when_lane_one_fills(browser):
         page.evaluate("p => window.__fcpApp.setPayload(p)", a)
         before = page.evaluate(SPINE_TOP)
         reserved = page.evaluate("() => document.querySelectorAll('.lane.reserved').length")
-        page.evaluate("p => window.__fcpApp.setPayload(p)", _with_lane_one(a))
+        page.evaluate(SET, _with_lane_one(a))
         after = page.evaluate(SPINE_TOP)
         reserved_after = page.evaluate("() => document.querySelectorAll('.lane.reserved').length")
     finally:
