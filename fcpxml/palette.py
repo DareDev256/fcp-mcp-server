@@ -159,6 +159,13 @@ def contrast(fg: str, bg: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
+def composite(top: str, under: str) -> str:
+    """``top`` (which may carry alpha, ``#RRGGBBAA``) laid over the opaque ``under``."""
+    a = alpha(top)
+    mixed = (round(t * a + u * (1 - a)) for t, u in zip(rgb(top), rgb(under)))
+    return "#" + "".join(f"{c:02X}" for c in mixed)
+
+
 def is_neutral(hex_value: str, tolerance: int = 12) -> bool:
     r, g, b = rgb(hex_value)
     return max(r, g, b) - min(r, g, b) <= tolerance

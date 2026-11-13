@@ -167,6 +167,64 @@ def test_a_crowded_marker_keeps_its_flag_and_its_name_in_the_tooltip(browser):
 
 
 # ---------------------------------------------------------------------------
+# A label over a thumbnail reads at 4.5:1 even over a white frame
+# ---------------------------------------------------------------------------
+
+def _white_thumb() -> str:
+    import base64
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36), (255, 255, 255)).save(buf, "JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _label_contrast(browser, html: str) -> float:
+    """Render a clip whose thumbnail is pure white, hide the label's text,
+    and measure the brightest pixel left where the text sits."""
+    import io
+
+    from PIL import Image
+
+    from fcpxml import palette
+
+    p = copy.deepcopy(_payload("sample.fcpxml"))
+    for c in p["clips"]:
+        c["thumb"] = _white_thumb()
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    try:
+        page.set_content(html)
+        page.evaluate("p => window.__fcpApp.setPayload(p)", p)
+        label = page.locator(".lane.spine .clip.has-thumb .label:not(.unfit)").first
+        top = label.evaluate("e => parseFloat(getComputedStyle(e).paddingTop)")
+        # the playhead and marker lines are drawn over clips on purpose; measure the scrim alone
+        page.add_style_tag(content='.playhead, .markers, .mk, .range { visibility: hidden !important; }')
+        label.evaluate("e => [e, ...e.querySelectorAll('*')].forEach(x => { x.style.color = 'transparent'; })")
+        shot = Image.open(io.BytesIO(label.screenshot())).convert("RGB")
+    finally:
+        page.close()
+    # where the text is drawn, inset 2px: the box sits at a fractional x, so its edge
+    # columns catch a sliver of the clip border beside it
+    band = shot.crop((2, int(top) + 1, shot.width - 2, shot.height - 1))
+    brightest = max(band.getdata(), key=sum)
+    return palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % brightest)
+
+
+def test_a_label_over_a_white_frame_reads_at_4_5_to_1(browser):
+    assert _label_contrast(browser, timeline_app.render_app_html()) >= 4.5
+
+
+def test_the_scrim_check_goes_red_without_the_scrim(browser):
+    """Mutation check: the 0.31 first-pass scrim (a fade across the text) is caught."""
+    html = timeline_app.render_app_html()
+    broken = html.replace("background: linear-gradient(to bottom, transparent 0, var(--shade) 10px);",
+                          "background: linear-gradient(transparent, var(--shade));")
+    assert broken != html
+    assert _label_contrast(browser, broken) < 4.5
+
+
+# ---------------------------------------------------------------------------
 # The legacy preview:// page has no script: its rule is CSS (fcpxml/preview.py)
 # ---------------------------------------------------------------------------
 

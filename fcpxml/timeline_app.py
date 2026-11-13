@@ -405,8 +405,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .clip img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .85; }
   .clip .label { position: relative; z-index: 1; padding: 2px 6px; font-size: 11px; white-space: nowrap;
     overflow: hidden; color: var(--ink); }
-  .clip.has-thumb .label { color: var(--on-media); background: linear-gradient(transparent, var(--shade)); }
+  /* The scrim is FULL shade (75% black) from 10px down, and the text starts at 12px: a
+     label over a white frame still reads at 10:1 (tests/test_palette.py, test_app_labels.py). */
+  .clip.has-thumb .label { color: var(--on-media); padding-top: 12px;
+    background: linear-gradient(to bottom, transparent 0, var(--shade) 10px); }
   .clip .role { font-size: 9px; color: var(--mute); margin-left: 6px; }
+  .clip.has-thumb .role { color: var(--on-media); }
   .clip.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .clip .mk { position: absolute; top: 0; width: 2px; height: 8px; background: var(--accent); z-index: 2; }
   .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--gap);

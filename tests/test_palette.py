@@ -164,6 +164,38 @@ def test_the_fill_rule_can_go_red():
     assert palette.contrast(palette.dark("raised"), palette.dark("panel")) < 3.0
 
 
+@pytest.mark.parametrize("frame", ["#FFFFFF", "#FFFF00", "#00FFFF", "#000000"])
+def test_a_clip_label_reads_over_any_frame(frame):
+    """A label over a thumbnail sits on the shade scrim, whatever the frame
+    is: worst case a white frame, where 0.31's half-faded scrim left 'Studio'
+    at 2.7:1."""
+    under = palette.composite(palette.dark("shade"), frame)
+    assert palette.contrast(palette.dark("on-media"), under) >= 4.5
+
+
+def scrim_rule(html: str) -> tuple[float, float]:
+    """(where the scrim reaches full shade, where the label text starts), in px."""
+    rule = re.search(r"\.clip\.has-thumb \.label \{([^}]*)\}", html).group(1)
+    full = float(re.search(r"var\(--shade\)\s+([\d.]+)px", rule).group(1))
+    text = float(re.search(r"padding-top:\s*([\d.]+)px", rule).group(1))
+    return full, text
+
+
+def test_the_scrim_is_full_before_the_text_starts():
+    from fcpxml import timeline_app
+
+    full, text = scrim_rule(timeline_app.render_app_html())
+    assert full <= text, f"the scrim is still fading where the text starts ({full}px > {text}px)"
+
+
+def test_the_scrim_rules_can_go_red():
+    """Mutation checks: a 25% scrim fails the arithmetic, and a fade that
+    ends below the text top fails the layout rule."""
+    assert palette.contrast(palette.dark("on-media"), palette.composite("#00000040", "#FFFFFF")) < 4.5
+    full, text = scrim_rule(".clip.has-thumb .label { padding-top: 12px; background: linear-gradient(transparent, var(--shade) 30px); }")
+    assert full > text
+
+
 def test_the_contrast_rule_can_go_red():
     """Mutation check: the old light-mode idea of cyan text on white fails."""
     assert palette.contrast("#00E5FF", "#FFFFFF") < 4.5
