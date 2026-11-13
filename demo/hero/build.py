@@ -1,49 +1,47 @@
-"""Record the README hero: "watch Claude cut".
+"""Record the README hero: "watch Claude cut", on the author's own gym session.
 
 One command re-records it:
 
     uv run --with pillow demo/hero/build.py                  # from the repo root
     uv run --with pillow demo/hero/build.py --record-only    # re-capture the last run's states (host page tweaks)
+    GEMINI_API_KEY=... uv run --with pillow demo/hero/build.py --generate   # buy the B-roll once (see below)
 
 What it does, in order:
 
-1. Synthesises four source clips with ffmpeg (still, neutral grey radial
-   gradients at 24 fps, so the thumbnails never compete with the cyan the
-   app marks things with; the take carries two stretches of real silence in
-   its audio). Short source names, so every clip name fits on its clip.
-   Nothing is kept as a fixture; the media is rebuilt every run.
+1. Takes the four silent proxies in ``demo/hero/footage/`` (the author's own
+   2026-08-08 gym session, cut by ``footage.py``: he is the only person in
+   frame, and no audio was kept because the gym's music is on it) and gives
+   each a synthesised test-tone soundtrack. The squat set's tone stops for
+   two rests (6.0-9.5 s and 15.0-18.0 s): that real digital silence is what
+   remove_media_silence cuts. The on-screen note says the audio is a tone.
 2. Runs the REAL tool handlers through ``server.call_tool`` — the same entry
    an MCP client reaches — and keeps every ``view_timeline`` result verbatim:
 
        generate · import_edl_json      the cut, from an EDL of the four clips
        view     · view_timeline        state 0
        edit     · remove_media_silence state 1   (real ffmpeg silencedetect)
-       mark     · batch_add_markers    state 2   (one marker per section)
+       mark     · batch_add_markers    state 2   (one marker per lift)
        gen      · gen_quote            the money gate, priced from the table
-       gen      · gen_broll            state 3   (provider MOCKED, see below)
+       gen      · gen_broll            state 3   (Gemini Omni Flash, prompt only)
        organize · history              the journal rows the run produced
 
-   The B-roll step patches ``fcpxml.gen.provider_for`` with a fake provider
-   exactly as ``tests/test_gen_group.py`` does, so the gate, the key check,
-   the probe, the insert, the DTD check and the journal all run for real while
-   no request leaves the machine and no money is spent. The recording labels
-   it "provider mocked" on screen, and the clip the fake returns is itself a
-   synthesised gradient. Nothing in the video claims a real generation.
-3. Writes ``.work/states.json`` (the prompt, the tool lines with figures
-   lifted from the real tool replies, the four payload-bearing results and
-   the palette) plus the ``ui://fcp/timeline`` resource as served, then runs
-   ``record.js`` (Playwright) to capture frames from the stub host page, and
-   ffmpeg to encode ``docs/assets/hero-watch-claude-cut.{mp4,gif}``.
-4. The GIF opens on the finished cut (``LOOP_START``), not on the empty
-   "waiting for a timeline" frame, so a viewer that shows only the first
-   frame (the README, PyPI, a paused GIF) sees the product. The MP4 plays the
-   story in order and carries that finished frame as its poster (an attached
-   picture), so it never jumps finished, empty, finished. The recorder also
-   writes ``docs/assets/hero-still.png`` (the finished frame, 2x) and
-   ``docs/assets/card-frame.png`` (the conversation beside the finished
-   timeline), which ``scripts/social_card.py`` builds the GitHub card from.
-
-Every colour, footage included, is a token from ``fcpxml/palette.py``.
+3. The B-roll is ONE real generation, bought once. ``--generate`` runs the
+   pipeline with the real ``gemini`` provider under a per-call cap of
+   US$0.70 (``FCP_MCP_GEN_MAX_USD``), from the prompt alone
+   (``condition_on_frame: false``: no frame of the footage leaves the
+   machine), keeps a silent 360p copy and a record of what was quoted in
+   ``demo/hero/footage/broll.{mp4,json}``, and stops. It refuses when that
+   record already exists: a rebuild never pays twice. Every ordinary build
+   REPLAYS the kept copy through the same gate, probe, insert, DTD check
+   and journal, and the on-screen note says so. With no copy on file and
+   no ``--generate``, the provider is mocked and the note says THAT plainly.
+4. Writes ``.work/states.json`` (the prompt, the tool lines, the four
+   payload-bearing results, the palette and the patterns no image may
+   carry, ``scripts/image_text.py``) plus the ``ui://fcp/timeline`` resource
+   as served, then runs ``record.js`` (Playwright) and encodes
+   ``docs/assets/hero-watch-claude-cut.{mp4,gif}``. Both open on the
+   finished cut (the frames are captured from ``LOOP_START`` round to it),
+   and the MP4 also carries that frame as its attached poster.
 
 Requires ffmpeg/ffprobe on PATH, Pillow (for the GIF: it merges identical
 frames, which ffmpeg's gif muxer does not), and Node with the ``playwright``
@@ -54,72 +52,110 @@ at that ``node_modules/playwright`` if it is not on Node's module path).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+from datetime import date
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "scripts"))
+import image_text  # noqa: E402
+
 from fcpxml import palette  # noqa: E402
 
 WORK = HERE / ".work"
+FOOTAGE = HERE / "footage"
 ASSETS = REPO / "docs" / "assets"
 FPS = 24
 GIF_FPS = 12
-GIF_WIDTH = 960
-PROMPT = "Cut the dead air, mark every section, and put B-roll over the long interview take."
+GIF_WIDTH = 1920
+GIF_MAX_BYTES = 5_000_000
+PROMPT = "Cut the rest between sets, mark every lift, and put B-roll over the long set."
 LOOP_START = 25.6  # seconds into the story where the finished cut is on screen and every line is in
-BROLL_PROMPT = "city skyline at dusk, slow push in"
+LONG_SET = "Squat"
 
-
-
-def _tokens(*names: str) -> tuple[str, ...]:
-    """Gradient stops for the synthesised footage, from the palette: the
-    thumbnails are drawn on the product's face, so they stay on its colours."""
-    hexes = {**{f"light:{k}": v[1] for k, v in palette.TOKENS.items()}, **{k: v[0] for k, v in palette.TOKENS.items()}}
-    return tuple(palette.ffmpeg_colour(hexes[n]) for n in names)
-
-
-# name -> (seconds, gradient colours, audio expression or None)
-# The take's audio is a 220 Hz tone with two stretches of digital silence
-# (6.0-9.5 s and 15.0-18.0 s): that is the dead air remove_media_silence cuts.
+# name -> (proxy file, seconds used, tone expression or None for a steady quiet tone)
 CLIPS = {
-    "Opening": (5, _tokens("line-strong", "ground"), None),
-    "Take": (22, _tokens("mute", "raised-2"),
-             "0.25*sin(2*PI*220*t)*(between(t,0,6)+between(t,9.5,15)+between(t,18,22))"),
-    "Studio": (5, _tokens("ink", "line-strong"), None),
-    "Closing": (5, _tokens("raised-2", "ground"), None),
+    "Bench": ("bench.mp4", 5, None),
+    LONG_SET: ("squat.mp4", 22, "0.25*sin(2*PI*220*t)*(between(t,0,6)+between(t,9.5,15)+between(t,18,22))"),
+    "Press": ("press.mp4", 5, None),
+    "Finish": ("finish.mp4", 5, None),
 }
-TAKE = "Take"
-MOCK_BROLL = _tokens("light:mute", "panel")
-BROLL_SECONDS = 10
+
+BROLL_PROMPT = "Toronto skyline at dusk from a rooftop, slow push in"
+BROLL_SECONDS = 10  # Omni is quoted as at least one 10 s call, so 10 s costs what 8 s does
+BROLL_PROVIDER, BROLL_MODEL = "gemini", "omni-1.2-flash"
+BROLL_CAP_USD = Decimal("0.70")
+BROLL_COPY = FOOTAGE / "broll.mp4"
+BROLL_RECORD = FOOTAGE / "broll.json"
+
+FOOTAGE_NOTE = "Footage: the author's own gym session; its audio is a test tone, so the rests are real silence."
+NOTES = {
+    "replay": ("B-roll: one real Gemini Omni Flash generation from the prompt alone, replayed here from the "
+               "copy kept in demo/hero/footage through the same quote gate, probe, insert and journal."),
+    "real": "B-roll: one real Gemini Omni Flash generation from the prompt alone.",
+    "mock": ("B-roll provider MOCKED: no real generation was available for this recording, so the quote "
+             "gate, probe, insert, DTD check and journal ran on a stand-in clip."),
+}
 
 
 def ffmpeg(*args: str) -> None:
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args], check=True, timeout=300)
 
 
-def synth(path: Path, seconds: int, colours, audio: str | None) -> None:
-    c0, c1 = colours
-    video = (f"gradients=s=1280x720:c0={c0}:c1={c1}:nb_colors=2:"
-             f"speed=0:type=radial:r={FPS}:d={seconds}")
-    cmd = ["-f", "lavfi", "-i", video]
-    if audio:
-        cmd += ["-f", "lavfi", "-i", f"aevalsrc='{audio}':s=48000:d={seconds}"]
-    else:
-        cmd += ["-f", "lavfi", "-i", f"sine=frequency=330:sample_rate=48000:duration={seconds}", "-af", "volume=0.2"]
-    cmd += ["-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "aac", "-shortest", str(path)]
-    ffmpeg(*cmd)
+def with_tone(path: Path, proxy: Path, seconds: int, tone: str | None) -> None:
+    """The proxy's picture with a synthesised soundtrack: the footage has none."""
+    audio = (f"aevalsrc='{tone}':s=48000:d={seconds}" if tone
+             else f"sine=frequency=330:sample_rate=48000:duration={seconds}")
+    cmd = ["-i", str(proxy), "-f", "lavfi", "-i", audio, "-map", "0:v", "-map", "1:a", "-t", str(seconds),
+           "-c:v", "copy", "-c:a", "aac"]
+    if not tone:
+        cmd += ["-af", "volume=0.2"]
+    ffmpeg(*cmd, str(path))
+
+
+def mock_clip(path: Path) -> None:
+    """The mocked provider's clip says MOCKED in its own pixels, so its
+    thumbnail can never be mistaken for a generation (ffmpeg here has no
+    drawtext, so Pillow draws the frame)."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    frame = Image.new("RGB", (1280, 720), palette.dark("panel"))
+    draw = ImageDraw.Draw(frame)
+    for x in range(-720, 1280, 48):  # the gap hatch, so it reads as "not footage"
+        draw.line([(x, 720), (x + 720, 0)], fill=palette.dark("raised-2"), width=14)
+    font = ImageFont.load_default(size=150)
+    box = draw.textbbox((0, 0), "MOCKED", font=font)
+    draw.text(((1280 - box[2]) / 2, (720 - box[3]) / 2), "MOCKED", font=font, fill=palette.dark("ink"))
+    still = path.with_suffix(".png")
+    frame.save(still)
+    ffmpeg("-loop", "1", "-i", str(still), "-t", str(BROLL_SECONDS), "-r", str(FPS),
+           "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", str(path))
 
 
 def text_of(result) -> str:
     return "\n".join(c.text for c in result)
+
+
+def broll_mode() -> str:
+    on_file = BROLL_COPY.is_file() and BROLL_RECORD.is_file()
+    if "--generate" in sys.argv:
+        if on_file:
+            sys.exit(f"REFUSED: a generation is already on file ({BROLL_RECORD.relative_to(REPO)}); a rebuild "
+                     "never pays twice. Delete both broll files deliberately to buy another.")
+        if not os.environ.get("GEMINI_API_KEY"):
+            sys.exit("REFUSED: --generate needs GEMINI_API_KEY in the environment.")
+        return "real"
+    return "replay" if on_file else "mock"
 
 
 def main() -> None:
@@ -132,15 +168,18 @@ def main() -> None:
         record(WORK, os.environ.get("HOME", ""))
         encode(WORK)
         return
+    mode = broll_mode()
     if WORK.exists():
         shutil.rmtree(WORK)
     (WORK / "home").mkdir(parents=True)
     (WORK / "project").mkdir()
     os.environ["FCP_MCP_JOURNAL"] = str(WORK / "journal")
     os.environ["FCP_MCP_INDEX"] = "off"
+    os.environ["FCP_MCP_GEN_MAX_USD"] = str(BROLL_CAP_USD)  # the gate refuses anything dearer
     real_home = os.environ.get("HOME", "")
-    os.environ["HOME"] = str(WORK / "home")          # the private thumbnail cache lands here
-    os.environ["FAL_KEY"] = "hero-recording-no-key"  # the gate reads a key; the provider is mocked
+    os.environ["HOME"] = str(WORK / "home")  # the private thumbnail cache lands here
+    if mode != "real":
+        os.environ.setdefault("GEMINI_API_KEY", "hero-replay-no-key")  # the gate reads a key; nothing is sent
     os.environ.pop("FCP_PROJECTS_DIRS", None)
     os.environ.pop("FCP_PROJECTS_DIR", None)
     import server  # noqa: E402
@@ -148,10 +187,8 @@ def main() -> None:
 
     media = WORK / "media"
     media.mkdir()
-    for name, (seconds, colours, audio) in CLIPS.items():
-        synth(media / f"{name}.mov", seconds, colours, audio)
-    mock_clip = media / "mock-provider-broll.mp4"
-    synth(mock_clip, BROLL_SECONDS, MOCK_BROLL, None)
+    for name, (proxy, seconds, tone) in CLIPS.items():
+        with_tone(media / f"{name}.mov", FOOTAGE / proxy, seconds, tone)
 
     def call(tool: str, action: str, args: dict) -> str:
         return text_of(asyncio.run(server.call_tool(tool, {"action": action, "args": args})))
@@ -159,12 +196,12 @@ def main() -> None:
     project = WORK / "project"
     edl = {
         "sources": {n: str(media / f"{n}.mov") for n in CLIPS},
-        "ranges": [{"source": n, "start": 0, "end": CLIPS[n][0]} for n in CLIPS],
+        "ranges": [{"source": n, "start": 0, "end": CLIPS[n][1]} for n in CLIPS],
     }
     (project / "edl.json").write_text(json.dumps(edl), encoding="utf-8")
     cut = project / "cut.fcpxml"
     r_import = call("generate", "import_edl_json",
-                    {"filepath": str(project / "edl.json"), "output_path": str(cut), "name": "Interview cut"})
+                    {"filepath": str(project / "edl.json"), "output_path": str(cut), "name": "Session cut"})
     assert cut.is_file(), r_import
 
     def view(path: Path) -> tuple[str, dict]:
@@ -183,53 +220,74 @@ def main() -> None:
     states.append({"call": "view · view_timeline", "result": v0})
 
     r_silence = call("edit", "remove_media_silence",
-                     {"filepath": str(cut), "clip_name": TAKE, "min_silence": 1.0,
-                      "output_path": str(project / "cut_silence_removed.fcpxml")})
+                     {"filepath": str(cut), "clip_name": LONG_SET, "min_silence": 1.0,
+                      "output_path": str(project / "cut_rests_removed.fcpxml")})
     s1 = saved(r_silence)
     v1, p1 = view(s1)
     states.append({"call": "edit · remove_media_silence", "result": v1})
     removed = re.search(r"\*\*Total Removed\*\*: ([^\n]+)", r_silence).group(1).strip()
-    spans = sum(int(n) for n in re.findall(rf"\| {TAKE} \| (\d+) \|", r_silence))
+    rests = sum(int(n) for n in re.findall(rf"\| {LONG_SET} \| (\d+) \|", r_silence))
 
-    # One marker per section: the first clip of each source name, in timeline order.
+    # One marker per lift: the first clip of each source name, in timeline order.
     def tc(fraction: str) -> str:
-        from fractions import Fraction
         total = round(Fraction(fraction) * FPS)
         s, f = divmod(total, FPS)
         return f"{s // 3600:02d}:{s // 60 % 60:02d}:{s % 60:02d}:{f:02d}"
 
-    sections, seen = [], set()
-    for c in sorted((c for c in p1["clips"] if c["kind"] == "spine"), key=lambda c: float(eval_frac(c["start"]))):
+    lifts, seen = [], set()
+    for c in sorted((c for c in p1["clips"] if c["kind"] == "spine"), key=lambda c: Fraction(c["start"])):
         if c["name"] in seen:
             continue
         seen.add(c["name"])
-        sections.append({"timecode": tc(c["start"]), "name": c["name"].replace("_", " "), "marker_type": "chapter"})
+        lifts.append({"timecode": tc(c["start"]), "name": c["name"], "marker_type": "chapter"})
     r_mark = call("mark", "batch_add_markers",
-                  {"filepath": str(s1), "markers": sections, "output_path": str(project / "cut_sections.fcpxml")})
+                  {"filepath": str(s1), "markers": lifts, "output_path": str(project / "cut_lifts.fcpxml")})
     s2 = saved(r_mark)
     v2, p2 = view(s2)
     states.append({"call": "mark · batch_add_markers", "result": v2})
 
-    r_quote = call("gen", "gen_quote", {"provider": "fal", "seconds": BROLL_SECONDS, "prompt": BROLL_PROMPT})
+    r_quote = call("gen", "gen_quote", {"provider": BROLL_PROVIDER, "model": BROLL_MODEL,
+                                         "seconds": BROLL_SECONDS, "prompt": BROLL_PROMPT})
     quote_id = re.search(r"Quote (\w+)", r_quote).group(1)
-    price = re.search(r"Estimated: (\$[\d.]+)", r_quote).group(1)
-    model = re.search(r"— (fal/[\w.-]+)", r_quote).group(1)
+    quoted = Decimal(re.search(r"Estimated: \$([\d.]+)", r_quote).group(1))
+    if quoted > BROLL_CAP_USD:
+        if mode == "real":
+            sys.exit(f"REFUSED: the quote is ${quoted}, over the ${BROLL_CAP_USD} cap; nothing was spent.")
+        mode = "mock"
 
-    class MockProvider(gen.Provider):  # the shape tests/test_gen_group.py uses
-        name = "fal"
+    class Kept(gen.Provider):  # the shape tests/test_gen_group.py uses
+        name = BROLL_PROVIDER
+
+        def __init__(self, model, data: bytes):
+            super().__init__(model)
+            self._data = data
 
         def generate(self, prompt, seconds, *, image_path=None):
-            return mock_clip.read_bytes()
+            return self._data
 
     real_provider_for = gen.provider_for
-    gen.provider_for = lambda p, m=None: MockProvider(gen.resolve_model(p, m))
+    if mode == "replay":
+        data = BROLL_COPY.read_bytes()
+        gen.provider_for = lambda p, m=None: Kept(gen.resolve_model(p, m), data)
+    elif mode == "mock":
+        mock_clip(media / "mock-broll.mp4")
+        data = (media / "mock-broll.mp4").read_bytes()
+        gen.provider_for = lambda p, m=None: Kept(gen.resolve_model(p, m), data)
     try:
         r_broll = call("gen", "gen_broll",
-                       {"filepath": str(s2), "clip_name": TAKE, "prompt": BROLL_PROMPT,
-                        "seconds": BROLL_SECONDS, "at": 1, "quote_id": quote_id, "confirm": True,
+                       {"filepath": str(s2), "clip_name": LONG_SET, "prompt": BROLL_PROMPT,
+                        "provider": BROLL_PROVIDER, "model": BROLL_MODEL, "seconds": BROLL_SECONDS,
+                        "at": 1, "condition_on_frame": False, "quote_id": quote_id, "confirm": True,
                         "output_path": str(project / "cut_broll.fcpxml")})
     finally:
         gen.provider_for = real_provider_for
+    if "Saved to:" not in r_broll:
+        sys.exit("gen_broll did not write a file:\n" + r_broll)
+    if mode == "real":
+        keep_generation(r_broll, quoted)
+        print(f"one generation bought and kept in {BROLL_COPY.relative_to(REPO)}; run again without --generate")
+        return
+
     s3 = saved(r_broll)
     v3, p3 = view(s3)
     states.append({"call": "gen · gen_broll", "result": v3})
@@ -239,39 +297,61 @@ def main() -> None:
     journaled = len(re.findall(r"^\| \S+ ago \|", r_history, flags=re.M))
     assert journaled >= 4, r_history
 
+    made = "provider mocked" if mode == "mock" else "generated"
     lines = [
         {"at": 4.6, "call": "generate · import_edl_json",
-         "note": f"{len(p0['clips'])} clips · {float(eval_frac(p0['duration'])):.1f}s"},
+         "note": f"{len(p0['clips'])} clips · {float(Fraction(p0['duration'])):.1f}s"},
         {"at": 5.4, "call": "view · view_timeline", "note": "rendered inline (ui://fcp/timeline)", "state": 0},
         {"at": 9.2, "call": "edit · remove_media_silence",
-         "note": f"{spans} silences cut · {removed} removed", "state": 1},
-        {"at": 13.6, "call": "mark · batch_add_markers",
-         "note": f"{len(sections)} section markers", "state": 2},
-        {"at": 17.8, "call": "gen · gen_quote",
-         "note": f"{model} · {price} · refused until confirm=true"},
+         "note": f"{rests} rests cut · {removed} removed", "state": 1},
+        {"at": 13.6, "call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
+        {"at": 17.8, "call": "gen · gen_quote", "note": "quoted under the cap, refused until confirm=true"},
         {"at": 20.4, "call": "gen · gen_broll",
-         "note": f"lane {placed.group(1)} · {float(placed.group(3)):.0f}s over the take · provider mocked", "state": 3},
-        {"at": 24.2, "call": "organize · history",
-         "note": f"{journaled} outputs journaled · undo ready"},
+         "note": f"lane {placed.group(1)} · {float(placed.group(3)):.0f}s over the long set · {made}", "state": 3},
+        {"at": 24.2, "call": "organize · history", "note": f"{journaled} outputs journaled · undo ready"},
     ]
     app_html = asyncio.run(server.read_resource(timeline_app.APP_URI))[0].content
     (WORK / "app.html").write_text(app_html, encoding="utf-8")
     (WORK / "states.json").write_text(json.dumps({
         "prompt": PROMPT, "lines": lines, "states": states, "duration": 28.0,
         "loop_start": LOOP_START, "palette": palette.as_json()["dark"],
-        "mock_note": "B-roll provider MOCKED for this recording: the quote gate, probe, insert, DTD check and journal ran; no generation did.",
+        "footer": f"{FOOTAGE_NOTE} {NOTES[mode]}",
+        "card_calls": ["edit · remove_media_silence", "mark · batch_add_markers", "gen · gen_broll", "organize · history"],
+        "stale": {"host": image_text.patterns("host"), "app": image_text.patterns("app")},
     }), encoding="utf-8")
     for name, text in [("import", r_import), ("silence", r_silence), ("mark", r_mark), ("quote", r_quote),
                        ("broll", r_broll), ("history", r_history)]:
         (WORK / f"reply-{name}.md").write_text(text, encoding="utf-8")
+    print(f"B-roll: {mode}")
 
     record(WORK, real_home)
     encode(WORK)
 
 
-def eval_frac(value: str):
-    from fractions import Fraction
-    return Fraction(value)
+def keep_generation(reply: str, quoted: Decimal) -> None:
+    """Keep the one paid generation: a silent 360p copy and what it cost."""
+    media = Path(re.search(r"Media: (\S+) \(", reply).group(1))
+    FOOTAGE.mkdir(exist_ok=True)
+    # First, out of .work (which every build wipes): a paid file is never lost.
+    original = FOOTAGE / "broll-original-with-audio.mp4"  # .gitignore'd: it carries native audio
+    shutil.copy2(media, original)
+    probe = re.search(r"\(([\d.]+)s, (\d+)x(\d+) @ (\d+)/(\d+) fps", reply)
+    seconds = Decimal(probe.group(1))
+    ffmpeg("-i", str(media), "-an", "-sn", "-dn", "-map_metadata", "-1", "-vf", "scale=640:-2,fps=24",
+           "-c:v", "libx264", "-preset", "slow", "-crf", "28", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+           str(BROLL_COPY))
+    BROLL_RECORD.write_text(json.dumps({
+        "generated": date.today().isoformat(),
+        "provider": BROLL_PROVIDER, "model": BROLL_MODEL, "prompt": BROLL_PROMPT,
+        "requested_seconds": BROLL_SECONDS, "conditioned_on_a_frame": False,
+        "quoted_usd": str(quoted), "cap_usd": str(BROLL_CAP_USD),
+        "delivered": {"seconds": str(seconds), "width": int(probe.group(2)), "height": int(probe.group(3)),
+                      "fps": f"{probe.group(4)}/{probe.group(5)}"},
+        "estimated_billed_usd": str((seconds * Decimal("0.07")).quantize(Decimal("0.01"))),
+        "estimate_basis": "Omni 1.2 Flash at about $0.07 per delivered second of 720p (fcpxml/gen.py, 2026-11-12)",
+        "original_sha256": hashlib.sha256(media.read_bytes()).hexdigest(),
+        "kept_copy": "silent, 640 wide, H.264; the original carried native audio, which is not kept",
+    }, indent=2) + "\n", encoding="utf-8")
 
 
 def record(work: Path, home: str) -> None:
@@ -288,9 +368,9 @@ def encode(work: Path) -> None:
     mp4 = ASSETS / "hero-watch-claude-cut.mp4"
     gif = ASSETS / "hero-watch-claude-cut.gif"
     poster = ASSETS / "hero-still.png"
-    # The MP4 plays the story in order and carries the finished frame as its
-    # poster (an attached picture), so a player shows the finished cut before
-    # play without the video itself jumping from finished to empty.
+    # The frames already open on the finished cut (record.js captures from
+    # LOOP_START round to it), so the MP4's first decoded frame is the
+    # finished cut too; it also carries that frame as an attached poster.
     ffmpeg("-framerate", "30", "-i", frames, "-i", str(poster), "-map", "0:v", "-map", "1:v",
            "-c:v:0", "libx264", "-pix_fmt:v:0", "yuv420p", "-crf", "22", "-preset", "slow",
            "-c:v:1", "mjpeg", "-disposition:v:1", "attached_pic", "-movflags", "+faststart", str(mp4))
@@ -305,30 +385,34 @@ def encode(work: Path) -> None:
         sys.exit("Pillow is needed to write the GIF: uv run --with pillow demo/hero/build.py")
     sources = sorted((work / "frames").glob("*.png"))
     picks = [sources[min(len(sources) - 1, round(i * 30 / GIF_FPS))] for i in range(round(len(sources) * GIF_FPS / 30))]
-    # The GIF loops and shows its first frame before it plays: start it on the
-    # finished cut, then the story from the empty frame.
-    turn = round(LOOP_START * GIF_FPS) % len(picks)
-    picks = picks[turn:] + picks[:turn]
+    for width in (GIF_WIDTH, 1440, 960):  # the widest that stays under GIF_MAX_BYTES
+        write_gif(gif, picks, width, Image)
+        if gif.stat().st_size <= GIF_MAX_BYTES:
+            break
+        print(f"gif at {width} px is {gif.stat().st_size / 1e6:.2f} MB, over the cap; narrower")
+    for p in (mp4, gif):
+        print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
 
-    def small(path: Path) -> Image.Image:
+
+def write_gif(gif: Path, picks: list[Path], width: int, image_module) -> None:
+    Image = image_module  # noqa: N806
+    def small(path: Path):
         im = Image.open(path).convert("RGB")
-        return im.resize((GIF_WIDTH, round(im.height * GIF_WIDTH / im.width)), Image.Resampling.LANCZOS)
+        return im if im.width == width else im.resize((width, round(im.height * width / im.width)), Image.Resampling.LANCZOS)
 
-    samples = [small(picks[int(len(picks) * f)]) for f in (0.12, 0.25, 0.4, 0.55, 0.75, 0.97)]
+    samples = [small(picks[int(len(picks) * f)]) for f in (0.02, 0.12, 0.25, 0.4, 0.55, 0.75, 0.97)]
     sheet = Image.new("RGB", (samples[0].width, samples[0].height * len(samples)))
     for i, im in enumerate(samples):
         sheet.paste(im, (0, i * im.height))
-    palette = sheet.quantize(colors=128, method=Image.Quantize.MEDIANCUT)
-    frames_q = [small(p).quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG) for p in picks]
+    quant = sheet.quantize(colors=128, method=Image.Quantize.MEDIANCUT)
+    frames_q = [small(p).quantize(palette=quant, dither=Image.Dither.FLOYDSTEINBERG) for p in picks]
     frames_q[0].save(gif, save_all=True, append_images=frames_q[1:], duration=round(1000 / GIF_FPS), loop=0, disposal=1)
     with Image.open(gif) as g:
         total_ms = 0
         for i in range(g.n_frames):
             g.seek(i)
             total_ms += g.info.get("duration", 0)
-        print(f"gif: {len(frames_q)} frames in, {g.n_frames} after merging identical ones, {total_ms / 1000:.1f}s")
-    for p in (mp4, gif):
-        print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
+        print(f"gif {width}px: {len(frames_q)} frames in, {g.n_frames} after merging identical ones, {total_ms / 1000:.1f}s")
 
 
 if __name__ == "__main__":

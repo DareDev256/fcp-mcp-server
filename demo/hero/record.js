@@ -13,15 +13,18 @@
 // inside the window, and the app's own 13px type stays legible at README width.
 //
 // Every colour is a palette token handed over in states.json
-// (fcpxml/palette.py); none is typed here. Frames are written in story order;
-// build.py rotates the GIF so it opens on the finished cut and gives the MP4
-// that frame as its poster. The assets dir gets hero-still.png (the finished
-// frame) and card-frame.png (the conversation beside the finished timeline,
-// for scripts/social_card.py).
+// (fcpxml/palette.py); none is typed here. Frames are captured from
+// states.loop_start round to it, so frame 0 of both the MP4 and the GIF is
+// the finished cut. The assets dir gets hero-still.png (that frame) and
+// card-frame.png (the conversation beside the finished timeline, four of
+// its calls, for scripts/social_card.py).
 //
 // It REFUSES (exit 1) rather than record a frame anyone would have to excuse:
 // a chat line wider than its column, a clip or marker name the app had to
-// hide, a SERVER panel cut by the window, the caption pill outside it.
+// hide, a SERVER panel cut by the window, the caption pill outside it or
+// over its text, the footer over the tool calls, or any text that would go
+// stale in an image (a price, a model id, a frame size, a version:
+// scripts/image_text.py, handed over in states.stale).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -93,13 +96,13 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--mute);
     font-size:13px; background:var(--ground); }
 </style></head><body>
-<div id="top"><span><b>fcp-mcp-server</b> · watch Claude cut</span><span>ui://fcp/timeline · MCP Apps · ${W * SCALE}×${H * SCALE}</span></div>
+<div id="top"><span><b>fcp-mcp-server</b> · watch Claude cut</span><span>ui://fcp/timeline · MCP Apps</span></div>
 <div id="chat">
   <div id="you"><div class="who">You</div><div class="prompt" id="prompt"></div></div>
   <div id="claude"><div class="who" id="cwho" style="opacity:0">Claude · tool calls</div>
     ${states.lines.map((l, i) => `<div class="line" id="l${i}"><div class="call">${l.call}</div><div class="note">${l.note}</div></div>`).join("")}
   </div>
-  <div id="mock">${states.mock_note}</div>
+  <div id="mock">${states.footer}</div>
 </div>
 <div id="stage"><div id="frame"><div id="empty">Waiting for a timeline. Call the <b>&nbsp;view&nbsp;</b> tool with view_timeline and a filepath.</div>${states.states.map((s, i) => appFrame("app" + i, i)).join("")}<div id="wipe"></div><div id="cap"></div></div></div>
 <script>
@@ -155,7 +158,7 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 
 // The social card's picture: the same conversation beside the same finished
 // timeline, without the idle selection panel. Real text, real app, one frame.
-const CARD_W = 880, CHAT_W = 236;
+const CARD_W = 880, CHAT_W = 214;
 const last = states.states.length - 1;
 const cardHost = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   :root { ${tokens} }
@@ -171,12 +174,27 @@ const cardHost = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 </style></head><body><div id="card">
   <div id="cchat"><div class="who">You</div><div class="prompt">${states.prompt}</div>
     <div class="who">Claude · tool calls</div>
-    ${states.lines.map((l) => `<div class="line"><div class="call">${l.call}</div></div>`).join("")}
+    ${states.card_calls.map((c) => `<div class="line"><div class="call">${c}</div></div>`).join("")}
   </div>
   <div id="cstage">${appFrame("capp", last)}</div>
 </div><script>${protocol}</script></body></html>`;
 
 async function refuse(msg) { console.error("REFUSED: " + msg); process.exit(1); }
+
+// Text that would go stale baked into an image: host text against every
+// pattern, the app's text against all but frame size (its header states the
+// demo sequence's own size, which is data, not a release fact).
+function staleIn(text, scope) {
+  const out = [];
+  for (const [what, src] of Object.entries(states.stale[scope])) {
+    for (const m of text.matchAll(new RegExp(src, "gi"))) out.push(what + ": " + m[0]);
+  }
+  return out;
+}
+async function refuseStale(where, text, scope) {
+  const hits = staleIn(text, scope);
+  if (hits.length) await refuse(`${where} would bake stale text into the image: ${JSON.stringify(hits)}`);
+}
 
 // Labels the app had to hide in one iframe: a name the viewer cannot read.
 async function hiddenNames(frame) {
@@ -220,8 +238,9 @@ async function hiddenNames(frame) {
   // Fonts and thumbnails settle before the first frame.
   await page.waitForTimeout(500);
   const total = Math.round(states.duration * FPS);
+  const offset = Math.round(states.loop_start * FPS) % total;  // frame 0 = the finished cut
   for (let k = 0; k < total; k++) {
-    await page.evaluate((ms) => window.__seek(ms), (k / FPS) * 1000);
+    await page.evaluate((ms) => window.__seek(ms), (((k + offset) % total) / FPS) * 1000);
     await page.screenshot({ path: path.join(framesDir, String(k).padStart(5, "0") + ".png"), animations: "disabled" });
     if (k % 150 === 0) console.log("frame", k, "/", total);
   }
@@ -231,6 +250,16 @@ async function hiddenNames(frame) {
   const inside = cap.x >= frameBox.x + 1 + sv.x && cap.x + cap.width <= frameBox.x + 1 + sv.x + sv.w &&
                  cap.y >= frameBox.y + 1 + sv.y && cap.y + cap.height <= frameBox.y + 1 + sv.y + sv.h;
   if (!inside) await refuse("the caption pill is not inside the SERVER panel: " + JSON.stringify({ cap, sv }));
+  await refuseStale("the hero", await page.evaluate(() => document.body.innerText), "host");
+  for (let i = 0; i < states.states.length; i++) {
+    await refuseStale(`app state ${i}`, await page.frameLocator("#app" + i).locator("body").evaluate((b) => b.innerText), "app");
+  }
+  const footerHit = await page.evaluate(() => {
+    const f = document.getElementById("mock").getBoundingClientRect();
+    const lines = [...document.querySelectorAll("#claude .line")].map((e) => e.getBoundingClientRect());
+    return lines.some((l) => l.bottom > f.top - 6);
+  });
+  if (footerHit) await refuse("the footer note runs into the tool calls");
   const ox = frameBox.x + 1, oy = frameBox.y + 1;
   const hit = sv.words.find((q) => cap.x < ox + q.x + q.w && ox + q.x < cap.x + cap.width &&
                                    cap.y < oy + q.y + q.h && oy + q.y < cap.y + cap.height);
@@ -247,6 +276,8 @@ async function hiddenNames(frame) {
     await card.waitForTimeout(400);
     const hidden = await hiddenNames(cf);
     if (hidden.length) await refuse("card: the app had to hide " + JSON.stringify(hidden));
+    await refuseStale("the card frame", await card.evaluate(() => document.body.innerText), "host");
+    await refuseStale("the card's app", await cf.locator("body").evaluate((b) => b.innerText), "app");
     const cardOverflow = await card.evaluate(() => [...document.querySelectorAll("#cchat .call")]
       .filter((e) => e.getBoundingClientRect().right > document.getElementById("cchat").getBoundingClientRect().right + 0.5)
       .map((e) => e.textContent));
