@@ -9,22 +9,28 @@
 // column beside it. The page is a pure function of time: window.__seek(ms)
 // positions every element, so each captured frame is exact and a slow
 // screenshot cannot drift the animation. Frames are 960x600 CSS pixels at a
-// device scale of 2 (1920x1200): tall enough that the app's SERVER panel ends
-// inside the window, and the app's own 13px type stays legible at README width.
+// device scale of 2 (1920x1200).
 //
+// The story opens on the imported cut (states.start_state), so there is no
+// empty stage; each write cross-fades (180 ms) to the re-rendered timeline.
 // Every colour is a palette token handed over in states.json
 // (fcpxml/palette.py); none is typed here. Frames are captured from
-// states.loop_start round to it, so frame 0 of both the MP4 and the GIF is
-// the finished cut. The assets dir gets hero-still.png (that frame) and
-// card-frame.png (the conversation beside the finished timeline, four of
-// its calls, for scripts/social_card.py).
+// states.loop_start round to it, so frame 0 of the MP4 and the GIF is the
+// finished cut. Written beside the frames: crop.json, the device-pixel box
+// of the timeline (header, ruler, lanes) that build.py cuts the README GIF
+// to. The assets dir gets hero-still.png (the finished frame) and
+// card-frame.png (four calls beside the ruler and lanes at 1.4x).
+//
+// A mocked B-roll tile (states.mock_clip) carries a solid MOCK pill at its
+// top right, measured onto the tile, never over its label.
 //
 // It REFUSES (exit 1) rather than record a frame anyone would have to excuse:
 // a chat line wider than its column, a clip or marker name the app had to
 // hide, a SERVER panel cut by the window, the caption pill outside it or
-// over its text, the footer over the tool calls, or any text that would go
-// stale in an image (a price, a model id, a frame size, a version:
-// scripts/image_text.py, handed over in states.stale).
+// over its text, the MOCK pill off its tile or over its label, the footer
+// over the tool calls, or any text that would go stale in an image (a
+// price, a model id, a frame size, a version: scripts/image_text.py,
+// handed over in states.stale).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -40,7 +46,8 @@ function loadPlaywright() {
 const [work, framesDir, assetsDir] = process.argv.slice(2);
 const states = JSON.parse(fs.readFileSync(path.join(work, "states.json"), "utf8"));
 const app = fs.readFileSync(path.join(work, "app.html"), "utf8");
-const FPS = 30, W = 960, H = 600, SCALE = 2;
+const FPS = 30, W = 960, H = 600, SCALE = 2, FADE = 0.18;
+const last = states.states.length - 1;
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 const tokens = Object.entries(states.palette).map(([k, v]) => `--${k}:${v};`).join(" ");
@@ -68,7 +75,9 @@ const chatCss = `
   .call { font: 600 12.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--ink); white-space:nowrap; }
   .call:before { content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent);
     margin-right:8px; vertical-align:1px; }
-  .note { color:var(--mute); font-size:11.5px; margin-left:14px; margin-top:1px; white-space:nowrap; }`;
+  .note { color:var(--mute); font-size:11.5px; margin-left:14px; margin-top:1px; white-space:nowrap; }
+  .pill { position:absolute; font: 700 8px/1 ui-monospace, Menlo, monospace; letter-spacing:.08em; color:var(--accent-ink);
+    background:var(--accent-fill); padding:2px 4px; border-radius:3px; z-index:7; white-space:nowrap; }`;
 
 const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   :root { ${tokens} }
@@ -79,22 +88,18 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   #top b { color:var(--ink); font-weight:600; }
   #chat { position:absolute; left:28px; top:48px; width:292px; bottom:28px; }
   #you { opacity:0; }
-  #prompt { min-height:66px; }
+  #prompt { min-height:44px; }
   #prompt .caret { display:inline-block; width:2px; height:16px; background:var(--accent); vertical-align:-2px; margin-left:1px; }
   #claude { margin-top:18px; }
   .line { opacity:0; transform:translateY(6px); margin-bottom:8px; }
   ${chatCss}
   #mock { position:absolute; left:0; bottom:0; width:292px; color:var(--mute); font-size:10.5px; line-height:1.35;
-    opacity:0; border-top:1px solid var(--line); padding-top:7px; }
+    border-top:1px solid var(--line); padding-top:7px; }
   #stage { position:absolute; left:332px; top:48px; right:28px; bottom:28px; }
   #frame { position:absolute; inset:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--ground); }
   .app { position:absolute; inset:0; width:100%; height:100%; border:0; opacity:0; background:var(--ground); }
-  #wipe { position:absolute; top:0; bottom:0; width:2px; background:var(--accent); opacity:0; z-index:6;
-    box-shadow:0 0 12px 2px var(--accent-wash); }
   #cap { position:absolute; font: 600 11px/1 ui-monospace, Menlo, monospace; color:var(--accent); white-space:nowrap;
     background:var(--panel); padding:5px 8px; border-radius:6px; border:1px solid var(--line-strong); opacity:0; z-index:5; }
-  #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--mute);
-    font-size:13px; background:var(--ground); }
 </style></head><body>
 <div id="top"><span><b>fcp-mcp-server</b> · watch Claude cut</span><span>ui://fcp/timeline · MCP Apps</span></div>
 <div id="chat">
@@ -104,79 +109,82 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   </div>
   <div id="mock">${states.footer}</div>
 </div>
-<div id="stage"><div id="frame"><div id="empty">Waiting for a timeline. Call the <b>&nbsp;view&nbsp;</b> tool with view_timeline and a filepath.</div>${states.states.map((s, i) => appFrame("app" + i, i)).join("")}<div id="wipe"></div><div id="cap"></div></div></div>
+<div id="stage"><div id="frame">${states.states.map((s, i) => appFrame("app" + i, i)).join("")}<div id="cap"></div><div class="pill" id="mockpill" style="opacity:0">MOCK</div></div></div>
 <script>
   ${protocol}
   const LINES = ${JSON.stringify(states.lines)};
   const PROMPT = ${JSON.stringify(states.prompt)};
+  const START = ${JSON.stringify(states.start_state)}, LAST = ${last};
   window.__capAt = [];   // per state: where the SERVER panel sits inside #frame (measured by the recorder)
+  window.__pillAt = null; // where the MOCK pill sits on the mocked tile, in the last state
   const frames = STATES.map((s, i) => document.getElementById("app" + i));
   const clamp = (v) => Math.max(0, Math.min(1, v));
   const ease = (v) => { v = clamp(v); return v < .5 ? 2 * v * v : 1 - Math.pow(-2 * v + 2, 2) / 2; };
-  const T = { youIn: 0.8, typeStart: 1.1, typeEnd: 3.9, claudeIn: 4.3, fade: 0.55 };
+  const T = { youIn: 0.3, typeStart: 0.5, typeEnd: 3.0, claudeIn: 3.3, fade: ${FADE} };
   window.__seek = function (ms) {
     const t = ms / 1000;
-    document.getElementById("you").style.opacity = ease((t - T.youIn) / 0.4);
+    document.getElementById("you").style.opacity = ease((t - T.youIn) / 0.3);
     const n = Math.round(clamp((t - T.typeStart) / (T.typeEnd - T.typeStart)) * PROMPT.length);
     const caret = t >= T.youIn && t < T.typeEnd + 0.6 && (Math.floor(t * 2.5) % 2 === 0) ? '<span class="caret"></span>' : "";
     document.getElementById("prompt").innerHTML = PROMPT.slice(0, n) + caret;
     document.getElementById("cwho").style.opacity = ease((t - T.claudeIn) / 0.4);
-    let shown = -1, prevShown = -1, since = 99;
+    // The story opens on the imported cut, cross-fading in from the finished
+    // one, so the loop's seam is a 180 ms dissolve, never an empty stage.
+    let shown = START, prevShown = LAST, since = t, lineShown = null;
     LINES.forEach((l, i) => {
       const p = ease((t - l.at) / 0.45);
       const el = document.getElementById("l" + i);
       el.style.opacity = p; el.style.transform = "translateY(" + (6 - 6 * p) + "px)";
-      if (l.state != null && t >= l.at + 0.25) { prevShown = shown; shown = l.state; since = t - (l.at + 0.25); }
+      if (l.state != null && t >= l.at + 0.25) { prevShown = shown; shown = l.state; since = t - (l.at + 0.25); lineShown = l; }
     });
-    const mockAt = LINES.find((l) => /gen_quote/.test(l.call)).at;
-    document.getElementById("mock").style.opacity = ease((t - mockAt) / 0.5);
-    // A left-to-right wipe: the new state is revealed over the old one, so a
-    // layout that shifts (a lane appearing) never double-exposes mid-change.
     const prog = ease(since / T.fade);
-    const wipe = document.getElementById("wipe");
     frames.forEach((f, i) => {
-      let o = 0, clip = "none";
-      if (i === shown) { o = 1; clip = prog < 1 ? "inset(0 " + ((1 - prog) * 100).toFixed(2) + "% 0 0)" : "none"; }
-      else if (i === prevShown && prog < 1) o = 1;
-      f.style.opacity = o; f.style.clipPath = clip;
+      let o = 0;
+      if (i === shown) o = prog;
+      if (i === prevShown && prevShown !== shown && prog < 1) o = 1;
+      if (i === shown && prevShown === shown) o = 1;
+      f.style.opacity = o;
       f.style.zIndex = i === shown ? 2 : (i === prevShown ? 1 : 0);
     });
-    if (shown >= 0 && prog > 0 && prog < 1) { wipe.style.opacity = 1; wipe.style.left = "calc(" + (prog * 100).toFixed(2) + "% - 1px)"; }
-    else wipe.style.opacity = 0;
-    document.getElementById("empty").style.opacity = shown < 0 ? 1 : 1 - ease(since / 0.3);
     // The caption sits inside the app's SERVER panel, top right, where the
     // server's own log speaks: it says which call's output is on screen.
     const cap = document.getElementById("cap");
-    if (shown >= 0 && window.__capAt[shown]) {
-      const l = LINES.find((x) => x.state === shown), at = window.__capAt[shown];
-      cap.textContent = (shown === 0 ? "rendered from " : "re-rendered from ") + l.call + " output";
+    if (lineShown && window.__capAt[shown]) {
+      const at = window.__capAt[shown];
+      cap.textContent = (shown === 0 ? "rendered from " : "re-rendered from ") + lineShown.call + " output";
       cap.style.top = at.top + "px"; cap.style.right = at.right + "px";
-      cap.style.opacity = ease((since - 0.2) / 0.4); cap.style.zIndex = 5;
+      cap.style.opacity = ease((since - 0.2) / 0.4);
     } else cap.style.opacity = 0;
+    const pill = document.getElementById("mockpill");
+    if (window.__pillAt) {
+      pill.style.left = window.__pillAt.left + "px"; pill.style.top = window.__pillAt.top + "px";
+      pill.style.opacity = shown === LAST ? (prevShown === LAST ? 1 : prog) : (prevShown === LAST ? 1 - prog : 0);
+    }
   };
 </script></body></html>`;
 
-// The social card's picture: the same conversation beside the same finished
-// timeline, without the idle selection panel. Real text, real app, one frame.
-const CARD_W = 880, CHAT_W = 214;
-const last = states.states.length - 1;
+// The social card's picture: four calls beside the finished timeline's ruler
+// and lanes only (no header, no buttons), scaled 1.4x so it reads at phone
+// width. Real text, the real app, one frame.
+const CARD_W = 1100, CHAT_W = 214, APP_W = 600, ZOOM = 1.4;
 const cardHost = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   :root { ${tokens} }
   html,body { margin:0; background:var(--ground); color:var(--ink); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
-  #card { display:flex; gap:18px; align-items:center; width:${CARD_W}px; box-sizing:border-box; padding:18px;
+  #card { display:flex; gap:22px; align-items:center; width:${CARD_W}px; box-sizing:border-box; padding:18px;
     background:var(--ground); }
   #cchat { width:${CHAT_W}px; flex:none; }
   #cchat .prompt { margin-bottom:16px; }
   #cchat .line { margin-bottom:7px; }
   ${chatCss}
-  #cstage { flex:1; min-width:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--ground); }
-  #cstage iframe { display:block; width:100%; height:420px; border:0; background:var(--ground); }
+  #cstage { position:relative; flex:none; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--ground); }
+  #czoom { position:absolute; left:0; top:0; transform-origin:0 0; transform:scale(${ZOOM}); }
+  #czoom iframe { position:absolute; width:${APP_W}px; height:900px; border:0; background:var(--ground); }
 </style></head><body><div id="card">
   <div id="cchat"><div class="who">You</div><div class="prompt">${states.prompt}</div>
     <div class="who">Claude · tool calls</div>
     ${states.card_calls.map((c) => `<div class="line"><div class="call">${c}</div></div>`).join("")}
   </div>
-  <div id="cstage">${appFrame("capp", last)}</div>
+  <div id="cstage"><div id="czoom">${appFrame("capp", last)}</div><div class="pill" id="cpill" style="display:none">MOCK</div></div>
 </div><script>${protocol}</script></body></html>`;
 
 async function refuse(msg) { console.error("REFUSED: " + msg); process.exit(1); }
@@ -200,6 +208,23 @@ async function refuseStale(where, text, scope) {
 async function hiddenNames(frame) {
   return frame.locator("body").evaluate(() =>
     [...document.querySelectorAll(".clip .label.unfit, .mlabel.unfit")].map((e) => e.textContent || e.title));
+}
+
+// The mocked tile and its label's text box, in the iframe's own coordinates.
+async function mockTile(frame) {
+  if (!states.mock_clip) return null;
+  return frame.locator("body").evaluate((b, name) => {
+    const clip = [...document.querySelectorAll(".clip")].find((c) => (c.title || "").startsWith(name + " ·"));
+    if (!clip) return null;
+    const r = clip.getBoundingClientRect(), label = clip.querySelector(".label"), range = document.createRange();
+    range.selectNodeContents(label);
+    const t = range.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height, text: { x: t.left, y: t.top, w: t.width, h: t.height } };
+  }, states.mock_clip);
+}
+
+function overlaps(a, b, pad) {
+  return a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
 }
 
 (async () => {
@@ -231,10 +256,18 @@ async function hiddenNames(frame) {
     capAt.push({ top: server.y + 7, right: frameBox.width - 2 - (server.x + server.w) + 10, box: server });
   }
   await page.evaluate((c) => { window.__capAt = c; }, capAt);
-  const overflow = await page.evaluate(() => [...document.querySelectorAll("#chat .call, #chat .note")]
-    .filter((e) => e.getBoundingClientRect().right > document.getElementById("chat").getBoundingClientRect().right + 0.5)
-    .map((e) => e.textContent));
-  if (overflow.length) await refuse("chat lines wider than their column: " + JSON.stringify(overflow));
+
+  // The MOCK pill: top right of the mocked tile, 4px in, never over its label.
+  const tile = await mockTile(page.frameLocator("#app" + last));
+  if (states.mock_clip && !tile) await refuse(`no clip named "${states.mock_clip}" in the last state to mark as mocked`);
+  if (tile) {
+    const pw = await page.locator("#mockpill").evaluate((e) => [e.offsetWidth, e.offsetHeight]);
+    const pill = { x: tile.x + tile.w - pw[0] - 4, y: tile.y + 4, w: pw[0], h: pw[1] };
+    if (pill.x < tile.x + 4 || pill.y + pill.h > tile.y + tile.h - 4) await refuse("the MOCK pill does not fit on its tile: " + JSON.stringify({ tile, pill }));
+    if (overlaps(pill, tile.text, 2)) await refuse("the MOCK pill would cover the tile's label: " + JSON.stringify({ pill, label: tile.text }));
+    await page.evaluate((p) => { window.__pillAt = { left: p.x, top: p.y }; }, pill);
+  }
+
   // Every text check runs on the finished frame BEFORE the capture, so a
   // refusal costs seconds, not a full recording.
   await page.evaluate((ms) => window.__seek(ms), states.loop_start * 1000);
@@ -248,8 +281,26 @@ async function hiddenNames(frame) {
     return lines.some((l) => l.bottom > f.top - 6);
   });
   if (footerHit) await refuse("the footer note runs into the tool calls");
-  // Fonts and thumbnails settle before the first frame.
-  await page.waitForTimeout(500);
+  const overflow = await page.evaluate(() => [...document.querySelectorAll("#chat .call, #chat .note")]
+    .filter((e) => e.getBoundingClientRect().right > document.getElementById("chat").getBoundingClientRect().right + 0.5)
+    .map((e) => e.textContent));
+  if (overflow.length) await refuse("chat lines wider than their column: " + JSON.stringify(overflow));
+  const cap = await page.locator("#cap").boundingBox(), sv = capAt[last].box;
+  const ox = frameBox.x + 1, oy = frameBox.y + 1;
+  const inside = cap.x >= ox + sv.x && cap.x + cap.width <= ox + sv.x + sv.w && cap.y >= oy + sv.y && cap.y + cap.height <= oy + sv.y + sv.h;
+  if (!inside) await refuse("the caption pill is not inside the SERVER panel: " + JSON.stringify({ cap, sv }));
+  const hit = sv.words.find((q) => cap.x < ox + q.x + q.w && ox + q.x < cap.x + cap.width &&
+                                   cap.y < oy + q.y + q.h && oy + q.y < cap.y + cap.height);
+  if (hit) await refuse("the caption pill covers the SERVER panel's own text: " + JSON.stringify(hit));
+
+  // The README GIF is the timeline alone: header, ruler and lanes of the
+  // finished state, in device pixels.
+  const scroller = await page.frameLocator("#app" + last).locator("#scroller").boundingBox();
+  const crop = { x: Math.round(frameBox.x * SCALE), y: Math.round(frameBox.y * SCALE),
+                 w: Math.round(frameBox.width * SCALE), h: Math.round((scroller.y + scroller.height + 14 - frameBox.y) * SCALE) };
+  fs.writeFileSync(path.join(work, "crop.json"), JSON.stringify(crop));
+
+  await page.waitForTimeout(500);  // fonts and thumbnails settle before the first frame
   const total = Math.round(states.duration * FPS);
   const offset = Math.round(states.loop_start * FPS) % total;  // frame 0 = the finished cut
   for (let k = 0; k < total; k++) {
@@ -257,38 +308,54 @@ async function hiddenNames(frame) {
     await page.screenshot({ path: path.join(framesDir, String(k).padStart(5, "0") + ".png"), animations: "disabled" });
     if (k % 150 === 0) console.log("frame", k, "/", total);
   }
-  // The finished frame: the caption must sit inside the SERVER panel it names.
-  await page.evaluate((ms) => window.__seek(ms), states.loop_start * 1000);
-  const cap = await page.locator("#cap").boundingBox(), sv = capAt[last].box;
-  const inside = cap.x >= frameBox.x + 1 + sv.x && cap.x + cap.width <= frameBox.x + 1 + sv.x + sv.w &&
-                 cap.y >= frameBox.y + 1 + sv.y && cap.y + cap.height <= frameBox.y + 1 + sv.y + sv.h;
-  if (!inside) await refuse("the caption pill is not inside the SERVER panel: " + JSON.stringify({ cap, sv }));
-  const ox = frameBox.x + 1, oy = frameBox.y + 1;
-  const hit = sv.words.find((q) => cap.x < ox + q.x + q.w && ox + q.x < cap.x + cap.width &&
-                                   cap.y < oy + q.y + q.h && oy + q.y < cap.y + cap.height);
-  if (hit) await refuse("the caption pill covers the SERVER panel's own text: " + JSON.stringify(hit));
   if (assetsDir) {
+    await page.evaluate((ms) => window.__seek(ms), states.loop_start * 1000);
     await page.screenshot({ path: path.join(assetsDir, "hero-still.png"), animations: "disabled" });
-    const card = await browser.newPage({ viewport: { width: CARD_W, height: 800 }, deviceScaleFactor: SCALE, colorScheme: "dark" });
-    await card.setContent(cardHost);
-    await card.waitForFunction(() => window.__ready.capp === true, null, { timeout: 20000 });
-    const cf = card.frameLocator("#capp");
-    await cf.locator("#scroller").waitFor({ state: "visible", timeout: 10000 });
-    const bottom = await cf.locator("#scroller").evaluate((el) => el.getBoundingClientRect().bottom);
-    await card.evaluate((h) => { document.querySelector("#cstage iframe").style.height = h + "px"; }, Math.ceil(bottom + 12));
-    await card.waitForTimeout(400);
-    const hidden = await hiddenNames(cf);
-    if (hidden.length) await refuse("card: the app had to hide " + JSON.stringify(hidden));
-    await refuseStale("the card frame", await card.evaluate(() => document.body.innerText), "host");
-    await refuseStale("the card's app", await cf.locator("body").evaluate((b) => b.innerText), "app");
-    const cardOverflow = await card.evaluate(() => [...document.querySelectorAll("#cchat .call")]
-      .filter((e) => e.getBoundingClientRect().right > document.getElementById("cchat").getBoundingClientRect().right + 0.5)
-      .map((e) => e.textContent));
-    if (cardOverflow.length) await refuse("card: chat lines wider than their column: " + JSON.stringify(cardOverflow));
-    await card.locator("#card").screenshot({ path: path.join(assetsDir, "card-frame.png"), animations: "disabled" });
-    await card.close();
-    console.log("still + card frame written to", assetsDir);
+    await writeCardFrame(browser);
   }
   await browser.close();
   console.log("frames:", total);
 })().catch((e) => { console.error(e); process.exit(1); });
+
+async function writeCardFrame(browser) {
+  const card = await browser.newPage({ viewport: { width: CARD_W, height: 900 }, deviceScaleFactor: SCALE, colorScheme: "dark" });
+  await card.setContent(cardHost);
+  await card.waitForFunction(() => window.__ready.capp === true, null, { timeout: 20000 });
+  const cf = card.frameLocator("#capp");
+  await cf.locator("#scroller").waitFor({ state: "visible", timeout: 10000 });
+  await card.waitForTimeout(300);
+  // Crop to the scroller (ruler + lanes): shift the iframe so it fills the stage.
+  const sc = await cf.locator("#scroller").evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  await card.evaluate(({ sc, zoom }) => {
+    const stage = document.getElementById("cstage"), iframe = document.querySelector("#czoom iframe");
+    iframe.style.left = -sc.x + "px"; iframe.style.top = -sc.y + "px";
+    stage.style.width = Math.round(sc.w * zoom) + "px"; stage.style.height = Math.round(sc.h * zoom) + "px";
+  }, { sc, zoom: ZOOM });
+  await card.waitForTimeout(300);
+  const hidden = await hiddenNames(cf);
+  if (hidden.length) await refuse("card: the app had to hide " + JSON.stringify(hidden));
+  const tile = await mockTile(cf);
+  if (tile) {
+    await card.evaluate(({ tile, sc, zoom }) => {
+      const pill = document.getElementById("cpill");
+      pill.style.display = "block";
+      pill.style.left = ((tile.x + tile.w - sc.x) * zoom - pill.offsetWidth - 5) + "px";
+      pill.style.top = ((tile.y - sc.y) * zoom + 5) + "px";
+    }, { tile, sc, zoom: ZOOM });
+    const clash = await card.evaluate(({ tile, sc, zoom }) => {
+      const p = document.getElementById("cpill").getBoundingClientRect(), s = document.getElementById("cstage").getBoundingClientRect();
+      const t = { x: s.left + (tile.text.x - sc.x) * zoom, y: s.top + (tile.text.y - sc.y) * zoom, w: tile.text.w * zoom, h: tile.text.h * zoom };
+      return p.left < t.x + t.w + 2 && t.x < p.right + 2 && p.top < t.y + t.h + 2 && t.y < p.bottom + 2;
+    }, { tile, sc, zoom: ZOOM });
+    if (clash) await refuse("card: the MOCK pill would cover the tile's label");
+  }
+  await refuseStale("the card frame", await card.evaluate(() => document.body.innerText), "host");
+  await refuseStale("the card's app", await cf.locator("body").evaluate((b) => b.innerText), "app");
+  const cardOverflow = await card.evaluate(() => [...document.querySelectorAll("#cchat .call")]
+    .filter((e) => e.getBoundingClientRect().right > document.getElementById("cchat").getBoundingClientRect().right + 0.5)
+    .map((e) => e.textContent));
+  if (cardOverflow.length) await refuse("card: chat lines wider than their column: " + JSON.stringify(cardOverflow));
+  await card.locator("#card").screenshot({ path: path.join(assetsDir, "card-frame.png"), animations: "disabled", omitBackground: false });
+  await card.close();
+  console.log("still + card frame written to", assetsDir);
+}

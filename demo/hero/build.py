@@ -17,7 +17,8 @@ What it does, in order:
 2. Runs the REAL tool handlers through ``server.call_tool`` — the same entry
    an MCP client reaches — and keeps every ``view_timeline`` result verbatim:
 
-       generate · import_edl_json      the cut, from an EDL of the four clips
+       generate · import_edl_json      the cut, from an EDL of the four clips (setup:
+                                       the story opens on it, the chat starts after)
        view     · view_timeline        state 0
        edit     · remove_media_silence state 1   (real ffmpeg silencedetect)
        mark     · batch_add_markers    state 2   (one marker per lift)
@@ -39,9 +40,12 @@ What it does, in order:
    payload-bearing results, the palette and the patterns no image may
    carry, ``scripts/image_text.py``) plus the ``ui://fcp/timeline`` resource
    as served, then runs ``record.js`` (Playwright) and encodes
-   ``docs/assets/hero-watch-claude-cut.{mp4,gif}``. Both open on the
-   finished cut (the frames are captured from ``LOOP_START`` round to it),
-   and the MP4 also carries that frame as its attached poster.
+   ``docs/assets/hero-watch-claude-cut.mp4`` (the whole frame: the chat beside
+   the app) and ``.gif`` (the README's: the timeline alone, cropped so its
+   type stays large at phone width). Both open on the finished cut (frames
+   are captured from ``LOOP_START`` round to it), and the MP4 also carries
+   that frame as its attached poster. A mocked B-roll is relabelled in the
+   file ("B-roll (mocked)", "mock b-roll: ...") and gets a solid MOCK pill.
 
 Requires ffmpeg/ffprobe on PATH, Pillow (for the GIF: it merges identical
 frames, which ffmpeg's gif muxer does not), and Node with the ``playwright``
@@ -77,10 +81,11 @@ FOOTAGE = HERE / "footage"
 ASSETS = REPO / "docs" / "assets"
 FPS = 24
 GIF_FPS = 12
-GIF_WIDTH = 1920
 GIF_MAX_BYTES = 5_000_000
 PROMPT = "Cut the rest between sets, mark every lift, and put B-roll over the long set."
-LOOP_START = 25.6  # seconds into the story where the finished cut is on screen and every line is in
+LOOP_START = 22.0  # seconds into the story where the finished cut is on screen and every line is in
+DURATION = 24.5
+MOCK_CLIP, MOCK_MARKER = "B-roll (mocked)", "mock b-roll: Toronto skyline at dusk"
 LONG_SET = "Squat"
 
 # name -> (proxy file, seconds used, tone expression or None for a steady quiet tone)
@@ -124,18 +129,16 @@ def with_tone(path: Path, proxy: Path, seconds: int, tone: str | None) -> None:
 
 
 def mock_clip(path: Path) -> None:
-    """The mocked provider's clip says MOCKED in its own pixels, so its
-    thumbnail can never be mistaken for a generation (ffmpeg here has no
-    drawtext, so Pillow draws the frame)."""
-    from PIL import Image, ImageDraw, ImageFont
+    """The mocked provider's clip: the gap hatch, so its thumbnail reads as
+    "not footage". What it IS is said by the clip's name, its marker and the
+    solid MOCK pill record.js puts on the tile (a watermark under the label
+    read at 1.5:1)."""
+    from PIL import Image, ImageDraw
 
     frame = Image.new("RGB", (1280, 720), palette.dark("panel"))
     draw = ImageDraw.Draw(frame)
-    for x in range(-720, 1280, 48):  # the gap hatch, so it reads as "not footage"
+    for x in range(-720, 1280, 48):
         draw.line([(x, 720), (x + 720, 0)], fill=palette.dark("raised-2"), width=14)
-    font = ImageFont.load_default(size=150)
-    box = draw.textbbox((0, 0), "MOCKED", font=font)
-    draw.text(((1280 - box[2]) / 2, (720 - box[3]) / 2), "MOCKED", font=font, fill=palette.dark("ink"))
     still = path.with_suffix(".png")
     frame.save(still)
     ffmpeg("-loop", "1", "-i", str(still), "-t", str(BROLL_SECONDS), "-r", str(FPS),
@@ -289,6 +292,8 @@ def main() -> None:
         return
 
     s3 = saved(r_broll)
+    if mode == "mock":
+        relabel_mock(s3)
     v3, p3 = view(s3)
     states.append({"call": "gen · gen_broll", "result": v3})
     placed = re.search(r"Placed: lane (\d+) at ([\d.]+)s for ([\d.]+)s", r_broll)
@@ -298,23 +303,25 @@ def main() -> None:
     assert journaled >= 4, r_history
 
     made = "provider mocked" if mode == "mock" else "generated"
+    # The cut was imported (generate · import_edl_json) before the prompt: the
+    # story opens on it, so the stage is never empty, and the chat lists the
+    # six calls Claude makes in answer.
     lines = [
-        {"at": 4.6, "call": "generate · import_edl_json",
-         "note": f"{len(p0['clips'])} clips · {float(Fraction(p0['duration'])):.1f}s"},
-        {"at": 5.4, "call": "view · view_timeline", "note": "rendered inline (ui://fcp/timeline)", "state": 0},
-        {"at": 9.2, "call": "edit · remove_media_silence",
+        {"at": 3.6, "call": "view · view_timeline", "note": "rendered inline (ui://fcp/timeline)", "state": 0},
+        {"at": 6.8, "call": "edit · remove_media_silence",
          "note": f"{rests} rests cut · {removed} removed", "state": 1},
-        {"at": 13.6, "call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
-        {"at": 17.8, "call": "gen · gen_quote", "note": "quoted under the cap, refused until confirm=true"},
-        {"at": 20.4, "call": "gen · gen_broll",
+        {"at": 10.6, "call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
+        {"at": 14.2, "call": "gen · gen_quote", "note": "quoted under the cap, refused until confirm=true"},
+        {"at": 16.8, "call": "gen · gen_broll",
          "note": f"lane {placed.group(1)} · {float(placed.group(3)):.0f}s over the long set · {made}", "state": 3},
-        {"at": 24.2, "call": "organize · history", "note": f"{journaled} outputs journaled · undo ready"},
+        {"at": 20.6, "call": "organize · history", "note": f"{journaled} outputs journaled · undo ready"},
     ]
     app_html = asyncio.run(server.read_resource(timeline_app.APP_URI))[0].content
     (WORK / "app.html").write_text(app_html, encoding="utf-8")
     (WORK / "states.json").write_text(json.dumps({
-        "prompt": PROMPT, "lines": lines, "states": states, "duration": 28.0,
-        "loop_start": LOOP_START, "palette": palette.as_json()["dark"],
+        "prompt": PROMPT, "lines": lines, "states": states, "duration": DURATION,
+        "loop_start": LOOP_START, "start_state": 0, "palette": palette.as_json()["dark"],
+        "mock_clip": MOCK_CLIP if mode == "mock" else None,
         "footer": f"{FOOTAGE_NOTE} {NOTES[mode]}",
         "card_calls": ["edit · remove_media_silence", "mark · batch_add_markers", "gen · gen_broll", "organize · history"],
         "stale": {"host": image_text.patterns("host"), "app": image_text.patterns("app")},
@@ -326,6 +333,24 @@ def main() -> None:
 
     record(WORK, real_home)
     encode(WORK)
+
+
+def relabel_mock(path: Path) -> None:
+    """A mocked B-roll says so in the file the app draws: the clip is named
+    "B-roll (mocked)", its marker "mock b-roll: ...", its note "mocked
+    provider". The real gen output names them for a real generation."""
+    text = path.read_text(encoding="utf-8")
+    clip = re.search(r'name="(Generated broll-[^"]+)"', text).group(1)
+    marker = re.search(r'value="(generated: [^"]+)"', text).group(1)
+    note = re.search(r'note="(generated by [^"]+)"', text).group(1)
+    # The name is on the asset and on its clip; the marker and its note once.
+    assert text.count(f'name="{clip}"') == 2, clip
+    text = text.replace(f'name="{clip}"', f'name="{MOCK_CLIP}"')
+    for old, new in ((f'value="{marker}"', f'value="{MOCK_MARKER}"'),
+                     (f'note="{note}"', 'note="mocked provider: no generation ran"')):
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    path.write_text(text, encoding="utf-8")
 
 
 def keep_generation(reply: str, quoted: Decimal) -> None:
@@ -368,6 +393,7 @@ def encode(work: Path) -> None:
     mp4 = ASSETS / "hero-watch-claude-cut.mp4"
     gif = ASSETS / "hero-watch-claude-cut.gif"
     poster = ASSETS / "hero-still.png"
+    flatten(ASSETS / "card-frame.png")
     # The frames already open on the finished cut (record.js captures from
     # LOOP_START round to it), so the MP4's first decoded frame is the
     # finished cut too; it also carries that frame as an attached poster.
@@ -385,8 +411,14 @@ def encode(work: Path) -> None:
         sys.exit("Pillow is needed to write the GIF: uv run --with pillow demo/hero/build.py")
     sources = sorted((work / "frames").glob("*.png"))
     picks = [sources[min(len(sources) - 1, round(i * 30 / GIF_FPS))] for i in range(round(len(sources) * GIF_FPS / 30))]
-    for width in (GIF_WIDTH, 1440, 960):  # the widest that stays under GIF_MAX_BYTES
-        write_gif(gif, picks, width, Image)
+    # The README GIF is the timeline alone (crop.json from record.js): the chat
+    # moves into the README as text, and the app's own type stays at least
+    # 20 px at source instead of shrinking to a few pixels on a phone.
+    box = json.loads((work / "crop.json").read_text())
+    crop = (box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"])
+    Image.open(poster).convert("RGB").crop(crop).save(ASSETS / "hero-timeline-still.png")
+    for width in (box["w"], 960):  # full crop width, narrower only if over GIF_MAX_BYTES
+        write_gif(gif, picks, width, Image, crop)
         if gif.stat().st_size <= GIF_MAX_BYTES:
             break
         print(f"gif at {width} px is {gif.stat().st_size / 1e6:.2f} MB, over the cap; narrower")
@@ -394,10 +426,22 @@ def encode(work: Path) -> None:
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
 
 
-def write_gif(gif: Path, picks: list[Path], width: int, image_module) -> None:
+def flatten(path: Path) -> None:
+    """A PNG with no transparency: corners composited onto the ground."""
+    from PIL import Image
+    im = Image.open(path)
+    if im.mode in ("RGBA", "LA", "P"):
+        ground = Image.new("RGBA", im.size, palette.dark("ground"))
+        ground.alpha_composite(im.convert("RGBA"))
+        ground.convert("RGB").save(path)
+
+
+def write_gif(gif: Path, picks: list[Path], width: int, image_module, crop=None) -> None:
     Image = image_module  # noqa: N806
     def small(path: Path):
         im = Image.open(path).convert("RGB")
+        if crop:
+            im = im.crop(crop)
         return im if im.width == width else im.resize((width, round(im.height * width / im.width)), Image.Resampling.LANCZOS)
 
     samples = [small(picks[int(len(picks) * f)]) for f in (0.02, 0.12, 0.25, 0.4, 0.55, 0.75, 0.97)]
