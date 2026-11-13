@@ -12,10 +12,10 @@ What it does, in order:
    2026-08-08 gym session, cut by ``footage.py``: he is the only person in
    frame, and no audio was kept because the gym's music is on it) and gives
    each a synthesised test-tone soundtrack. The squat set's tone stops for
-   two 2 s rests (5-7 s and 12-14 s) between three 5 s sets: that real
+   two 1.5 s rests (5-6.5 s and 11.5-13 s) between three 5 s sets: that real
    digital silence is what remove_media_silence cuts. The on-screen note says
    the audio is a tone. (The lengths are chosen so every clip's name fits the
-   phone-width GIF, cut and uncut.)
+   phone-width stage, cut and uncut.)
 2. Runs the REAL tool handlers through ``server.call_tool`` — the same entry
    an MCP client reaches — and keeps every ``view_timeline`` result verbatim:
 
@@ -98,10 +98,10 @@ LONG_SET = "Squat"
 
 # name -> (proxy file, seconds used, tone expression or None for a steady quiet tone)
 CLIPS = {
-    "Bench": ("bench.mp4", 6, None),
-    LONG_SET: ("squat.mp4", 19, "0.25*sin(2*PI*220*t)*(between(t,0,5)+between(t,7,12)+between(t,14,19))"),
-    "Press": ("press.mp4", 6, None),
-    "Finish": ("finish.mp4", 6, None),
+    "Bench": ("bench.mp4", 5.5, None),
+    LONG_SET: ("squat.mp4", 18, "0.25*sin(2*PI*220*t)*(between(t,0,5)+between(t,6.5,11.5)+between(t,13,18))"),
+    "Press": ("press.mp4", 5, None),
+    "Finish": ("finish.mp4", 5.5, None),
 }
 
 BROLL_PROMPT = "Toronto skyline at dusk from a rooftop, slow push in"

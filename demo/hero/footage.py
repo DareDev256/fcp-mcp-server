@@ -21,28 +21,45 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent / "footage"
 
-# name -> (raw file, start seconds, seconds, centre of the band as a fraction
-# of the frame's height). The raw clips are portrait; each proxy is a
-# full-width 16:9 band placed so the bar sits a little above its middle at
-# the clip's midpoint (where the app takes its thumbnail). The timeline's
-# wide tiles (object-fit: cover) then show the lift above the label, not the
-# wall or the floor, and 640x360 matches the 16:9 sequence it is cut into.
+SQUAT = "2026-08-08_IMG_0128.MOV"
+BENCH = "2026-08-08_video-5348_singular_display.mov"
+PRESS = "2026-08-08_video-5107_singular_display.mov"
+
+# name -> segments (raw file, start s, seconds, band centre, hold s), joined
+# in order. The raw clips are portrait; each segment is a full-width 16:9
+# band whose centre is a fraction of the frame's height. The app takes each
+# clip's thumbnail at its MIDPOINT, so the segments are placed for that
+# frame to read as its own lift, and to differ from its neighbours:
+#   bench   ends on the bench itself (him sitting up on the pad, below the
+#           gym's sign), its last frame held so the midpoint lands on it
+#   squat   three 5 s sets whose midpoints are standing (171.0 s), half way
+#           down (178.0 s) and at the bottom (187.0 s), 1.5 s rests between
+#   press   the arm and watch driving the bar (58.0 s)
+#   finish  the floor and the plates, after he sits up, last frame held
+# build.py's test tone is silent exactly over the squat's rests.
 CUTS = {
-    "bench": ("2026-08-08_video-5348_singular_display.mov", 12, 6, 0.61),
-    "squat": ("2026-08-08_IMG_0128.MOV", 172, 19, 0.18),
-    "press": ("2026-08-08_video-5107_singular_display.mov", 26, 6, 0.54),
-    "finish": ("2026-08-08_video-5348_singular_display.mov", 80, 6, 0.63),
+    "bench": [(BENCH, 87.15, 2.75, 0.75, 2.75)],
+    "squat": [(SQUAT, 168.5, 5, 0.18, 0), (SQUAT, 173.5, 1.5, 0.18, 0), (SQUAT, 175.5, 5, 0.18, 0),
+              (SQUAT, 180.5, 1.5, 0.18, 0), (SQUAT, 184.5, 5, 0.18, 0)],
+    "press": [(PRESS, 55.5, 5, 0.54, 0)],
+    "finish": [(PRESS, 67.15, 2.75, 0.75, 2.75)],
 }
 
 
 def main(raw: Path) -> None:
     OUT.mkdir(exist_ok=True)
-    for name, (src, start, seconds, centre) in CUTS.items():
-        band = f"crop=iw:trunc(iw*9/32)*2:0:'min(max(ih*{centre}-oh/2,0),ih-oh)'"
-        vf = band + ",scale=640:360,setsar=1,fps=24"
+    for name, segments in CUTS.items():
+        inputs, chains = [], []
+        for i, (src, start, seconds, centre, hold) in enumerate(segments):
+            inputs += ["-ss", str(start), "-t", str(seconds), "-i", str(raw / src)]
+            band = f"crop=iw:trunc(iw*9/32)*2:0:'min(max(ih*{centre}-oh/2,0),ih-oh)'"
+            pad = f",tpad=stop_mode=clone:stop_duration={hold}" if hold else ""
+            chains.append(f"[{i}:v]{band},scale=640:360,setsar=1,fps=24{pad}[v{i}]")
+        joined = "".join(f"[v{i}]" for i in range(len(segments)))
+        graph = ";".join(chains) + f";{joined}concat=n={len(segments)}:v=1:a=0[out]"
         subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-ss", str(start), "-t", str(seconds), "-i", str(raw / src),
-             "-an", "-sn", "-dn", "-map_metadata", "-1", "-vf", vf, "-c:v", "libx264", "-preset", "slow",
+            ["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]",
+             "-an", "-sn", "-dn", "-map_metadata", "-1", "-c:v", "libx264", "-preset", "slow",
              "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(OUT / f"{name}.mp4")],
             check=True, timeout=600,
         )
