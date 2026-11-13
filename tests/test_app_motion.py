@@ -31,7 +31,7 @@ if REQUIRED:
 else:
     playwright_api = pytest.importorskip("playwright.sync_api")
 
-MOTION_MS = 400
+MOTION_MS = 520  # the app's MOTION.duration (test_the_tests_know_the_motion_length holds them together)
 
 
 def r(x: Fraction) -> str:
@@ -116,8 +116,10 @@ def _page(browser, width=1440, reduced=False):
 
 # Set and pause in ONE evaluate: under load the 400 ms can pass between two
 # round trips, and a finished animation is no longer in getAnimations().
-SET = "p => { window.__fcpApp.setPayload(p); document.getAnimations().forEach(a => { a.pause(); a.currentTime = 0; }); }"
-SEEK = """ms => { const all = document.getAnimations(); all.forEach(a => { a.pause(); a.currentTime = ms; }); return all.length; }"""
+# The set is kept: an animation with no fill that is seeked past its end drops
+# out of getAnimations(), and a later seek back would leave it at its end.
+SET = "p => { window.__fcpApp.setPayload(p); window.__anims = document.getAnimations(); window.__anims.forEach(a => { a.pause(); a.currentTime = 0; }); }"
+SEEK = """ms => { const all = window.__anims || document.getAnimations(); all.forEach(a => { a.pause(); a.currentTime = ms; }); return all.length; }"""
 CLIPS = """() => [...document.querySelectorAll('#canvas .clip')].map(e => ({
   name: e.__c.name, src: e.__c.source_start, left: parseFloat(getComputedStyle(e).left), width: e.getBoundingClientRect().width }))"""
 
@@ -147,6 +149,33 @@ def test_a_split_clip_starts_where_its_footage_sat_and_closes_the_gap(browser):
     gap = lambda two: two[1]["left"] - (two[0]["left"] + two[0]["width"])  # noqa: E731
     assert gap(pieces) > 2 * pps - 2, "the rest was not there at the start"
     assert gap(final) < 2, "the gap did not close"
+
+
+def test_a_split_is_seen_apart_before_it_closes(browser):
+    """Critic round 6: with an ease-out curve the pieces closed within 3 frames
+    of 30 (about 0.1 s), so the cut read as a snap. Ease-in-out holds the gap
+    open for the first frames: 100 ms in, nearly all of it is still there."""
+    a = _base()
+    page = _page(browser)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", a)
+        page.evaluate(SET, _split(a))
+        seen = []
+        for ms in (0, 100):
+            page.evaluate(SEEK, ms)
+            pieces = sorted((c for c in page.evaluate(CLIPS) if c["name"] == "Squat"), key=lambda c: Fraction(c["src"]))
+            seen.append(pieces[1]["left"] - (pieces[0]["left"] + pieces[0]["width"]))
+    finally:
+        page.close()
+    assert seen[1] > 0.8 * seen[0], seen
+
+
+def test_the_tests_know_the_motion_length(browser):
+    page = _page(browser)
+    try:
+        assert page.evaluate("() => window.__fcpApp.motion.duration") == MOTION_MS
+    finally:
+        page.close()
 
 
 def motion_problems(page) -> list[str]:
@@ -253,6 +282,7 @@ FRAME_PROBLEMS = """(prev) => {
       if (!hidden && !fits) out.push('a cut name on ' + key + ' (leaving, ' + w.toFixed(1) + ' < ' + need.toFixed(1) + ')');
       return;
     }
+    if (getComputedStyle(c).visibility === 'hidden') { now[key] = false; return; }
     now[key] = fits;
     if (c.classList.contains('has-thumb')) {
       const cs = getComputedStyle(lab);
@@ -421,20 +451,33 @@ def test_every_ruler_time_is_a_whole_second(browser, fps, nominal, label):
 
 
 REWIND = """() => {
-  const all = [...document.querySelectorAll('#canvas .clip')];
+  const all = [...document.querySelectorAll('#canvas .clip')], alpha = %s;
   const squat = all.filter(e => e.__c.name === 'Squat' && !e.classList.contains('ghost'));
   const ghosts = all.filter(e => e.classList.contains('ghost') && getComputedStyle(e).visibility !== 'hidden')
-    .map(e => [e.__c.name, e.getBoundingClientRect().width]);
-  const box = (e) => [parseFloat(getComputedStyle(e).left), e.getBoundingClientRect().width];
+    .map(e => [e.__c.name, e.getBoundingClientRect().width, alpha(e.querySelector('.label'))]);
+  const box = (e) => [parseFloat(getComputedStyle(e).left), e.getBoundingClientRect().width, getComputedStyle(e).visibility];
   const flags = [...document.querySelectorAll('.mlabel')].filter(e => getComputedStyle(e).visibility !== 'hidden').map(e => e.textContent);
   return { squat: squat.map(box), ghosts, flags };
-}"""
+}""" % ALPHA
+# How many clips a viewer sees: shown, and wider than a clip's own two borders.
+COUNT = """() => [...document.querySelectorAll('#canvas .clip')]
+  .filter(e => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 2.5).length"""
+
+
+def counts_through_motion(page, step_ms: int = 33) -> list[int]:
+    out = []
+    for ms in range(0, MOTION_MS + 4 * 90 + 100, step_ms):
+        page.evaluate(SEEK, ms)
+        out.append(page.evaluate(COUNT))
+    return out
 
 
 def test_an_undo_moves_back(browser):
-    """Back from the finished cut to the imported one: the pieces merge into
-    the long clip from the span they covered, the laid-in clip shrinks out, and
-    the markers leave in turn. Nothing jumps, nothing fades."""
+    """Back from the finished cut to the imported one: the pieces stretch back
+    over the footage between them and hand over to the long clip, which grows
+    from the span they covered; the laid-in clip shrinks out, its name fading
+    before it is too narrow; the markers leave in turn. Nothing jumps, nothing
+    fades, and the number of clips on screen changes one at a time."""
     a = _base()
     done = _with_two_markers(_split(a))
     page = _page(browser)
@@ -445,8 +488,11 @@ def test_an_undo_moves_back(browser):
         start = page.evaluate(REWIND)
         fades = motion_problems(page)
         names = label_problems_through_motion(page)
+        counts = counts_through_motion(page)
         page.evaluate(SEEK, 50)
         early = page.evaluate(REWIND)
+        page.evaluate(SEEK, round(MOTION_MS * 0.9))
+        late = page.evaluate(REWIND)
         page.evaluate(SEEK, 2000)
         page.wait_for_timeout(50)
         end = page.evaluate(REWIND)
@@ -454,11 +500,18 @@ def test_an_undo_moves_back(browser):
         page.close()
     span = sorted((c for c in pieces if c["name"] == "Squat"), key=lambda c: c["left"])
     width = span[-1]["left"] + span[-1]["width"] - span[0]["left"]
-    # the long clip starts as exactly the span its pieces covered
+    # the long clip starts as exactly the span its pieces covered, held back
+    # while its pieces stretch; it takes over before the end
     assert len(start["squat"]) == 1, start
     assert abs(start["squat"][0][0] - span[0]["left"]) < 1 and abs(start["squat"][0][1] - width) < 1.5, (start, span)
-    # the laid-in clip is still there, whole, and shrinks out
-    assert [g[0] for g in start["ghosts"]] == ["B-roll"] and start["ghosts"][0][1] > 20
+    assert start["squat"][0][2] == "hidden" and late["squat"][0][2] == "visible", (start, late)
+    # the pieces are on screen at the start, the laid-in clip too, whole, its name shown
+    assert sorted(g[0] for g in start["ghosts"]) == ["B-roll", "Squat", "Squat"], start
+    assert all(g[1] > 20 for g in start["ghosts"])
+    assert next(g for g in start["ghosts"] if g[0] == "B-roll")[2] > 0.99, "the leaving clip's name was cut away, not faded"
+    assert all(g[0] != "Squat" for g in late["ghosts"]), late
+    # the clip count changes one at a time
+    assert max(abs(a - b) for a, b in zip(counts, counts[1:])) <= 1, counts
     # markers leave in turn, right to left
     assert {"b-roll", "Finish"} <= set(start["flags"])
     assert "Finish" not in early["flags"] and "b-roll" in early["flags"]
@@ -466,6 +519,34 @@ def test_an_undo_moves_back(browser):
     assert fades == []
     # the clip shrinking out never shows its name cut
     assert names == []
+
+
+def _empty(p: dict) -> dict:
+    q = copy.deepcopy(p)
+    q["clips"], q["markers"], q["gaps"] = [], [], []
+    for lane in q["lanes"]:
+        lane["clips"] = []
+    return q
+
+
+def test_several_clips_come_and_go_in_turn(browser):
+    """Every clip leaving at once (or arriving at once) goes in turn, so the
+    count on screen steps one at a time and never jumps from four to none."""
+    a = _base()
+    page = _page(browser)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", a)
+        page.evaluate(SET, _empty(a))
+        out = counts_through_motion(page)
+        page.evaluate(SEEK, 5000)
+        page.evaluate(SET, a)
+        back = counts_through_motion(page)
+    finally:
+        page.close()
+    assert out[0] == 4 and out[-1] == 0, out
+    assert back[0] == 0 and back[-1] == 4, back
+    for seq in (out, back):
+        assert max(abs(x - y) for x, y in zip(seq, seq[1:])) <= 1, seq
 
 
 def test_reduced_motion_jumps(browser):

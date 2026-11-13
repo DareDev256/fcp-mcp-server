@@ -191,7 +191,7 @@ def test_a_marker_at_the_playhead_keeps_its_flag(browser, width):
 
 
 @pytest.mark.parametrize("mutation,old,new", [
-    ("the playhead back over the marker rows", ".playhead { position: absolute; top: 28px;", ".playhead { position: absolute; top: 0;"),
+    ("the playhead back over the marker rows", ".playhead { position: absolute; top: 30px;", ".playhead { position: absolute; top: 0;"),
     ("tick text back against the playhead head", "padding-left: 9px;", "padding-left: 4px;"),
 ], ids=["playhead-over-markers", "tick-under-head"])
 def test_the_touch_check_goes_red(browser, mutation, old, new):
@@ -350,3 +350,42 @@ def test_the_legacy_check_goes_red_without_the_wrapping_row(browser):
     broken = html.replace("flex-wrap: wrap;", "flex-wrap: nowrap;")
     assert broken != html
     assert _legacy(390, broken, browser)
+
+
+HEAD_GAP = """() => {
+  const head = document.querySelector('#playhead .phead').getBoundingClientRect();
+  const flags = [...document.querySelectorAll('.mlabel')].map(e => e.getBoundingClientRect())
+    .filter(r => r.left < head.right && head.left < r.right);
+  return flags.length ? Math.min(...flags.map(r => head.top - r.bottom)) : null;
+}"""
+
+
+def _two_rows_at_the_playhead() -> dict:
+    """Critic round 6: at 390 with a clip selected, the head sat on the second
+    row's flag ("Interview" at the playhead). Two markers a frame apart put
+    the second on row 1, over the playhead at 0."""
+    p = _marker_at_zero()
+    p["markers"].append({"name": "Interview", "start": "1/24", "kind": "chapter"})
+    return p
+
+
+def head_gap(browser, html: str) -> float:
+    page = browser.new_page(viewport={"width": 390, "height": 900})
+    try:
+        page.set_content(html)
+        page.evaluate("p => window.__fcpApp.setPayload(p)", _two_rows_at_the_playhead())
+        return page.evaluate(HEAD_GAP)
+    finally:
+        page.close()
+
+
+def test_the_playhead_head_clears_the_flag_above_it(browser):
+    gap = head_gap(browser, timeline_app.render_app_html())
+    assert gap is not None and gap >= 1.5, gap
+
+
+def test_the_head_gap_check_goes_red(browser):
+    html = timeline_app.render_app_html()
+    old = ".playhead { position: absolute; top: 30px;"
+    assert html.count(old) == 1
+    assert head_gap(browser, html.replace(old, ".playhead { position: absolute; top: 28px;")) < 1.5

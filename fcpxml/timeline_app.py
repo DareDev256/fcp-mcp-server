@@ -432,8 +432,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .tmark { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px solid var(--accent);
     opacity: .55; }
   /* The playhead starts under the marker rows, so a marker at the playhead keeps
-     its flag and its name; its head clears the tick text (padding-left 9px). */
-  .playhead { position: absolute; top: 28px; bottom: 0; width: 0; border-left: 2px solid var(--accent);
+     its flag and its name, with a 2 px gap under the second row's flag (at 28 px
+     the head touched it: critic round 6); its head clears the tick text
+     (padding-left 9px). */
+  .playhead { position: absolute; top: 30px; bottom: 0; width: 0; border-left: 2px solid var(--accent);
     pointer-events: none; z-index: 4; }
   .playhead .phead { position: absolute; top: 0; left: -7px; width: 0; height: 0; border: 6px solid transparent;
     border-top: 8px solid var(--accent); }
@@ -562,18 +564,24 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
 
   // ---- motion between payloads ------------------------------------------------
   // A re-render after an edit MOVES things, the way Final Cut closes a gap: a
-  // clip that was split slides its pieces together, the clips after it slide
-  // left, a clip that is new is laid in from its left edge, and new markers
-  // land one after another, left to right. Undoing it moves back: pieces that
-  // came from one clip merge into it, a clip with no successor shrinks out, and
-  // a marker with none leaves in turn, right to left. Only positions, sizes,
-  // colours and (in steps) visibility animate, never opacity, so no frame
-  // shows the old layout and the new one at once. A clip's scrim is drawn the
-  // whole time; its name stays transparent while the clip is too narrow for
-  // all of it and fades in over 120 ms once it fits, so no frame shows part of
-  // a name (tests/test_app_motion.py). Web Animations, so a recorder can pause
-  // and seek them (document.getAnimations()).
-  var MOTION = { duration: 400, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }, REVEAL_MS = 120, TURN_MS = 90;
+  // clip that was split shows its pieces where that footage sat and slides them
+  // together, the clips after it slide left, a clip that is new is laid in from
+  // its left edge, and new markers land one after another, left to right.
+  // Undoing it moves back: the pieces stretch back over the footage between
+  // them until they ARE the clip again, a clip with no successor shrinks out,
+  // and a marker with none leaves in turn, right to left. Several clips laid
+  // in, or leaving, at once go in turn too (left to right in, right to left
+  // out), so the clip count never jumps. Only positions, sizes, colours and (in
+  // steps) visibility animate, never opacity, so no frame shows the old layout
+  // and the new one at once. A clip's scrim is drawn the whole time; its name
+  // stays transparent while the clip is too narrow for all of it and fades in
+  // over 120 ms once it fits, and fades out before a shrinking clip gets too
+  // narrow, so no frame shows part of a name (tests/test_app_motion.py). The
+  // curve is ease-in-out, so a split is seen apart before it closes. Web
+  // Animations, so a recorder can pause and seek them (document.getAnimations()).
+  var CURVE = [0.65, 0, 0.35, 1];
+  var MOTION = { duration: 520, easing: "cubic-bezier(" + CURVE.join(", ") + ")" }, REVEAL_MS = 120, TURN_MS = 90;
+  var SWAP = 0.8;  // when merging pieces hand over to the clip they came from (fraction of MOTION's time)
   function snapshot() {
     var s = { pps: state.pps, clips: [], keyed: {}, els: {} };
     document.querySelectorAll("#canvas .clip:not(.ghost)").forEach(function (e) {
@@ -612,70 +620,127 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       return sameSource(c, o) && cs < oe - 1e-6 && os < ce - 1e-6;
     });
   }
-  // cubic-bezier(0.22, 1, 0.36, 1): the fraction of MOTION's time at which the
-  // eased progress first reaches p (y is monotonic for this curve).
+  // The fraction of MOTION's time at which its eased progress first reaches p
+  // (y is monotonic for CURVE).
   function timeForProgress(p) {
     if (p <= 0) return 0; if (p >= 1) return 1;
-    var bx = function (u) { return 3 * (1 - u) * (1 - u) * u * 0.22 + 3 * (1 - u) * u * u * 0.36 + u * u * u; };
-    var by = function (u) { return 3 * (1 - u) * (1 - u) * u + 3 * (1 - u) * u * u + u * u * u; };
+    var b = function (u, a, c) { return 3 * (1 - u) * (1 - u) * u * a + 3 * (1 - u) * u * u * c + u * u * u; };
     var lo = 0, hi = 1;
-    for (var i = 0; i < 40; i++) { var mid = (lo + hi) / 2; if (by(mid) < p) lo = mid; else hi = mid; }
-    return bx(hi);
+    for (var i = 0; i < 40; i++) { var mid = (lo + hi) / 2; if (b(mid, CURVE[1], CURVE[3]) < p) lo = mid; else hi = mid; }
+    return b(hi, CURVE[0], CURVE[2]);
+  }
+  function colours(el, fill) {
+    var cs = getComputedStyle(el), shut = { color: "transparent" }, open = { color: cs.color };
+    if (fill) { shut.backgroundColor = "transparent"; open.backgroundColor = cs.backgroundColor; }
+    return [shut, open];
   }
   // Hold el's colours (text, and fill if asked) transparent until its clip,
-  // growing from `from` to `to` px, is `need` px wide; then fade them in.
-  function revealWhenWide(el, from, to, need, fill) {
+  // growing from `from` to `to` px over MOTION (after `delay` ms), is `need`
+  // px wide; then fade them in.
+  function revealWhenWide(el, from, to, need, fill, delay) {
     if (need <= from + 0.5) return null;
     var at = to - from > 0.5 ? timeForProgress((need - from) / (to - from)) * MOTION.duration : MOTION.duration;
-    var total = Math.max(MOTION.duration, at + REVEAL_MS), cs = getComputedStyle(el);
-    var shut = { color: "transparent" }, open = { color: cs.color };
-    if (fill) { shut.backgroundColor = "transparent"; open.backgroundColor = cs.backgroundColor; }
+    var total = Math.max(MOTION.duration, at + REVEAL_MS), sc = colours(el, fill), shut = sc[0], open = sc[1];
     var k = [Object.assign({ offset: 0 }, shut), Object.assign({ offset: at / total }, shut), Object.assign({ offset: Math.min(1, (at + REVEAL_MS) / total) }, open)];
     if (k[2].offset < 1) k.push(Object.assign({ offset: 1 }, open));
-    return el.animate(k, { duration: total, easing: "linear" });
+    return el.animate(k, { duration: total, easing: "linear", delay: delay || 0, fill: "backwards" });
   }
-  function revealLabel(e, from, to) {
+  // The reverse, for a clip shrinking from `from` to `to` px: el fades out over
+  // the 120 ms before the clip gets narrower than `need`, and stays out.
+  function hideWhenNarrow(el, from, to, need, fill, delay) {
+    var sc = colours(el, fill), shut = sc[0], open = sc[1], T = MOTION.duration, opt = { duration: T, easing: "linear", delay: delay || 0, fill: "both" };
+    if (need >= from - 0.5) return el.animate([shut, shut], opt);
+    var at = timeForProgress((from - need) / (from - to)) * T, start = Math.max(0, at - REVEAL_MS);
+    return el.animate([Object.assign({ offset: 0 }, open), Object.assign({ offset: start / T }, open),
+                       Object.assign({ offset: Math.max(start / T + 1e-3, at / T) }, shut), Object.assign({ offset: 1 }, shut)], opt);
+  }
+  function labelNeed(lab) { var rg = document.createRange(); rg.selectNodeContents(lab); return rg.getBoundingClientRect().width + 14; }  // padding 12 + borders 2
+  function revealLabel(e, from, to, delay) {
     var lab = e.querySelector(".label");
     if (!lab || lab.classList.contains("unfit")) return;
-    var rg = document.createRange(); rg.selectNodeContents(lab);
-    var need = rg.getBoundingClientRect().width + 14;  // padding 12 + borders 2
-    revealWhenWide(lab, from, to, need, false);
-    lab.querySelectorAll(".role").forEach(function (r) { revealWhenWide(r, from, to, need, false); });
+    var need = labelNeed(lab);
+    revealWhenWide(lab, from, to, need, false, delay);
+    lab.querySelectorAll(".role").forEach(function (r) { revealWhenWide(r, from, to, need, false, delay); });
+  }
+  function hideLabel(e, from, to, delay) {
+    var lab = e.querySelector(".label");
+    if (!lab || lab.classList.contains("unfit")) return;
+    var need = labelNeed(lab);
+    hideWhenNarrow(lab, from, to, need, false, delay);
+    lab.querySelectorAll(".role").forEach(function (r) { hideWhenNarrow(r, from, to, need, false, delay); });
+  }
+  // The turn each element takes, by its left edge (or by the x given for it):
+  // dir 1 is left to right.
+  function turns(els, dir, given) {
+    var xs = given || els.map(function (e) { return e.getBoundingClientRect().left; });
+    var order = xs.slice().sort(function (a, b) { return dir * (a - b); })
+      .filter(function (v, i, a) { return i === 0 || Math.abs(v - a[i - 1]) > 1; });
+    return xs.map(function (v) { return order.findIndex(function (w) { return Math.abs(w - v) <= 1; }); });
+  }
+  function hiddenFor(e, ms) { if (ms > 0) e.animate([{ visibility: "hidden" }, { visibility: "hidden" }], { duration: ms }); }
+  // An undone split: each old piece stretches over its share of the clip it
+  // came from (its own footage and the footage after it, up to the next piece)
+  // while the clip grows from their span to its own; at SWAP, with the gaps
+  // all but closed, the clip takes over from its pieces.
+  function mergeBack(e, m, L, W) {
+    var c = e.__c, src = frac(c.source_start), row = e.parentNode, T = MOTION.duration;
+    var spanL = m[0].left, spanR = m[m.length - 1].left + m[m.length - 1].width;
+    var at = function (sec) { return L + (sec - src) * state.pps; };
+    e.__motion = { from: spanR - spanL, to: W, delay: 0 };
+    e.animate([{ left: spanL + "px", width: (spanR - spanL) + "px" }, { left: L + "px", width: W + "px" }], MOTION);
+    e.animate([{ visibility: "hidden", offset: 0 }, { visibility: "hidden", offset: SWAP }, { visibility: "visible", offset: SWAP }, { visibility: "visible", offset: 1 }],
+              { duration: T, easing: "linear" });
+    m.forEach(function (o, i) {
+      var g = o.el, tl = at(frac(o.c.source_start)), tr = i + 1 < m.length ? at(frac(m[i + 1].c.source_start)) - 1 : L + W;
+      g.classList.add("ghost"); g.classList.remove("selected");
+      row.appendChild(g);
+      g.animate([{ left: o.left + "px", width: o.width + "px" }, { left: tl + "px", width: Math.max(3, tr - tl) + "px" }], Object.assign({ fill: "forwards" }, MOTION));
+      var a = g.animate([{ visibility: "visible", offset: 0 }, { visibility: "visible", offset: SWAP }, { visibility: "hidden", offset: SWAP }, { visibility: "hidden", offset: 1 }],
+                        { duration: T, easing: "linear", fill: "forwards" });
+      a.onfinish = function () { if (g.parentNode) g.parentNode.removeChild(g); };
+    });
   }
   function animateFrom(s) {
     if (!document.body.animate || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
-    var news = [];
+    var news = [], laid = [];
     document.querySelectorAll("#canvas .clip").forEach(function (e) {
       var c = e.__c, L = parseFloat(e.style.left), W = parseFloat(e.style.width), fl = L, from = 0;
       if (!c) return;
       news.push(c);
       var m = merged(c, s.clips), o = m.length > 1 ? null : predecessor(c, s.clips);
-      if (m.length > 1) {
-        // pieces merging back: from the span they covered
-        fl = m[0].left; from = m[m.length - 1].left + m[m.length - 1].width - fl;
-      } else if (o) {
-        // where this piece of footage sat before the edit, at the old scale
-        fl = o.left + (frac(c.source_start) - frac(o.c.source_start)) * s.pps;
-        from = Math.max(3, frac(c.duration) * s.pps - 1);
-      } else {
-        from = 0;  // laid in from its left edge
-      }
+      if (m.length > 1) { mergeBack(e, m, L, W); return; }
+      if (!o) { laid.push(e); return; }
+      // where this piece of footage sat before the edit, at the old scale
+      fl = o.left + (frac(c.source_start) - frac(o.c.source_start)) * s.pps;
+      from = Math.max(3, frac(c.duration) * s.pps - 1);
       if (Math.abs(fl - L) < 0.5 && Math.abs(from - W) < 0.5) return;
-      e.__motion = { from: from, to: W };
+      e.__motion = { from: from, to: W, delay: 0 };
       e.animate([{ left: fl + "px", width: from + "px" }, { left: L + "px", width: W + "px" }], MOTION);
-      revealLabel(e, from, W);
+      revealLabel(e, from, W, 0);
     });
-    // A clip with no successor shrinks out where it was.
-    s.clips.forEach(function (o) {
-      if (overlapsAny(o, news)) return;
-      var row = document.querySelector('#canvas .lane[data-lane="' + o.row + '"]');
-      if (!row) return;
-      var g = o.el; g.classList.add("ghost"); g.classList.remove("selected");
-      g.querySelectorAll(".label, .mk, .hero-mock").forEach(function (x) { x.style.visibility = "hidden"; });
+    // New clips are laid in from their left edges, in turn, left to right.
+    var inClip = turns(laid, 1);
+    laid.forEach(function (e, i) {
+      var L = parseFloat(e.style.left), W = parseFloat(e.style.width), d = inClip[i] * TURN_MS;
+      e.__motion = { from: 0, to: W, delay: d };
+      hiddenFor(e, d);
+      e.animate([{ left: L + "px", width: "0px" }, { left: L + "px", width: W + "px" }], Object.assign({ delay: d, fill: "backwards" }, MOTION));
+      revealLabel(e, 0, W, d);
+    });
+    // A clip with no successor shrinks out where it was, its name fading out
+    // before it gets too narrow; several leave in turn, right to left.
+    var gone = s.clips.filter(function (o) { return !overlapsAny(o, news) && document.querySelector('#canvas .lane[data-lane="' + o.row + '"]'); });
+    var outClip = turns(gone, -1, gone.map(function (o) { return o.left; }));  // (detached: by their old x)
+    gone.forEach(function (o, i) {
+      var row = document.querySelector('#canvas .lane[data-lane="' + o.row + '"]'), g = o.el, d = outClip[i] * TURN_MS;
+      g.classList.add("ghost"); g.classList.remove("selected");
+      g.querySelectorAll(".mk").forEach(function (x) { x.style.visibility = "hidden"; });
       row.appendChild(g);
+      g.__motion = { from: o.width, to: 0, delay: d };
       // (hidden at the end even if never removed: a paused recorder never fires finish)
       var a = g.animate([{ width: o.width + "px" }, { width: "0px", offset: 0.999 }, { width: "0px", visibility: "hidden" }],
-                        Object.assign({ fill: "forwards" }, MOTION));
+                        Object.assign({ fill: "both", delay: d }, MOTION));
+      hideLabel(g, o.width, 0, d);
       a.onfinish = function () { if (g.parentNode) g.parentNode.removeChild(g); };
     });
     var arrive = [], leave = [];
@@ -695,16 +760,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     });
     // Markers arrive whole, one after another, left to right (a flag and its
     // clip tick together), and leave the same way, right to left.
-    var turns = function (els, dir) {
-      var xs = els.map(function (e) { return e.getBoundingClientRect().left; });
-      var order = xs.slice().sort(function (a, b) { return dir * (a - b); })
-        .filter(function (v, i, a) { return i === 0 || Math.abs(v - a[i - 1]) > 1; });
-      return xs.map(function (v) { return order.findIndex(function (w) { return Math.abs(w - v) <= 1; }); });
-    };
     var inTurn = turns(arrive, 1), outTurn = turns(leave, -1);
-    arrive.forEach(function (e, i) {
-      if (inTurn[i] > 0) e.animate([{ visibility: "hidden" }, { visibility: "hidden" }], { duration: inTurn[i] * TURN_MS });
-    });
+    arrive.forEach(function (e, i) { hiddenFor(e, inTurn[i] * TURN_MS); });
     leave.forEach(function (e, i) {
       var a = e.animate([{ visibility: "visible" }, { visibility: "hidden" }], { duration: outTurn[i] * TURN_MS + 1, fill: "forwards" });
       a.onfinish = function () { if (e.parentNode) e.parentNode.removeChild(e); };
@@ -913,7 +970,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   });
   $("scroller").addEventListener("scroll", fitLabels);
   window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION,
-                      revealWhenWide: revealWhenWide, timeForProgress: timeForProgress, placePlayhead: placePlayhead };
+                      revealWhenWide: revealWhenWide, hideWhenNarrow: hideWhenNarrow, timeForProgress: timeForProgress,
+                      placePlayhead: placePlayhead };
 
   // ---- boot --------------------------------------------------------------
   state.inHost = window.parent && window.parent !== window;
