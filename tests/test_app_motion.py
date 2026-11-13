@@ -454,7 +454,7 @@ REWIND = """() => {
   const all = [...document.querySelectorAll('#canvas .clip')], alpha = %s;
   const squat = all.filter(e => e.__c.name === 'Squat' && !e.classList.contains('ghost'));
   const ghosts = all.filter(e => e.classList.contains('ghost') && getComputedStyle(e).visibility !== 'hidden')
-    .map(e => [e.__c.name, e.getBoundingClientRect().width, alpha(e.querySelector('.label'))]);
+    .map(e => { const l = e.querySelector('.label'); return [e.__c.name, e.getBoundingClientRect().width, l && getComputedStyle(l).visibility !== 'hidden' ? alpha(l) : 0]; });
   const box = (e) => [parseFloat(getComputedStyle(e).left), e.getBoundingClientRect().width, getComputedStyle(e).visibility];
   const flags = [...document.querySelectorAll('.mlabel')].filter(e => getComputedStyle(e).visibility !== 'hidden').map(e => e.textContent);
   return { squat: squat.map(box), ghosts, flags };
