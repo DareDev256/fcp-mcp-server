@@ -47,7 +47,8 @@ def test_the_rewritten_readme_has_no_relative_target():
     ('![x](./docs/x.png "title")', f'![x]({RAW}docs/x.png "title")'),
     ('<img src="docs/assets/logo.svg" width="72">', f'<img src="{RAW}docs/assets/logo.svg" width="72">'),
     ("[PyPI](https://pypi.org/project/fcp-mcp-server/)", "[PyPI](https://pypi.org/project/fcp-mcp-server/)"),
-    ("[up](#compatibility) [mail](mailto:a@b.c)", "[up](#compatibility) [mail](mailto:a@b.c)"),
+    # PyPI drops heading ids, so an in-page anchor goes to the README on GitHub
+    ("[up](#compatibility) [mail](mailto:a@b.c)", f"[up]({BLOB}README.md#compatibility) [mail](mailto:a@b.c)"),
 ])
 def test_rewrite(before, after):
     assert pypi_readme.rewrite(before, "v9.9.9") == after
@@ -71,6 +72,13 @@ def _wheel(tmp_path, description: str) -> Path:
 def test_check_passes_a_rewritten_artifact(tmp_path):
     body = pypi_readme.rewrite("![h](docs/h.png)\n`mcp-name: io.github.DareDev256/x`\n", "v9.9.9")
     assert pypi_readme.check([_wheel(tmp_path, body)], fetch=False) == []
+
+
+def test_check_goes_red_on_an_anchor_left_in_place(tmp_path):
+    """Mutation check: a bare #anchor in the built description fails the release."""
+    body = "[see](#compatibility)\n`mcp-name: io.github.DareDev256/x`\n"
+    problems = pypi_readme.check([_wheel(tmp_path, body)], fetch=False)
+    assert problems and "#compatibility" in problems[0]
 
 
 def test_check_goes_red_on_a_relative_image(tmp_path):

@@ -147,9 +147,11 @@ been captured in Claude Desktop for this release
   `scripts/check_social_preview.py` compares what github.com serves with it.
 - `scripts/logo.py`: the logo redrawn in code from the tokens (SVG + PNG).
 - `scripts/pypi_readme.py` and two publish steps: the README's relative
-  images and links are pinned to the release tag before the build, and the
-  BUILT description is checked for any relative path and every image URL
-  for a 200 before upload. Through 0.30.0 every image on PyPI was broken.
+  images and links are pinned to the release tag before the build (an
+  in-page anchor goes to the README on GitHub: PyPI drops heading ids), and
+  the BUILT description is checked for any relative path or bare anchor and
+  every image URL for a 200 before upload. Through 0.30.0 every image on PyPI
+  was broken.
 - `scripts/image_text.py`: the patterns no image may carry (a price, a model
   or provider id, a frame size, a version, a star count), used by the hero
   recorder and the card script, which refuse on a match.

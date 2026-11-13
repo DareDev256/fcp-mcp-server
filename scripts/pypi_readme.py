@@ -12,9 +12,11 @@ page for 0.31.0 shows 0.31.0's pictures forever.
     python scripts/pypi_readme.py check dist/*.whl dist/*.tar.gz --fetch
 
 ``rewrite`` turns every relative target into an absolute one: media
-(images, GIF, MP4) to ``raw.githubusercontent.com/<repo>/<ref>/<path>`` and
-everything else to ``github.com/<repo>/blob/<ref>/<path>``. Fenced code is
-left alone. ``check`` reads the long description out of the BUILT
+(images, GIF, MP4) to ``raw.githubusercontent.com/<repo>/<ref>/<path>``,
+everything else to ``github.com/<repo>/blob/<ref>/<path>``, and an in-page
+anchor (``#compatibility``) to the README on GitHub at that ref, because
+PyPI's sanitizer drops heading ids and the anchor would lead nowhere there.
+Fenced code is left alone. ``check`` reads the long description out of the BUILT
 artifacts (what PyPI will actually receive), fails on any relative target,
 and with ``--fetch`` fails on any image URL that does not answer 200.
 """
@@ -42,7 +44,7 @@ FENCE = re.compile(r"^(```|~~~)")
 
 
 def is_relative(target: str) -> bool:
-    return not re.match(r"^(?:[a-z][a-z0-9+.-]*:|#|//)", target, re.I)
+    return not re.match(r"^(?:[a-z][a-z0-9+.-]*:|//)", target, re.I)
 
 
 def is_media(target: str) -> bool:
@@ -50,6 +52,8 @@ def is_media(target: str) -> bool:
 
 
 def absolute(target: str, ref: str, slug: str = REPO_SLUG) -> str:
+    if target.startswith("#"):  # an anchor in the README itself
+        return f"https://github.com/{slug}/blob/{ref}/README.md{target}"
     path = target[2:] if target.startswith("./") else target
     if is_media(path):
         return f"https://raw.githubusercontent.com/{slug}/{ref}/{path}"
