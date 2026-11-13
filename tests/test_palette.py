@@ -298,7 +298,7 @@ def test_the_version_badge_is_dynamic():
     assert stale_version_badges(urls) == []
 
 
-def tests_badge_problems(urls: list[str]) -> list[str]:
+def live_badge_problems(urls: list[str]) -> list[str]:
     """The tests badge is the live workflow status from shields (round 6), in
     the one tint: never a static "passing" that stays green when CI is red."""
     live = [u for u in urls if "/github/actions/workflow/status/" in u and "test.yml" in u]
@@ -308,11 +308,11 @@ def tests_badge_problems(urls: list[str]) -> list[str]:
 
 
 def test_the_tests_badge_is_live():
-    assert tests_badge_problems(readme_badges((REPO / "README.md").read_text(encoding="utf-8"))) == []
+    assert live_badge_problems(readme_badges((REPO / "README.md").read_text(encoding="utf-8"))) == []
 
 
 def test_the_tests_badge_rule_can_go_red():
-    assert tests_badge_problems(["https://img.shields.io/static/v1?label=tests&message=passing&color=33EBFF"])
+    assert live_badge_problems(["https://img.shields.io/static/v1?label=tests&message=passing&color=33EBFF"])
 
 
 def test_the_dynamic_rule_can_go_red():
