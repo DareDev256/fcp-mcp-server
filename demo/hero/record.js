@@ -23,8 +23,9 @@
 // HARD GATES: it REFUSES (exit 1) on any frame with a doubled, dropped or
 // clipped name (or one cut by the stage's edge), a thumbed clip without its
 // scrim, a thumbnail not tiled at its own aspect, the view covering under 60%
-// of the frame, any text under 10 px when the frame is shown 358 px wide (the
-// MOCK badge included), a caption wider than the frame, a name the app had
+// of the frame, any text under 10 px when the frame is shown 358 px wide
+// (measured from every text the view shows in any state, the MOCK badge
+// included), a caption wider than the frame, a name the app had
 // to hide in any state, or any text that would go stale in an image
 // (scripts/image_text.py). build.py refuses a hold over 1.5 s and a loop
 // whose last frame does not match frame 0.
@@ -216,8 +217,25 @@ async function rulerTextRight(frame) {
       const r = document.createRange(); r.selectNodeContents(e); return r.getBoundingClientRect().right; })));
 }
 
+// Every visible piece of text in the timeline, settled: its own font size
+// and its box (iframe CSS px). The type gate reads these, not an assumed size.
+async function textSizes(frame) {
+  return frame.evaluate(() => {
+    const out = [];
+    document.querySelectorAll("#scroller *").forEach((e) => {
+      if (![...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) return;
+      const cs = getComputedStyle(e);
+      if (cs.visibility === "hidden" || cs.display === "none") return;
+      const r = document.createRange(); r.selectNodeContents(e); const t = r.getBoundingClientRect();
+      if (t.width > 0) out.push({ px: parseFloat(cs.fontSize), text: e.textContent.trim().slice(0, 24), l: t.left, r: t.right, t: t.top, b: t.bottom });
+    });
+    return out;
+  });
+}
+
 // Each state settled, in order, on a fresh app: every check that must hold.
-async function checkAllStates(page, id, where) {
+// `sizes`, when given, collects every state's text sizes.
+async function checkAllStates(page, id, where, sizes) {
   const frame = await appFrameOf(page, id);
   let textRight = 0;
   for (let i = 0; i <= last; i++) {
@@ -227,6 +245,7 @@ async function checkAllStates(page, id, where) {
     if (problems.length) await refuse(problems.join("; "));
     await refuseStale(`${where}, state ${i}`, await frame.evaluate(() => document.body.innerText), "app");
     textRight = Math.max(textRight, await rulerTextRight(frame));
+    if (sizes) sizes.push(...await textSizes(frame));
   }
   return textRight;
 }
@@ -235,10 +254,17 @@ async function checkAllStates(page, id, where) {
 // shown cut, never invisible one frame after it fits, never two at once, and
 // every thumbed clip keeps its scrim and tiles its thumbnail.
 const FRAME_CHECK = (arg) => {
-  const { prev, region } = arg, out = [], now = {};
+  const { prev, region } = arg, out = [], now = {}, shown = [];
   const alpha = (e) => { const m = getComputedStyle(e).color.match(/rgba?\(([^)]+)\)/); if (!m) return 1;
     const v = m[1].split(',').map(Number); return v.length > 3 ? v[3] : 1; };
-  const shown = [];
+  // A clip on its way out (shrinking to nothing): its name must be hidden, or whole.
+  document.querySelectorAll('#canvas .clip.ghost').forEach((c) => {
+    const lab = c.querySelector('.label'); if (!lab || lab.classList.contains('unfit')) return;
+    if (getComputedStyle(lab).visibility === 'hidden' || getComputedStyle(c).visibility === 'hidden' || alpha(lab) <= 0.01) return;
+    const r = document.createRange(); r.selectNodeContents(lab); const t = r.getBoundingClientRect();
+    if (c.getBoundingClientRect().width < t.width + 14 - 0.5) out.push('a cut name on ' + c.title + ' (leaving)');
+    shown.push([lab.textContent, t]);
+  });
   document.querySelectorAll('#canvas .clip:not(.ghost)').forEach((c) => {
     const th = c.querySelector('.thumbs');
     if (th) { const cs = getComputedStyle(th);
@@ -310,7 +336,8 @@ function cameraAt(t) {
   page.on("pageerror", (e) => { console.error("page error:", e.message); process.exitCode = 1; });
   await page.setContent(stage);
   await waitReady(page, "app");
-  const textRight = await checkAllStates(page, "app", "the stage");
+  const sizes = [];
+  const textRight = await checkAllStates(page, "app", "the stage", sizes);
   const frame = await appFrameOf(page, "app");
   // The app now shows the finished cut, settled: the region and the zoom.
   const region = await viewRegion(frame, false, textRight, 3);
@@ -323,9 +350,14 @@ function cameraAt(t) {
   // Static gates, from the geometry: the view's share of the frame, the type size.
   const coverage = (box.w * box.h) / (W * H);
   if (coverage < 0.6) await refuse(`the view covers ${(coverage * 100).toFixed(1)}% of the frame at rest (60% or more)`);
+  // The smallest text the stage shows: every text in the view's region in any
+  // state (the MOCK badge included), measured, and the captions.
   const atPhone = (px) => px * PHONE / W;
-  const typeMin = Math.min(atPhone(10 * zoom), atPhone(CAPTION_PX), atPhone(MOCK_PX * zoom));
-  if (typeMin < 10) await refuse(`text would be ${typeMin.toFixed(2)} px at ${PHONE} wide (10 or more)`);
+  const inView = sizes.filter((s) => s.r > region.x && s.l < region.x + region.w && s.b > region.y && s.t < region.y + region.h);
+  if (!inView.length) await refuse("no text found in the view to measure");
+  const smallest = inView.reduce((a, b) => (b.px < a.px ? b : a));
+  const typeMin = Math.min(atPhone(smallest.px * zoom), atPhone(CAPTION_PX));
+  if (typeMin < 10) await refuse(`text would be ${typeMin.toFixed(2)} px at ${PHONE} wide (10 or more): ${JSON.stringify(smallest.text)} at ${smallest.px} px`);
   // Focus points for the camera, in box pixels, from the settled layouts.
   const focusOf = async (selector) => frame.evaluate(({ selector, region, zoom }) => {
     const els = [...document.querySelectorAll(selector)]; if (!els.length) return null;

@@ -243,11 +243,16 @@ def _thumbed(p: dict) -> dict:
 FRAME_PROBLEMS = """(prev) => {
   const alpha = %s, out = [], now = {};
   document.querySelectorAll('#canvas .clip').forEach(c => {
-    if (c.classList.contains('ghost')) return;
     const lab = c.querySelector('.label'); if (!lab || lab.classList.contains('unfit')) return;
     const r = document.createRange(); r.selectNodeContents(lab);
     const need = r.getBoundingClientRect().width + 14, w = c.getBoundingClientRect().width;
     const key = c.__c.id, fits = w >= need - 0.5, a = alpha(lab);
+    if (c.classList.contains('ghost')) {
+      // on its way out: its name hidden, or whole
+      const hidden = getComputedStyle(lab).visibility === 'hidden' || getComputedStyle(c).visibility === 'hidden' || a <= 0.01;
+      if (!hidden && !fits) out.push('a cut name on ' + key + ' (leaving, ' + w.toFixed(1) + ' < ' + need.toFixed(1) + ')');
+      return;
+    }
     now[key] = fits;
     if (c.classList.contains('has-thumb')) {
       const cs = getComputedStyle(lab);
@@ -439,6 +444,7 @@ def test_an_undo_moves_back(browser):
         page.evaluate(SET, a)
         start = page.evaluate(REWIND)
         fades = motion_problems(page)
+        names = label_problems_through_motion(page)
         page.evaluate(SEEK, 50)
         early = page.evaluate(REWIND)
         page.evaluate(SEEK, 2000)
@@ -458,6 +464,8 @@ def test_an_undo_moves_back(browser):
     assert "Finish" not in early["flags"] and "b-roll" in early["flags"]
     assert end["ghosts"] == [] and end["flags"] == []
     assert fades == []
+    # the clip shrinking out never shows its name cut
+    assert names == []
 
 
 def test_reduced_motion_jumps(browser):
