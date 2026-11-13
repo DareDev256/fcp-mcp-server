@@ -197,6 +197,31 @@ def test_text_over_a_thumbnail_is_the_label_colour():
     assert rule and "color: var(--on-media)" in rule.group(1)
 
 
+def disabled_button_problems(html: str) -> list[str]:
+    rule = re.search(r"button:disabled \{([^}]*)\}", html)
+    if not rule:
+        return ["no button:disabled rule"]
+    problems = []
+    if "opacity" in rule.group(1):
+        problems.append("button:disabled fades with opacity (a 45% fade read at 4.1:1)")
+    if "color: var(--mute)" not in rule.group(1):
+        problems.append("button:disabled text is not the mute token")
+    return problems
+
+
+def test_disabled_buttons_read_at_4_5_to_1():
+    """The mute token is held at 4.5:1 on the raised button fill by TEXT_PAIRS;
+    this holds the CSS to that token instead of an opacity fade."""
+    from fcpxml import timeline_app
+
+    assert ("mute", "raised") in palette.TEXT_PAIRS
+    assert disabled_button_problems(timeline_app.render_app_html()) == []
+
+
+def test_the_disabled_rule_can_go_red():
+    assert disabled_button_problems("button:disabled { opacity: .45; cursor: default; }")
+
+
 def test_the_scrim_rules_can_go_red():
     """Mutation checks: a 25% scrim fails the arithmetic, and a fade that
     ends below the text top fails the layout rule."""

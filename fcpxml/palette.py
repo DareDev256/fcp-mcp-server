@@ -51,7 +51,7 @@ DANGER_TOKENS = ("danger",)
 # Text-on-background pairs that must read at 4.5:1 or better, in both modes.
 TEXT_PAIRS: tuple[tuple[str, str], ...] = (
     ("ink", "ground"), ("ink", "panel"), ("ink", "raised"), ("ink", "raised-2"),
-    ("mute", "ground"), ("mute", "panel"),
+    ("mute", "ground"), ("mute", "panel"), ("mute", "raised"),  # secondary text; disabled buttons
     ("accent", "ground"), ("accent", "panel"),
     ("accent-ink", "accent-fill"),
     ("on-media", "shade"),

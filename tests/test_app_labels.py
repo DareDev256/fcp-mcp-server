@@ -65,6 +65,28 @@ OFFENDERS = """() => {
     const fitsOwn = e.classList.contains('tick') || e.classList.contains('mlabel') || e.scrollWidth <= e.clientWidth + 0.5;
     if (fitsOwn && b.left >= left - 0.5 && b.right <= right + 0.5) out.push('hidden though it fits ' + name(e));
   });
+  // Nothing may touch (round 4): the playhead's head clears every label it
+  // could meet, its line clears every marker flag, and no clip sits within
+  // 6px of the track area's bottom border.
+  const near = (a, b, pad) => a.left < b.right + pad && b.left < a.right + pad && a.top < b.bottom + pad && b.top < a.bottom + pad;
+  const ph = sc.querySelector('.playhead'), head = sc.querySelector('.playhead .phead');
+  if (head) {
+    const hb = head.getBoundingClientRect(), lb = ph.getBoundingClientRect();
+    const line = { left: lb.left, right: lb.left + 2, top: lb.top, bottom: lb.bottom };
+    sc.querySelectorAll('.tick, .mlabel, .gap, .clip .label').forEach((e) => {
+      if (!shown(e)) return;
+      const range = document.createRange(); range.selectNodeContents(e);
+      if (near(hb, range.getBoundingClientRect(), 1)) out.push('the playhead head touches ' + name(e));
+    });
+    sc.querySelectorAll('.mlabel').forEach((e) => {
+      if (near(line, e.getBoundingClientRect(), 0)) out.push('the playhead line covers the marker ' + name(e));
+    });
+  }
+  const inner = sc.getBoundingClientRect();
+  sc.querySelectorAll('.clip').forEach((c) => {
+    const b = c.getBoundingClientRect();
+    if (b.bottom > inner.bottom - 1 - 6) out.push('a clip touches the bottom border ' + c.title);
+  });
   const marks = [...sc.querySelectorAll('.mlabel')].filter(shown).map((e) => [e.getBoundingClientRect(), name(e)]);
   marks.forEach(([a, n], i) => marks.slice(i + 1).forEach(([b, m]) => {
     if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) out.push('overlap ' + n + ' / ' + m);
@@ -152,6 +174,42 @@ def test_two_close_markers_both_show_their_names(browser):
     finally:
         page.close()
     assert shown == ["Opening", "Interview"]
+
+
+def _marker_at_zero() -> dict:
+    """The round-3 critic's case: a chapter marker exactly at the playhead."""
+    p = copy.deepcopy(_payload("sample.fcpxml"))
+    for c in p["clips"]:
+        c["markers"] = []
+    p["markers"] = [{"name": "Opening", "start": "0/1", "kind": "chapter"}]
+    return p
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_a_marker_at_the_playhead_keeps_its_flag(browser, width):
+    assert offenders(browser, timeline_app.render_app_html(), _marker_at_zero(), width) == []
+
+
+@pytest.mark.parametrize("mutation,old,new", [
+    ("the playhead back over the marker rows", ".playhead { position: absolute; top: 28px;", ".playhead { position: absolute; top: 0;"),
+    ("tick text back against the playhead head", "padding-left: 9px;", "padding-left: 4px;"),
+], ids=["playhead-over-markers", "tick-under-head"])
+def test_the_touch_check_goes_red(browser, mutation, old, new):
+    """Mutation checks: the round-3 collisions, put back, are seen."""
+    html = timeline_app.render_app_html()
+    assert html.count(old) == 1, mutation
+    assert offenders(browser, html.replace(old, new), _marker_at_zero(), 390), mutation
+
+
+def test_the_border_check_goes_red(browser):
+    """Mutation check: without the track padding the last lane's clips sit
+    within 6px of the border (the critic's TRACK clip at 390)."""
+    html = timeline_app.render_app_html()
+    old = "#canvas { position: relative; min-width: 100%; padding-bottom: 8px; }"
+    assert html.count(old) == 1
+    found = offenders(browser, html.replace(old, "#canvas { position: relative; min-width: 100%; }"),
+                      _payload("music-video.fcpxml"), 390)
+    assert any("bottom border" in f for f in found)
 
 
 def test_a_crowded_marker_keeps_its_flag_and_its_name_in_the_tooltip(browser):

@@ -48,7 +48,7 @@ PAYLOAD_SCHEMA = "fcp-mcp/timeline-app/1"
 # result, which the host also shows as chat text to a client without Apps
 # support, so it has to stay readable and bounded rather than exhaustive.
 MAX_THUMBNAILS = 48
-THUMBNAIL_SHORT_SIDE = 54
+THUMBNAIL_SHORT_SIDE = 108  # 2x the 54px a spine tile shows: sharp on a 2x display
 MAX_THUMBNAIL_BYTES = 400_000
 MAX_WORDS = 3000
 
@@ -378,10 +378,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   #empty { color: var(--mute); padding: 40px 0; text-align: center; }
   #scroller { position: relative; overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line);
     border-radius: 8px; background: var(--panel); }
-  #canvas { position: relative; min-width: 100%; }
+  #canvas { position: relative; min-width: 100%; padding-bottom: 8px; }  /* the last lane never meets the border */
   .ruler { position: relative; height: 48px; border-bottom: 1px solid var(--line); cursor: crosshair;
     user-select: none; }
-  .tick { position: absolute; top: 30px; bottom: 0; border-left: 1px solid var(--line-strong); padding-left: 4px;
+  .tick { position: absolute; top: 30px; bottom: 0; border-left: 1px solid var(--line-strong); padding-left: 9px;
     font: 10px/18px ui-monospace, Menlo, monospace; color: var(--mute); white-space: nowrap; }
   .mlabel { position: absolute; top: 2px; font-size: 10px; color: var(--accent); white-space: nowrap;
     padding: 0 3px 0 5px; border-left: 2px solid var(--accent); line-height: 13px; }
@@ -422,9 +422,11 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .markers { position: absolute; left: 0; right: 0; top: 48px; bottom: 0; pointer-events: none; }
   .tmark { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px solid var(--accent);
     opacity: .55; }
-  .playhead { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--accent);
+  /* The playhead starts under the marker rows, so a marker at the playhead keeps
+     its flag and its name; its head clears the tick text (padding-left 9px). */
+  .playhead { position: absolute; top: 28px; bottom: 0; width: 0; border-left: 2px solid var(--accent);
     pointer-events: none; z-index: 4; }
-  .playhead:before { content: ""; position: absolute; top: 0; left: -6px; border: 6px solid transparent;
+  .playhead .phead { position: absolute; top: 0; left: -7px; width: 0; height: 0; border: 6px solid transparent;
     border-top: 8px solid var(--accent); }
   .range { position: absolute; top: 0; bottom: 0; background: var(--accent-wash);
     border-left: 1px solid var(--accent); border-right: 1px solid var(--accent); pointer-events: none; z-index: 2; }
@@ -439,7 +441,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   button { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line-strong);
     background: var(--raised); color: var(--ink); cursor: pointer; }
   button.primary { background: var(--accent-fill); color: var(--accent-ink); border-color: var(--accent-fill); font-weight: 600; }
-  button:disabled { opacity: .45; cursor: default; }
+  /* No opacity: a 45% button read at 4.1:1. Disabled text is the mute token (palette.TEXT_PAIRS). */
+  button:disabled { color: var(--mute); cursor: default; }
+  button.primary:disabled { background: var(--raised); color: var(--mute); border-color: var(--line-strong); font-weight: 400; }
   input[type=text] { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line-strong);
     background: var(--ground); color: var(--ink); flex: 1 1 120px; min-width: 0; max-width: 100%; }
   #log { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--mute);
@@ -617,7 +621,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var marks = el("div", "markers");
     p.markers.forEach(function (m) { var me = el("div", "tmark"); me.style.left = x(frac(m.start)) + "px"; me.title = m.name; marks.appendChild(me); });
     canvas.appendChild(marks);
-    var ph = el("div", "playhead"); ph.id = "playhead"; canvas.appendChild(ph);
+    var ph = el("div", "playhead"); ph.id = "playhead"; ph.appendChild(el("div", "phead")); canvas.appendChild(ph);
     var rg = el("div", "range"); rg.id = "range"; rg.hidden = true; canvas.appendChild(rg);
     placePlayhead();
     fitLabels();
