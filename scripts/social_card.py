@@ -53,17 +53,21 @@ def html(frame_png: bytes) -> str:
   html, body {{ margin: 0; width: {WIDTH}px; height: {HEIGHT}px; overflow: hidden; background: {t("ground")}; }}
   /* One centred column, header over picture: no empty band whatever the picture's height. */
   body {{ font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif; color: {t("ink")};
-         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; }}
-  #head {{ width: 1168px; box-sizing: border-box; padding: 0 6px; display: grid;
-          grid-template-columns: auto 1fr auto; column-gap: 18px; row-gap: 10px; align-items: center; }}
-  #mark {{ width: 58px; height: 58px; grid-row: 1 / span 2; align-self: start; }}
-  #mark svg {{ width: 58px; height: 58px; display: block; }}
-  #name {{ font-size: 46px; line-height: 1; font-weight: 700; letter-spacing: -0.035em; margin: 0; }}
-  #install {{ justify-self: end; font: 600 18px/1 ui-monospace, "SF Mono", Menlo, monospace; color: {t("accent")};
-             border: 1px solid {t("line-strong")}; border-radius: 8px; padding: 10px 13px; }}
-  #promise {{ grid-column: 2 / span 2; margin: 0; font-size: 25px; line-height: 1.2; font-weight: 600;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; }}
+  /* The install chip sits on the subtitle's row, centred on it, its right edge on the picture's
+     right edge: the command reads as the caption of what is below it, and it does not push the
+     subtitle away from the promise (its negative margins keep the row as tall as the text). */
+  #head {{ width: 1168px; box-sizing: border-box; padding: 0 0 0 6px; display: grid;
+          grid-template-columns: auto 1fr auto; column-gap: 20px; row-gap: 10px; align-items: center; }}
+  #mark {{ width: 64px; height: 64px; grid-row: 1 / span 2; align-self: start; margin-top: 2px; }}
+  #mark svg {{ width: 64px; height: 64px; display: block; }}
+  #name {{ grid-column: 2 / span 2; font-size: 52px; line-height: 1; font-weight: 700; letter-spacing: -0.035em; margin: 0; }}
+  #promise {{ grid-column: 2 / span 2; margin: 0; font-size: 28px; line-height: 1.2; font-weight: 600;
              letter-spacing: -0.01em; }}
-  #subtitle {{ grid-column: 2 / span 2; margin: -4px 0 0; font-size: 17px; color: {t("mute")}; }}
+  #subtitle {{ grid-column: 2; margin: 0; font-size: 18px; line-height: 1; color: {t("mute")}; }}
+  #install {{ grid-column: 3; justify-self: end; font: 600 19px/1 ui-monospace, "SF Mono", Menlo, monospace;
+             color: {t("accent")}; border: 1px solid {t("line-strong")}; border-radius: 8px; padding: 8px 14px;
+             margin: -9px 0; }}
   #shot {{ width: 1168px; flex: none;
           border: 1px solid {t("line")}; border-radius: 14px; overflow: hidden; background: {t("ground")}; }}
   #shot img {{ display: block; width: 100%; }}
@@ -71,9 +75,9 @@ def html(frame_png: bytes) -> str:
 <div id="head">
   <div id="mark">{logo.svg(glyphs=False)}</div>
   <h1 id="name">{NAME}</h1>
-  <div id="install">{INSTALL}</div>
   <p id="promise">{PROMISE}</p>
   <p id="subtitle">{SUBTITLE}</p>
+  <div id="install">{INSTALL}</div>
 </div>
 <div id="shot"><img alt="" src="{shot}"></div>
 </body></html>"""

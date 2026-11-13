@@ -164,13 +164,13 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 </script></body></html>`;
 
 // The social card's picture: four calls beside the finished timeline's ruler
-// and lanes only (no header, no buttons), scaled 1.4x so it reads at phone
+// and lanes only (no header, no buttons), scaled 1.75x so it reads at phone
 // width. Real text, the real app, one frame.
-const CARD_W = 1100, CHAT_W = 214, APP_W = 600, ZOOM = 1.4;
+const CARD_W = 1100, CHAT_W = 214, APP_W = 480, ZOOM = 1.75;
 const cardHost = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   :root { ${tokens} }
   html,body { margin:0; background:var(--ground); color:var(--ink); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
-  #card { display:flex; gap:22px; align-items:center; width:${CARD_W}px; box-sizing:border-box; padding:18px;
+  #card { display:flex; gap:22px; align-items:center; width:max-content; box-sizing:border-box; padding:18px;
     background:var(--ground); }
   #cchat { width:${CHAT_W}px; flex:none; }
   #cchat .prompt { margin-bottom:16px; }
@@ -324,8 +324,11 @@ async function writeCardFrame(browser) {
   const cf = card.frameLocator("#capp");
   await cf.locator("#scroller").waitFor({ state: "visible", timeout: 10000 });
   await card.waitForTimeout(300);
-  // Crop to the scroller (ruler + lanes): shift the iframe so it fills the stage.
-  const sc = await cf.locator("#scroller").evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  // Crop to the scroller (ruler + lanes), down to the last lane's border:
+  // shift the iframe so it fills the stage, with no empty band at its foot.
+  const sc = await cf.locator("#scroller").evaluate((el) => { const r = el.getBoundingClientRect();
+    const lanes = [...el.querySelectorAll(".lane")].map((l) => l.getBoundingClientRect().bottom);
+    return { x: r.left, y: r.top, w: r.width, h: Math.min(r.height, Math.max(...lanes) - r.top + 1) }; });
   await card.evaluate(({ sc, zoom }) => {
     const stage = document.getElementById("cstage"), iframe = document.querySelector("#czoom iframe");
     iframe.style.left = -sc.x + "px"; iframe.style.top = -sc.y + "px";
