@@ -15,9 +15,10 @@ provider's auth header. ``_http`` refuses to send a request whose URL or
 body carries a key, and every string a handler returns passes through
 :func:`redact`. Both guards are mutation-checked in ``tests/test_gen.py``.
 
-Prices are THIRD-PARTY AND UNVERIFIED. They are what the providers' public
-pages and resellers reported on ``PRICES_AS_OF``; a quote is an estimate,
-and the output says so.
+Prices are THIRD-PARTY figures, never checked against an invoice. Each
+entry names the page it was read on ``PRICES_AS_OF`` and whether that page
+is the vendor's own; a quote is an estimate, says how old its prices are,
+and prints UNVERIFIED for any figure no vendor page stated.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from pathlib import Path
@@ -56,15 +58,31 @@ from .writer import (
 # ---------------------------------------------------------------------------
 
 # USD per generated second, the UPPER end of every range seen so a quote
-# never under-promises. Sources, none verified against an invoice: Google
-# Gemini API pricing page, read 2026-10-21 (Omni 1.1 Flash: output video
-# $17.50/1M tokens x 5,792 tokens per second of 720p = ~$0.10/s; a developer
-# forum report says every call is metered as 10 s of 720p, so Omni is quoted as
-# a flat 10 s call), fal.ai model pages read 2026-10-09 (Kling 2.5 ~$0.04-0.07/s, Wan 2.5
-# ~$0.05-0.15/s), Runway's credit table (Aleph 15 credits/s at $0.01/credit),
-# Luma's Ray Modify page (no per-second figure published). Update the date
-# when the numbers are.
-PRICES_AS_OF = "2026-10-21"
+# never under-promises. Every entry names the page it was read on and whether
+# that page is the VENDOR'S OWN (``confirmed``) or a reseller, blog or nothing
+# (``confirmed: False``, printed as UNVERIFIED on every quote). None of it is
+# verified against an invoice. Read on PRICES_AS_OF:
+#
+# - Gemini Omni 1.2 Flash: $12.00 per 1M output video tokens at 5,792 tokens per
+#   second of 720p, "approximately $0.07 per second"; 3 to 15 s clips. Omni 1.1
+#   ($17.50/1M, ~$0.10/s) routes to 1.2 and bills at 1.2 rates from 2026-12-03,
+#   so 1.1 left this table. The page states no per-call minimum; a developer
+#   forum report (secondary, unconfirmed) says every call was metered as 10 s,
+#   so a call is still quoted as at least 10 s, and 11-15 s as 15.
+# - fal Kling 2.5 Turbo Pro: "For 5s video your request will cost $0.35. For
+#   every additional second you will be charged $0.07." Kling 3.0 is on fal at
+#   $0.112/s without audio; it is not wired here (its request shape is unchecked).
+# - fal Wan 2.5 preview: $0.05 / $0.10 / $0.15 per second at 480p / 720p / 1080p.
+#   The request sets no resolution, so the 1080p figure is quoted.
+# - Runway Aleph 2.0 (``aleph2``): "28 credits per second (56 credit minimum per
+#   generation)", credits at $0.01: $0.28/s with a 2 s minimum. Quote only.
+# - Luma Ray Modify: priced per clip in credits with no dollars-per-credit
+#   figure on the page, so no per-second price is on file. Quote only.
+#
+# tests/test_gen.py fails when PRICES_AS_OF is older than PRICE_MAX_AGE_DAYS;
+# the daily CI run is what notices. Update the date only when the numbers are.
+PRICES_AS_OF = "2026-11-12"
+PRICE_MAX_AGE_DAYS = 45
 
 PRICES: dict[tuple[str, str], dict[str, Any]] = {
     ("fal", "kling-2.5"): {
@@ -72,32 +90,43 @@ PRICES: dict[tuple[str, str], dict[str, Any]] = {
         "billable": (5, 10),
         "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
         "text_endpoint": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+        "confirmed": True,
     },
     ("fal", "wan-2.5"): {
         "usd_per_second": Decimal("0.15"),
         "billable": (5, 10),
         "endpoint": "fal-ai/wan-25-preview/image-to-video",
         "text_endpoint": "fal-ai/wan-25-preview/text-to-video",
+        "source": "https://fal.ai/models/fal-ai/wan-25-preview/image-to-video",
+        "confirmed": True,
     },
     # Veo 3.1 preview left the Gemini API on 2026-10-22 (GA Veo is Vertex-only).
-    ("gemini", "omni-1.1-flash"): {
-        "usd_per_second": Decimal("0.10"),
-        "billable": (10,),
-        "model_id": "gemini-omni-1.1-flash",
+    ("gemini", "omni-1.2-flash"): {
+        "usd_per_second": Decimal("0.07"),
+        "billable": (10, 15),
+        "model_id": "gemini-omni-1.2-flash",
+        "source": "https://aistudio.google.com/docs/pricing",
+        "confirmed": True,
     },
     ("runway", "aleph"): {
-        "usd_per_second": Decimal("0.15"),
+        "usd_per_second": Decimal("0.28"),
         "billable": (),
+        "min_seconds": 2,
         "video_to_video": True,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "confirmed": True,
     },
     ("luma", "ray-modify"): {
         "usd_per_second": None,
         "billable": (),
         "video_to_video": True,
+        "source": "https://lumalabs.ai/api/pricing",
+        "confirmed": False,
     },
 }
 
-DEFAULT_MODEL = {"fal": "kling-2.5", "gemini": "omni-1.1-flash", "runway": "aleph", "luma": "ray-modify"}
+DEFAULT_MODEL = {"fal": "kling-2.5", "gemini": "omni-1.2-flash", "runway": "aleph", "luma": "ray-modify"}
 KEY_ENV = {"fal": "FAL_KEY", "gemini": "GEMINI_API_KEY", "runway": "RUNWAY_API_KEY", "luma": "LUMA_API_KEY"}
 MAX_USD_ENV = "FCP_MCP_GEN_MAX_USD"
 DEFAULT_MAX_USD = Decimal("5")
@@ -107,6 +136,11 @@ GENERATED_ROLE = "generated"
 HTTP_TIMEOUT = 120
 POLL_INTERVAL = 3.0
 POLL_LIMIT = 200
+
+
+def prices_age_days(today: Optional[date] = None) -> int:
+    """How old the price table is, in days. Printed on every quote."""
+    return ((today or date.today()) - date.fromisoformat(PRICES_AS_OF)).days
 
 
 class GenError(Exception):
@@ -143,10 +177,12 @@ def cap_usd() -> Decimal:
 def billable_seconds(provider: str, model: str, seconds: Fraction) -> int:
     """What the provider charges for *seconds*: the next supported clip length.
 
-    Kling and Wan bill 5 or 10; Omni is quoted as one 10 s call. A 7-second gap on Kling
-    is a 10-second generation and the quote must say 10, not 7.
+    Kling and Wan bill 5 or 10; Omni is quoted as at least one 10 s call (15 at
+    most); Aleph has a 2 s minimum. A 7-second gap on Kling is a 10-second
+    generation and the quote must say 10, not 7.
     """
-    steps = PRICES[(provider, model)]["billable"]
+    entry = PRICES[(provider, model)]
+    steps = entry["billable"]
     need = math.ceil(seconds)
     for step in steps:
         if need <= step:
@@ -156,7 +192,7 @@ def billable_seconds(provider: str, model: str, seconds: Fraction) -> int:
             f"{provider}/{model} generates at most {max(steps)}s per call; "
             f"{float(seconds):.2f}s was asked for. Split the job."
         )
-    return max(1, need)
+    return max(entry.get("min_seconds", 1), need)
 
 
 @dataclass(frozen=True)
@@ -171,6 +207,8 @@ class Quote:
     prices_as_of: str
     available: bool
     created: float
+    confirmed: bool = False
+    source: str = ""
 
     @property
     def over_cap(self) -> bool:
@@ -188,6 +226,8 @@ class Quote:
             "over_cap": self.over_cap,
             "prices_as_of": self.prices_as_of,
             "price_verified": False,
+            "price_confirmed_on_vendor_page": self.confirmed,
+            "price_source": self.source,
             "available": self.available,
         }
 
@@ -240,6 +280,8 @@ def _build_quote(provider: str, seconds: Any, prompt: str, model: Optional[str] 
         prices_as_of=PRICES_AS_OF,
         available=not entry.get("video_to_video", False),
         created=time.time(),
+        confirmed=bool(entry.get("confirmed")),
+        source=entry.get("source", ""),
     )
 
 
@@ -263,7 +305,7 @@ def confirm_quote(
         raise RefusedError(
             f"Refused: generation spends money and needs confirm=true with a quote id. "
             f"Quote first: gen {how} — this job is {fresh.billable_seconds}s on "
-            f"{provider}/{model}, about ${fresh.usd} (prices as of {PRICES_AS_OF}, unverified)."
+            f"{provider}/{model}, about ${fresh.usd} (prices as of {PRICES_AS_OF}, not invoice-checked)."
         )
     if not quote_id:
         raise RefusedError(f"Refused: no quote_id. Quote first: gen {how}")

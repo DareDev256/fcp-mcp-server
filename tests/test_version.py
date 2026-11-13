@@ -46,7 +46,7 @@ def test_server_json_versions_match_pyproject():
 def test_server_json_description_fits_registry():
     """The MCP registry rejects a description over 100 characters with a
     422 — and nothing in the release path read that limit, so the registry
-    sat at 0.13.1 for eight releases while the description grew to 208."""
+    sat at its first published version for eight releases while the description grew to 208."""
     assert len(_server_json()["description"]) <= 100
 
 

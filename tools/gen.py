@@ -188,7 +188,7 @@ async def _run(args: dict, target_of: Callable[[dict, dict], Target], prompt_def
         + (" (a <gap> was appended to the spine to reach it)" if placed["gap_added"] else ""),
         f"Saved to: `{output_path}`",
         f"sha256: {journal.file_hash(output_path)}",
-        f"Estimated cost: ${q.usd} (prices as of {q.prices_as_of}, unverified; cap ${q.cap_usd})",
+        f"Estimated cost: ${q.usd} (prices as of {q.prices_as_of}, not invoice-checked; cap ${q.cap_usd})",
     ]
     if ok is True:
         lines.append(f"DTD: valid ({detail})")
@@ -211,7 +211,9 @@ async def handle_gen_quote(args: dict):
         f"**Quote {q.id}** — {q.provider}/{q.model}, {q.billable_seconds}s billable "
         f"for {float(q.requested_seconds):.2f}s requested",
         f"Estimated: {'$' + str(q.usd) if q.usd is not None else 'no price on file'} "
-        f"(prices as of {q.prices_as_of}; third-party figures, NOT verified against an invoice)",
+        f"(prices as of {q.prices_as_of}, {gen.prices_age_days()} days ago; "
+        + ("read on the vendor's own page" if q.confirmed else "UNVERIFIED: no vendor page states it")
+        + "; third-party figures, NOT verified against an invoice)",
         f"Cap: ${q.cap_usd} per call ({gen.MAX_USD_ENV})" + (" — OVER CAP, generation will refuse" if q.over_cap else ""),
     ]
     if not q.available:

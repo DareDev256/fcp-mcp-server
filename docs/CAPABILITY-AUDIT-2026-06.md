@@ -80,7 +80,7 @@ DTDs ship inside `/Applications/Final Cut Pro.app/.../Interchange.framework/Reso
 |---|---|---|---|
 | samuelgursky/**davinci-resolve-mcp** | 1,217 | Real Resolve Python API; 341 granular tools | Active — shows the ceiling when an NLE has an official API (~20× FCP traction) |
 | elliotttate/**SpliceKit** | 81 | Injection (live, everything) | Dormant 6 wks |
-| **DareDev256/fcpxml-mcp-server** | 51 | Pure FCPXML | This repo |
+| **DareDev256/fcp-mcp-server** | 51 | Pure FCPXML | This repo |
 | FireRed-**OpenStoryline** | 2,895 | Intention-driven editing agent (FCPXML as output) | Agentic rough-cut wave |
 | DozaVisuals/**doza-assist** | 46 | Learns editing style from user's past cuts | Pushed daily |
 | elliotttate/finalcutpro-mcp | 7 | JXA/System Events, 99 tools | Superseded by SpliceKit |

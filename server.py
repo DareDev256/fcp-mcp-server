@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FCPXML MCP Server — Batch operations and analysis for Final Cut Pro XML files.
+fcp-mcp-server — Batch operations and analysis for Final Cut Pro XML files.
 
 Provides 53 tools, MCP resources for file discovery, and pre-built prompt
 workflows for common editing tasks.
@@ -64,7 +64,7 @@ from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.30.0"
+__version__ = "0.31.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -1800,7 +1800,7 @@ def _legacy_tool_list() -> list[Tool]:
             }
         ),
 
-        # ===== TRANSCRIPT INTELLIGENCE (v0.13.1) =====
+        # ===== TRANSCRIPT INTELLIGENCE (v0.13) =====
         Tool(
             name="transcribe_media",
             description="Transcribe each clip's source media locally with word-level timestamps (faster-whisper). Writes a _transcript.json next to each media file (reused by edit_by_transcript / remove_filler_words so media is only transcribed once) and optionally an SRT for captions. Requires the optional [transcribe] extra; degrades to an install hint without it.",

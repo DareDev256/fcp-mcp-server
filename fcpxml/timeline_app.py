@@ -36,6 +36,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import palette
 from .media_intel import file_in_point
 from .rational import fcp_frame_rate_name, nominal_fps, rational_fps
 
@@ -356,21 +357,17 @@ def render_app_html() -> str:
     return _APP_HTML
 
 
-_APP_HTML = r"""<!DOCTYPE html>
+_APP_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FCP Timeline</title>
 <style>
-  :root {
-    --bg: #09090b; --panel: #121216; --line: #26262c; --ink: #ededf0;
-    --mute: #8c8c96; --accent: #00e5ff; --accent-ink: #062228;
-    --spine: #2a2a32; --video: #23232b; --audio: #1c1c23; --title: #2c2a22;
-    --gap: repeating-linear-gradient(135deg, #111115 0 6px, #1a1a20 6px 12px);
-  }
+  /*PALETTE*/
+  :root { --gap: repeating-linear-gradient(135deg, var(--ground) 0 6px, var(--panel) 6px 12px); }
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--ink);
+  html, body { margin: 0; background: var(--ground); color: var(--ink);
     font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; }
   body { padding: 12px 16px 16px; min-height: 100vh; }
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 10px; }
@@ -384,7 +381,7 @@ _APP_HTML = r"""<!DOCTYPE html>
   #canvas { position: relative; min-width: 100%; }
   .ruler { position: relative; height: 40px; border-bottom: 1px solid var(--line); cursor: crosshair;
     user-select: none; }
-  .tick { position: absolute; top: 18px; bottom: 0; border-left: 1px solid #33333b; padding-left: 4px;
+  .tick { position: absolute; top: 18px; bottom: 0; border-left: 1px solid var(--line-strong); padding-left: 4px;
     font: 10px/22px ui-monospace, Menlo, monospace; color: var(--mute); white-space: nowrap; }
   .mlabel { position: absolute; top: 2px; font-size: 10px; color: var(--accent); white-space: nowrap;
     padding: 0 3px 0 5px; border-left: 2px solid var(--accent); line-height: 14px; }
@@ -395,22 +392,23 @@ _APP_HTML = r"""<!DOCTYPE html>
     padding: 4px 0 0 6px; font-size: 10px; color: var(--mute); background: var(--panel);
     border-right: 1px solid var(--line); pointer-events: none; }
   .clip { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; overflow: hidden;
-    background: var(--video); border: 1px solid #3a3a44; cursor: pointer; display: flex; flex-direction: column;
+    background: var(--raised); border: 1px solid var(--line-strong); cursor: pointer; display: flex; flex-direction: column;
     justify-content: flex-end; }
-  .lane.spine .clip { background: var(--spine); }
-  .lane.audio .clip { background: var(--audio); }
-  .clip.title { background: var(--title); }
+  .lane.spine .clip { background: var(--raised-2); }
+  .lane.audio .clip { background: var(--panel); }
+  .clip.title { background: var(--raised-2); border-style: dashed; }
   .clip img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .85; }
   .clip .label { position: relative; z-index: 1; padding: 2px 6px; font-size: 11px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; background: linear-gradient(transparent, rgba(0,0,0,.75)); }
+    overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+  .clip.has-thumb .label { color: var(--on-media); background: linear-gradient(transparent, var(--shade)); }
   .clip .role { font-size: 9px; color: var(--mute); margin-left: 6px; }
   .clip.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .clip .mk { position: absolute; top: 0; width: 2px; height: 8px; background: var(--accent); z-index: 2; }
-  .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed #3a3a44; border-radius: 4px;
+  .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed var(--line-strong); border-radius: 4px;
     color: var(--mute); font-size: 10px; padding: 2px 6px; pointer-events: none; }
   .words { position: relative; height: 22px; border-bottom: 1px solid var(--line); overflow: hidden; }
   .word { position: absolute; top: 3px; font-size: 10px; color: var(--mute); white-space: nowrap;
-    padding: 0 2px; border-left: 1px solid #2e2e36; }
+    padding: 0 2px; border-left: 1px solid var(--line); }
   .word.hit { color: var(--ink); }
   .markers { position: absolute; left: 0; right: 0; top: 40px; bottom: 0; pointer-events: none; }
   .tmark { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px solid var(--accent);
@@ -419,7 +417,7 @@ _APP_HTML = r"""<!DOCTYPE html>
     pointer-events: none; z-index: 4; }
   .playhead:before { content: ""; position: absolute; top: 0; left: -6px; border: 6px solid transparent;
     border-top: 8px solid var(--accent); }
-  .range { position: absolute; top: 0; bottom: 0; background: rgba(0,229,255,.12);
+  .range { position: absolute; top: 0; bottom: 0; background: var(--accent-wash);
     border-left: 1px solid var(--accent); border-right: 1px solid var(--accent); pointer-events: none; z-index: 2; }
   #panel { margin-top: 12px; display: grid; grid-template-columns: 1fr; gap: 10px; }
   @media (min-width: 760px) { #panel { grid-template-columns: 1.3fr 1fr; } }
@@ -429,12 +427,12 @@ _APP_HTML = r"""<!DOCTYPE html>
   dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; font-variant-numeric: tabular-nums; }
   dt { color: var(--mute); } dd { margin: 0; overflow-wrap: anywhere; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  button { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid #3a3a44;
-    background: #1b1b21; color: var(--ink); cursor: pointer; }
-  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line-strong);
+    background: var(--raised); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent-fill); color: var(--accent-ink); border-color: var(--accent-fill); font-weight: 600; }
   button:disabled { opacity: .45; cursor: default; }
-  input[type=text] { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid #3a3a44;
-    background: #0f0f13; color: var(--ink); flex: 1 1 120px; min-width: 0; max-width: 100%; }
+  input[type=text] { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line-strong);
+    background: var(--ground); color: var(--ink); flex: 1 1 120px; min-width: 0; max-width: 100%; }
   #log { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--mute);
     max-height: 180px; overflow: auto; margin: 0; }
   .zoom { display: inline-flex; gap: 4px; align-items: center; color: var(--mute); font-size: 11px; }
@@ -497,9 +495,16 @@ _APP_HTML = r"""<!DOCTYPE html>
     }
     if (m.method === "ui/notifications/tool-result") onToolResult(m.params || {});
     else if (m.method === "ui/notifications/tool-input") log("tool input: " + JSON.stringify(m.params || {}).slice(0, 300));
-    else if (m.method === "ui/notifications/host-context-changed") state.hostContext = m.params || state.hostContext;
+    else if (m.method === "ui/notifications/host-context-changed") applyHostContext(m.params || state.hostContext);
     else if (m.id != null && m.method) send({ jsonrpc: "2.0", id: m.id, result: {} });
   });
+  // The host's theme wins; without one the OS preference does (CSS media query).
+  function applyHostContext(ctx) {
+    state.hostContext = ctx;
+    var theme = ctx && ctx.theme;
+    if (theme === "light" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+    else document.documentElement.removeAttribute("data-theme");
+  }
   function onToolResult(params) {
     var content = (params.result && params.result.content) || params.content || [];
     var found = null;
@@ -600,10 +605,11 @@ _APP_HTML = r"""<!DOCTYPE html>
     placePlayhead();
   }
   function clipEl(c) {
-    var e = el("div", "clip" + (c.kind === "title" ? " title" : "") + (state.sel === c.id ? " selected" : ""));
+    var thumbed = !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
+    var e = el("div", "clip" + (c.kind === "title" ? " title" : "") + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : ""));
     e.style.left = x(frac(c.start)) + "px"; e.style.width = Math.max(3, w(frac(c.duration)) - 1) + "px";
     e.title = c.name + " · " + secOfSeconds(frac(c.duration));
-    if (c.thumb && c.thumb.indexOf("data:image/") === 0) { var img = document.createElement("img"); img.src = c.thumb; img.alt = ""; e.appendChild(img); }
+    if (thumbed) { var img = document.createElement("img"); img.src = c.thumb; img.alt = ""; e.appendChild(img); }
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
     if (wpx >= 28) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
@@ -680,7 +686,7 @@ _APP_HTML = r"""<!DOCTYPE html>
   state.inHost = window.parent && window.parent !== window;
   if (state.inHost) {
     request("ui/initialize", { appInfo: { name: "fcp-mcp-server timeline", version: "1" }, appCapabilities: {}, protocolVersion: "2025-11-21" })
-      .then(function (res) { state.hostContext = (res && res.hostContext) || null; notify("ui/notifications/initialized"); log("host initialized"); },
+      .then(function (res) { applyHostContext((res && res.hostContext) || null); notify("ui/notifications/initialized"); log("host initialized"); },
             function (err) { log("ui/initialize failed: " + err.message); });
   } else {
     log("not inside an MCP Apps host; waiting for a payload via window.__fcpApp.setPayload()");
@@ -690,3 +696,6 @@ _APP_HTML = r"""<!DOCTYPE html>
 </body>
 </html>
 """
+
+# Colours come from fcpxml/palette.py and nowhere else (tests/test_palette.py).
+_APP_HTML = _APP_TEMPLATE.replace("/*PALETTE*/", palette.css_root())

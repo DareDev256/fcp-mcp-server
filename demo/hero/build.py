@@ -28,10 +28,18 @@ What it does, in order:
    it "provider mocked" on screen, and the clip the fake returns is itself a
    synthesised gradient. Nothing in the video claims a real generation.
 3. Writes ``.work/states.json`` (the prompt, the tool lines with figures
-   lifted from the real tool replies, and the four payload-bearing results)
-   plus the ``ui://fcp/timeline`` resource as served, then runs
+   lifted from the real tool replies, the four payload-bearing results and
+   the palette) plus the ``ui://fcp/timeline`` resource as served, then runs
    ``record.js`` (Playwright) to capture frames from the stub host page, and
    ffmpeg to encode ``docs/assets/hero-watch-claude-cut.{mp4,gif}``.
+4. The loop starts on the finished cut (``LOOP_START``), not on the empty
+   "waiting for a timeline" frame, so a viewer that shows only the first
+   frame (PyPI, a paused GIF, a link unfurl) sees the product. The recorder
+   also writes ``docs/assets/hero-still.png``, a 2x still of that frame and
+   the README's top image, and ``docs/assets/timeline-app-frame.png``, the
+   app alone, which ``scripts/social_card.py`` builds the GitHub card from.
+
+Every colour, footage included, is a token from ``fcpxml/palette.py``.
 
 Requires ffmpeg/ffprobe on PATH, Pillow (for the GIF: it merges identical
 frames, which ffmpeg's gif muxer does not), and Node with the ``playwright``
@@ -52,25 +60,38 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
+sys.path.insert(0, str(REPO))
+from fcpxml import palette  # noqa: E402
+
 WORK = HERE / ".work"
 ASSETS = REPO / "docs" / "assets"
 FPS = 24
 GIF_FPS = 12
 GIF_WIDTH = 960
 PROMPT = "Cut the dead air, mark every section, and put B-roll over the long interview take."
+LOOP_START = 25.6  # seconds into the story where the finished cut is on screen and every line is in
 BROLL_PROMPT = "city skyline at dusk, slow push in"
+
+
+
+def _tokens(*names: str) -> tuple[str, ...]:
+    """Gradient stops for the synthesised footage, from the palette: the
+    thumbnails are drawn on the product's face, so they stay on its colours."""
+    hexes = {**{f"light:{k}": v[1] for k, v in palette.TOKENS.items()}, **{k: v[0] for k, v in palette.TOKENS.items()}}
+    return tuple(palette.ffmpeg_colour(hexes[n]) for n in names)
+
 
 # name -> (seconds, gradient colours, audio expression or None)
 # The interview's audio is a 220 Hz tone with two stretches of digital silence
 # (6.0-9.5 s and 15.0-18.0 s): that is the dead air remove_media_silence cuts.
 CLIPS = {
-    "Opening": (4, ("0x1a0b3d", "0x7b2cff", "0x0b0620"), None),
-    "Interview_Take": (22, ("0x0b3d91", "0x00e5ff", "0x06111f"),
+    "Opening": (4, _tokens("ground", "mute", "panel"), None),
+    "Interview_Take": (22, _tokens("light:accent", "accent", "ground"),
                        "0.25*sin(2*PI*220*t)*(between(t,0,6)+between(t,9.5,15)+between(t,18,22))"),
-    "Studio": (5, ("0x0b3d2a", "0x19ffb0", "0x061f14"), None),
-    "Closing": (4, ("0x3d0b1a", "0xff2c6b", "0x200610"), None),
+    "Studio": (5, _tokens("panel", "ink", "raised-2"), None),
+    "Closing": (4, _tokens("ground", "light:accent", "line-strong"), None),
 }
-MOCK_BROLL = ("0x0b2f3d", "0x9be7ff", "0x061a20")
+MOCK_BROLL = _tokens("panel", "accent", "ink")
 
 
 def ffmpeg(*args: str) -> None:
@@ -116,8 +137,6 @@ def main() -> None:
     os.environ["FAL_KEY"] = "hero-recording-no-key"  # the gate reads a key; the provider is mocked
     os.environ.pop("FCP_PROJECTS_DIRS", None)
     os.environ.pop("FCP_PROJECTS_DIR", None)
-    sys.path.insert(0, str(REPO))
-
     import server  # noqa: E402
     from fcpxml import gen, timeline_app  # noqa: E402
 
@@ -233,6 +252,7 @@ def main() -> None:
     (WORK / "app.html").write_text(app_html, encoding="utf-8")
     (WORK / "states.json").write_text(json.dumps({
         "prompt": PROMPT, "lines": lines, "states": states, "duration": 28.0,
+        "loop_start": LOOP_START, "palette": palette.as_json()["dark"],
         "mock_note": "B-roll provider MOCKED for this recording: the quote gate, probe, insert, DTD check and journal ran; no generation did.",
     }), encoding="utf-8")
     for name, text in [("import", r_import), ("silence", r_silence), ("mark", r_mark), ("quote", r_quote),
@@ -252,7 +272,8 @@ def record(work: Path, home: str) -> None:
     frames = work / "frames"
     frames.mkdir()
     env = {**os.environ, "HOME": home}  # Playwright finds its browsers under the real HOME
-    subprocess.run(["node", str(HERE / "record.js"), str(work), str(frames)], check=True, timeout=900, env=env)
+    subprocess.run(["node", str(HERE / "record.js"), str(work), str(frames), str(ASSETS)],
+                   check=True, timeout=900, env=env)
 
 
 def encode(work: Path) -> None:

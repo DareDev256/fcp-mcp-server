@@ -102,3 +102,48 @@ def test_view_clip_names_the_clips_when_the_name_is_unknown():
 
 def test_view_clip_requires_a_name():
     assert "clip_name" in _call("view_clip", {"filepath": str(SAMPLE)})[0].text
+
+
+# ---------------------------------------------------------------------------
+# 0.31: the summary line agrees with diagnose and with what the app draws
+# ---------------------------------------------------------------------------
+
+MUSIC_VIDEO = SAMPLE.parent / "music-video.fcpxml"
+
+
+def _summary(path):
+    return _call("view_timeline", {"filepath": str(path), "thumbnails": False})[0].text.split("\n")[0]
+
+
+def _diagnose_gaps(path):
+    text = asyncio.run(server.call_tool(
+        "diagnose", {"action": "validate_timeline", "args": {"filepath": str(path)}}))[0].text
+    return int(next(line for line in text.splitlines() if line.startswith("| Gaps |")).split("|")[2])
+
+
+@pytest.mark.parametrize("path", [SAMPLE, MUSIC_VIDEO], ids=["sample", "music-video"])
+def test_the_gap_count_is_the_one_diagnose_reports(path):
+    """0.30 counted the hatched spans the app draws: "1 gaps" on the music
+    video, where validate_timeline says 0. Now both read _detect_gaps."""
+    n = _diagnose_gaps(path)
+    assert f", {n} gap{'' if n == 1 else 's'}" in _summary(path)
+
+
+def test_a_gap_based_storyline_is_named_not_counted():
+    summary = _summary(MUSIC_VIDEO)
+    assert "0 gaps (gap-based storyline)" in summary
+    assert "1 gaps" not in summary
+    # the app still gets the hatched span to draw
+    text = _call("view_timeline", {"filepath": str(MUSIC_VIDEO), "thumbnails": False})[0].text
+    assert len(timeline_app.extract_payload(text)["gaps"]) == 1
+
+
+def test_markers_on_clips_are_counted():
+    """Chapter markers live on their clips; 0.30 said "0 timeline markers"
+    under a ruler showing them."""
+    text = _call("view_timeline", {"filepath": str(SAMPLE), "thumbnails": False})[0].text
+    payload = timeline_app.extract_payload(text)
+    on_clips = sum(len(c["markers"]) for c in payload["clips"])
+    total = on_clips + len(payload["markers"])
+    assert on_clips > 0, "the fixture must carry clip markers for this to mean anything"
+    assert f"{total} markers ({on_clips} on clips)" in text.split("\n")[0]

@@ -1,21 +1,24 @@
-# FCPXML MCP
+<img src="docs/assets/logo.svg" width="72" height="72" alt="">
 
-**Edit Final Cut Pro by talking to Claude, and watch the cut change.**
+# fcp-mcp-server
 
-[![CI](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/DareDev256/fcp-mcp-server/actions)
-[![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server.svg)](https://pypi.org/project/fcp-mcp-server/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.21.1%20%7C%202.x-green.svg)](https://modelcontextprotocol.io/)
-[![Final Cut Pro](https://img.shields.io/badge/Final%20Cut%20Pro-10.4%E2%80%9312.x-purple.svg)](https://www.apple.com/final-cut-pro/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+**reads and writes FCPXML, no plugin, no patch**
 
-[![Watch Claude cut: one prompt on the left, and on the right the ui://fcp/timeline app re-rendering after each real tool call — the interview take loses its dead air, four section markers appear on the ruler, and a B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+Edit Final Cut Pro by talking to Claude, and watch the cut change.
+
+[![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server?label=PyPI&color=00E5FF&labelColor=000000)](https://pypi.org/project/fcp-mcp-server/)
+[![Final Cut Pro for Mac 10.4 to 12.4](https://img.shields.io/static/v1?label=Final%20Cut%20Pro&message=Mac%2010.4%E2%80%9312.4&color=00E5FF&labelColor=000000)](#compatibility)
+[![License: MIT](https://img.shields.io/static/v1?label=license&message=MIT&color=00E5FF&labelColor=000000)](LICENSE)
+
+[![The finished cut: one prompt on the left with the seven tool calls Claude made, and on the right the ui://fcp/timeline app drawing the result, the interview take with its dead air removed, four section markers on the ruler and a generated B-roll clip on lane 1](docs/assets/hero-still.png)](docs/assets/hero-watch-claude-cut.mp4)
 
 *One prompt, seven tool calls, and the timeline re-rendered inline after each
-write. Every frame is the real `ui://fcp/timeline` app drawing a real
-`view_timeline` result; the B-roll provider is mocked and the recording says
-so on screen. [Full-size mp4](docs/assets/hero-watch-claude-cut.mp4), re-recorded
-with [`demo/hero/build.py`](demo/hero/build.py).*
+write: the last frame of the recording. Watch it play as a
+[GIF](docs/assets/hero-watch-claude-cut.gif) or an
+[MP4](docs/assets/hero-watch-claude-cut.mp4). Every frame is the real
+`ui://fcp/timeline` app drawing a real `view_timeline` result; the B-roll
+provider is mocked and the recording says so on screen. Re-recorded with
+[`demo/hero/build.py`](demo/hero/build.py).*
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a
 host with MCP Apps draws it inline: lanes, thumbnails, markers, transcript
@@ -41,7 +44,12 @@ Then `File → Export XML…` in Final Cut Pro, and ask Claude to work on the fi
 
 ## Proof
 
-![FCPXML MCP demo: Final Cut Pro on the left, a terminal on the right. A timeline is read back, a marker is placed on every cut, and roles are assigned across ten clips, with Final Cut open the whole time](docs/assets/demo-live-fcp.gif)
+[![Watch Claude cut: one prompt on the left, and on the right the ui://fcp/timeline app re-rendering after each real tool call. The interview take loses its dead air, four section markers appear on the ruler, and a B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+
+*The recording behind the image at the top: it opens on the finished cut,
+then plays the seven calls in order.*
+
+![fcp-mcp-server demo: Final Cut Pro on the left, a terminal on the right. A timeline is read back, a marker is placed on every cut, and roles are assigned across ten clips, with Final Cut open the whole time](docs/assets/demo-live-fcp.gif)
 
 *Real v0.25.0 output against a running copy of Final Cut Pro. A ten clip
 timeline is read back off the document, a marker is placed on every cut, and
@@ -106,6 +114,27 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+### Where the timeline draws
+
+`view` returns a timeline an MCP Apps host draws inline (`ui://fcp/timeline`).
+Every other client gets the same result as text: a summary line and the
+exact JSON. `preview` returns images and an MP4 path everywhere. Checked
+2026-11-12; a host listed by its vendor but not yet captured here says so.
+
+| Host | What you get | Source |
+|---|---|---|
+| Claude Desktop | the timeline, inline | listed by the [MCP Apps overview](https://modelcontextprotocol.io/extensions/apps/overview); **not yet captured here** ([`scripts/capture-claude-desktop.md`](scripts/capture-claude-desktop.md)) |
+| Claude on the web (claude.ai) | the timeline, inline | listed by the MCP Apps overview; not captured here |
+| VS Code GitHub Copilot, Microsoft 365 Copilot, Goose, Postman, MCPJam, Archestra.AI | the timeline, inline | listed by the MCP Apps overview; not captured here |
+| `ext-apps` basic host (the reference host) | the timeline, inline, with Inspect and Find calling back into the server | run here on 2026-11-12 against 0.30.0 |
+| Claude Code | text: the summary and the JSON; `preview` images | Claude's [MCP Apps quickstart](https://claude.com/docs/connectors/building/mcp-apps/quickstart): "Claude Code calls the tool as text and doesn't render the UI" |
+| ChatGPT | unconfirmed | not named on the MCP Apps overview |
+| any other MCP client | text | |
+
+On `mcp` 1.x the tool carries `_meta.ui` and the resource is served, but the
+SDK cannot advertise the extension in the handshake; a host that insists on
+it needs `mcp` 2.x.
 
 ### From source (contributors)
 
@@ -297,15 +326,24 @@ runs on a managed Mac and survives an FCP update.
 
 Three projects have connected AI agents to Final Cut Pro. They make different trade-offs:
 
-| | **FCPXML MCP** (this) | [SpliceKit](https://github.com/elliotttate/SpliceKit) | [CommandPost](https://commandpost.fcp.cafe/) |
+| | **fcp-mcp-server** (this) | [SpliceKit](https://github.com/elliotttate/SpliceKit) | [CommandPost](https://commandpost.fcp.cafe/) |
 |---|---|---|---|
 | Approach | Parses/writes FCPXML + official Apple events only | Patches FCP's binary to expose internal APIs | Accessibility scripting + Lua |
 | Raw live control | Push-to-FCP, library inspection | Deepest (full internal API) | Deep (UI-level) |
 | Survives FCP updates | **Yes — no patching** | Re-patch per FCP version | Mostly |
 | Works on managed/corporate Macs | **Yes** | No (requires binary patching) | Varies (Accessibility perms) |
 | Works without FCP installed | **Yes** (pure XML mode) | No | No |
-| MCP server | **Yes, active** (this repo) | Yes (last release Apr 2026) | Planned, [PR unmerged](https://github.com/CommandPost/CommandPost/pull/3514) |
+| MCP server | **Yes, active** (this repo) | Yes (last release v3.3.9, 2026-08-29) | Planned, [PR unmerged](https://github.com/CommandPost/CommandPost/pull/3514) |
 | Requires | Python 3.10+ | Patched FCP binary | CommandPost app |
+
+The editing apps' own makers, checked 2026-11-12: DaVinci Resolve 21.1 ships
+a native MCP server ([Blackmagic's 21.1 notes](https://www.blackmagicdesign.com/support/content/readme/baf7c071c0524fbf8ccc961925c9f443),
+updated 2026-09-08; reported as Studio only by secondary sources). Adobe says
+MCP integrations come to Creative Cloud customers in early 2027
+([Adobe, 2026-11-10](https://blog.adobe.com/en/publish/2026/11/10/explore-new-ways-create-across-creative-cloud-adobe-firefly-while-advancing-craft-precision-choice-control)).
+Apple ships no MCP and no new automation surface for Final Cut Pro through
+12.4 ([release notes](https://support.apple.com/en-us/102825)), so FCPXML and
+Apple events remain the sanctioned way in.
 
 SpliceKit's runtime depth is genuinely impressive — if you're on your own Mac and comfortable patching FCP, it can do things XML never will. This project stays on the no-patch side so it runs anywhere, survives every FCP update, and can be trusted with client libraries. Full ecosystem analysis: [capability audit](docs/CAPABILITY-AUDIT-2026-06.md).
 
@@ -458,24 +496,27 @@ rows above/below the primary storyline, and marker ticks — all values
 HTML-escaped, served as `text/html`. Point your MCP client's resource viewer
 at it, or fetch it directly, to see a cut without opening Final Cut Pro.
 
-![Timeline preview: 129 clips across 15 lanes rendered as coloured blocks, with the music bed on lane -1 and colour-grade layers on lanes 9 to 14](docs/assets/timeline-preview.png)
+![Timeline preview: the 164-second music-video fixture rendered from its FCPXML alone, two connected video lanes above and the music bed on lane -1, as neutral clip blocks on a true-black page](docs/assets/timeline-preview.png)
 
-*A real 164-second music video: 129 connected clips across 15 lanes, rendered
-from its FCPXML alone. Clip names on reference layers have been relabelled.*
+*`examples/music-video.fcpxml`, 164 seconds, rendered from its FCPXML alone:
+eight connected clips on three lanes over a gap-based storyline. The `view`
+app above is the richer view; this one needs no host at all.*
 
 ### See the cut inline — the MCP Apps timeline (v0.26.0)
 
 The `view` tool turns the same timeline into something a host renders
 **inside the conversation**. Call `view` with `view_timeline` and a
-filepath; a host that speaks MCP Apps (SEP-1865: Claude Desktop and
-claude.ai, ChatGPT, VS Code, Goose) opens the `ui://fcp/timeline` resource
-in a sandboxed iframe and posts the result into it.
+filepath; a host that speaks MCP Apps opens the `ui://fcp/timeline`
+resource in a sandboxed iframe and posts the result into it. Which hosts do
+that, and which get text, is in [Where the timeline draws](#where-the-timeline-draws).
 
-![The MCP Apps timeline: a true-black ruler with marker names, spine clips carrying filmstrip thumbnails, transcript words under the clips, a cyan playhead, and a selection panel with Inspect, Find similar, Add marker and Delete buttons](docs/screenshots/2026-10-09_timeline-app-1280-selected.png)
+![The MCP Apps timeline: a true-black ruler with chapter markers, spine clips carrying filmstrip thumbnails, a cyan playhead, and a selection panel with Inspect, Find similar, Add marker and Delete buttons](docs/screenshots/2026-11-12_timeline-app-1440-selected.png)
 
-*The app rendered in headless Chromium through a stub host, 1280 px, with a
-clip selected. The phone-width render is
-`docs/screenshots/2026-10-09_timeline-app-390.png`.*
+*The app rendered in headless Chromium through a stub host, 1440 px, with a
+clip selected. It follows the host's theme (white ground, the same cyan as
+a fill, a darker cyan for text and lines):
+`docs/screenshots/2026-11-12_timeline-app-1440-light.png`. Phone width:
+`docs/screenshots/2026-11-12_timeline-app-390.png`.*
 
 What it shows: every lane (spine, connected video lanes above, audio lanes
 below), clips sized to duration with their names and roles, markers, gaps,
@@ -496,7 +537,8 @@ a one-line summary and the JSON block as text, which is still the timeline.
 The shell loads nothing from the network. Two honest limits: the in-iframe
 protocol (`ui/initialize`, `ui/notifications/tool-result`, `tools/call`)
 follows the spec text and the `@modelcontextprotocol/ext-apps` client and
-has been driven by a stub host, not yet by a shipping one; and on `mcp` 1.x
+has been driven by the official `ext-apps` reference host and a stub host,
+and is not yet captured in Claude Desktop; and on `mcp` 1.x
 the tool carries `_meta.ui` and the resource is served, but the SDK has no
 slot to advertise the extension capability, so a host that insists on the
 handshake needs `mcp` 2.x.
@@ -510,7 +552,7 @@ fixed and the gate is not optional:**
 ```json
 gen {"action": "gen_quote", "args": {"provider": "fal", "seconds": 7, "prompt": "a street at dusk, handheld"}}
 → Quote 61585b429a17 — fal/kling-2.5, 10s billable for 7.00s requested
-   Estimated: $0.70 (prices as of 2026-10-09; third-party figures, NOT verified against an invoice)
+   Estimated: $0.70 (prices as of 2026-11-12, 0 days ago; read on the vendor's own page; third-party figures, NOT verified against an invoice)
    Cap: $5 per call (FCP_MCP_GEN_MAX_USD)
 
 gen {"action": "gen_fill_gap", "args": {"filepath": "…/cut.fcpxml", "prompt": "a street at dusk, handheld",
@@ -523,11 +565,15 @@ from provider, model, billable seconds and prompt; a stale id cannot buy a
 different job), without the provider's key in the environment, and above
 the per-call cap `FCP_MCP_GEN_MAX_USD` (default `5`). Kling and Wan bill 5
 or 10 seconds, so a 7-second gap is a 10-second job and the quote says 10;
-Gemini Omni Flash is quoted as one 10-second call (3–10 s output). Prices are the upper end of what the providers' pages
-reported on `prices_as_of`; every quote and every result says they are
-unverified.
+Gemini Omni 1.2 Flash makes 3 to 15 second clips and is quoted as at least
+one 10-second call (11 to 15 s quoted as 15). Prices are the upper end of
+what each provider's own page said on `prices_as_of` (2026-11-12): every
+quote names its source page, says how many days old the table is, and prints
+UNVERIFIED for a figure no vendor page states. None is checked against an
+invoice, and a test fails the daily CI run when the table is over 45 days
+old.
 
-Providers: `fal` (`kling-2.5` default, `wan-2.5`) and `gemini` (`omni-1.1-flash`)
+Providers: `fal` (`kling-2.5` default, `wan-2.5`) and `gemini` (`omni-1.2-flash`)
 generate; `runway` (Aleph) and `luma` (Ray Modify) are video-to-video and
 quote but refuse as not implemented rather than pretend. Keys come from
 `FAL_KEY`, `GEMINI_API_KEY`, `RUNWAY_API_KEY`, `LUMA_API_KEY` only, travel in
@@ -707,7 +753,7 @@ titles, pan, EQ and audio effects.
 | `FCP_MCP_VLM_MODEL` | No | `mlx-community/Qwen2-VL-2B-Instruct-4bit` | Hub id of the MLX vision model `find` captions shots with. Loaded offline only; a missing model is reported with its `hf download` command, never fetched |
 | `FCP_MCP_GEN_MAX_USD` | No | `5` | Per-call ceiling on the estimated cost of a `gen` generation. A quote over it says so; generation refuses. A malformed value raises rather than defaulting |
 | `FAL_KEY` | No | unset | Enables `gen` provider `fal` (Kling 2.5, Wan 2.5). Sent as `Authorization: Key …` to queue.fal.run only; never read unless a `gen` action runs |
-| `GEMINI_API_KEY` | No | unset | Enables `gen` provider `gemini` (Gemini Omni 1.1 Flash; Veo 3.1 preview left the Gemini API on 2026-10-22). Sent as `x-goog-api-key` to generativelanguage.googleapis.com only |
+| `GEMINI_API_KEY` | No | unset | Enables `gen` provider `gemini` (Gemini Omni 1.2 Flash; Omni 1.1 routes to it from 2026-12-03 and Veo 3.1 preview left the Gemini API on 2026-10-22). Sent as `x-goog-api-key` to generativelanguage.googleapis.com only |
 | `RUNWAY_API_KEY`, `LUMA_API_KEY` | No | unset | Reserved for the video-to-video providers, which quote but are not implemented in this release |
 
 ---
@@ -717,9 +763,9 @@ titles, pan, EQ and audio effects.
 | Component | Supported Versions |
 |-----------|--------------------|
 | FCPXML format | reads v1.8 – v1.14 · writes v1.13 (modified files keep their source version) |
-| Final Cut Pro | 10.4+ through 12.x · flat `.fcpxml` and `.fcpxmld` bundles (sidecars preserved) |
+| Final Cut Pro | **for Mac** 10.4+ through 12.4 (the newest release, 2026-09-29, per Apple's notes, checked 2026-11-12) · flat `.fcpxml` and `.fcpxmld` bundles (sidecars preserved). Final Cut Pro for iPad has no documented FCPXML import or export, so it is not supported |
 | Python | 3.10, 3.11, 3.12 |
-| MCP protocol | 1.0 |
+| MCP protocol | Spec versions are dates; the installed `mcp` SDK negotiates one. `mcp` 1.28.1 speaks up to 2025-11-25 and `mcp` 2.3.0 up to 2026-07-28, the current spec (checked 2026-11-12) |
 | `mcp` SDK | 1.21.1 through 2.x — both the decorator API and the `add_request_handler` API that replaced it. CI tests the declared floor and 2.x on every push |
 | **Export targets** | |
 | → DaVinci Resolve | FCPXML v1.9 |
@@ -941,7 +987,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-2421 tests across 88 suites — 2414 pass and 7 skip locally on v0.30.0 (`mcp` 1.28.1, on ffmpeg 9.0.1 and on 6.1 via `scripts/test-ffmpeg6.sh`, measured 2026-11-02); 2415 pass and 6 skip on `mcp` 2.x; 2390 pass and 31 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+2500 tests across 92 suites, measured 2026-11-12 on v0.31.0: 2495 pass and 5 skip locally (`mcp` 1.28.1, ffmpeg 9.0.1); 2498 pass and 2 skip on `mcp` 2.3.0; 2494 pass and 6 skip on ffmpeg 6.1 via `scripts/test-ffmpeg6.sh`; 2471 pass and 29 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the `preview://` HTML render and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 
@@ -951,12 +997,13 @@ Several of those are **mutation checks** — they exist to prove an instrument c
 - `test_a_touched_source_drops_its_rows` re-exports a source and asserts the cache forgets it; with the (mtime, size) check removed the stale rows survive and the test goes red.
 - `test_key_goes_in_the_header_and_nowhere_else` — moving the ElevenLabs key into the URL makes it fail.
 - `test_version.py` asserts `server.__version__` matches `pyproject.toml`; the two had disagreed since v0.17.0 without anything noticing.
+- `test_palette.py`, `test_schema_budget.py`, `test_front_door.py` and `test_pypi_readme.py` (v0.31.0) each plant the failure they guard against: amber back in a surface, one more character in a tool description, the old card's version in the README, a relative image in the built PyPI description.
 
 ---
 
 ## Requirements
 
-- **Python 3.10+** · **Final Cut Pro 10.4+** (FCPXML 1.8+) · **Claude Desktop** or any MCP client
+- **Python 3.10+** · **Final Cut Pro for Mac 10.4+** (FCPXML 1.8+; the iPad app has no FCPXML path) · **Claude Desktop** or any MCP client
 - **Dependencies** (auto-installed): `mcp` (1.21.1+, including 2.x), `defusedxml`
 - **ffmpeg** (optional) — needed for silence analysis (`detect_media_silence`, `remove_media_silence`)
 - **`[scenes]` extra** (optional) — adds PySceneDetect for `scenes` detection that can see a cut between similar colours; without it the group falls back to ffmpeg's coarser scene filter and says so.
@@ -1022,6 +1069,12 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **Every tool reads the whole edit** — the reporting tools (EDL, CSV, markers, keywords, pacing, roles) and the preview follow connected clips too, so a gap-based project no longer exports empty — *v0.24.0*
 - [x] **See the cut** — the `view` MCP Apps timeline rendered inline by the host, `gen` generative fill behind a quote-then-confirm money gate, and the `expected_sha256` project guard; the rest of the October idea set is in [`docs/ROADMAP-2026-10.md`](docs/ROADMAP-2026-10.md) — *v0.26.0*
 - [x] **Files Final Cut actually opens** — transition uids checked against Final Cut's own plugin list (`FxPlug:` prefix, seven wipes that matched no plugin, a "fade" that was a colour look), transitions refused when the clips lack handles, DTD-valid rough-cut transitions, assets copied whole, connected clips on the parent's clock and in DTD order (#30-#34, @brannonwinn) — *v0.27.0*
+- [x] **Pushes Final Cut accepts** — `push_to_fcp` sends a copy carrying its library location, bundles included, so Final Cut 12.3 no longer raises a picker that swallows the import (John Palchak) — *v0.27.1*
+- [x] **Gemini Omni replaces Veo 3.1** before Google retired the preview models from the Gemini API — *v0.27.2*
+- [x] **The proxy is exactly as long as the timeline** — every instant of `preview_render` is the timeline's own picture or a named black substitute, transitions drawn on handles like Final Cut (John Palchak) — *v0.28.0*
+- [x] **Every media tool reads the asset clock** — silence, scenes, transcripts and `find` no longer report "nothing found" on timecoded clips — *v0.29.0*
+- [x] **The proxy has sound** — `preview_render` mixes the timeline's audio on the same clock as the picture — *v0.30.0*
+- [x] **Front door** — one palette (true black, one cyan, red only for failure), the GitHub card and PyPI page rebuilt from scripts, current prices with their sources, a schema budget held by a test — *v0.31.0*
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written
 - [ ] Audio sync detection

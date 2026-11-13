@@ -129,9 +129,13 @@ def test_shell_speaks_the_apps_protocol_and_calls_back_through_tools_call():
     assert "expected_sha256" in html
 
 
-def test_shell_is_dark_with_no_cream_ground():
+def test_shell_is_true_black_with_no_cream_ground():
     html = timeline_app.render_app_html()
-    assert "--bg: #09090b" in html
+    # Dark by default on true black; the light ground only behind a media
+    # query or the host's own theme (tests/test_palette.py checks the rest).
+    root = html[html.index(":root {"):html.index("}", html.index(":root {"))]
+    assert "--ground: #000000" in root and "--accent: #00E5FF" in root
+    assert '[data-theme="light"]' in html and "prefers-color-scheme: light" in html
     for banned in ("#F7F1E7", "#FAF6EF", "#F8F2E5", "#C8862B", "#fdfbf7", "beige", "cream"):
         assert banned.lower() not in html.lower(), banned
 

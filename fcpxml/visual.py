@@ -17,9 +17,16 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Optional
 
+from . import palette
+
 logger = logging.getLogger(__name__)
 
 VISUAL_TIMEOUT_SECONDS = 180
+
+# The plate and the trace are palette tokens (fcpxml/palette.py), never typed
+# here: a dark panel under the accent, which is what the app draws too.
+PLATE = palette.ffmpeg_colour(palette.dark("panel"))
+TRACE = palette.ffmpeg_colour(palette.dark("accent"))
 
 
 def visual_check(
@@ -64,8 +71,8 @@ def visual_check(
     # test_the_waveform_is_actually_drawn for the check that can see this fail.
     with_waveform = (
         f"[0:v]fps={rate},scale={cell}:{strip_height},tile={frames}x1[strip];"
-        f"color=c=0x101014:s={strip_width}x{strip_height}[plate];"
-        f"[0:a]showwavespic=s={strip_width}x{strip_height}:colors=0x00E5FF[trace];"
+        f"color=c={PLATE}:s={strip_width}x{strip_height}[plate];"
+        f"[0:a]showwavespic=s={strip_width}x{strip_height}:colors={TRACE}[trace];"
         f"[plate][trace]overlay=format=auto[wave];"
         f"[strip][wave]vstack=inputs=2[out]"
     )

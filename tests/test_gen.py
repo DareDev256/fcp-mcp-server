@@ -39,19 +39,50 @@ def _clean(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_price_table_is_dated_and_typed():
-    assert gen.PRICES_AS_OF == "2026-10-21"
+    assert gen.PRICES_AS_OF == "2026-11-12"
     for (provider, model), entry in gen.PRICES.items():
         assert provider in gen.DEFAULT_MODEL, provider
         assert entry["usd_per_second"] is None or isinstance(entry["usd_per_second"], Decimal), model
         assert isinstance(entry["billable"], tuple)
+        # Every figure names the page it was read on, and says whether that
+        # page is the vendor's own. A price with no source is a guess.
+        assert entry["source"].startswith("https://"), model
+        assert isinstance(entry["confirmed"], bool), model
+
+
+def test_the_price_table_admits_its_age():
+    """The daily CI run goes red when nobody has re-read the vendor pages in
+    PRICE_MAX_AGE_DAYS. Fix it by reading them and moving PRICES_AS_OF, never
+    by moving the date alone."""
+    age = gen.prices_age_days()
+    assert age >= 0, f"PRICES_AS_OF {gen.PRICES_AS_OF} is in the future"
+    assert age <= gen.PRICE_MAX_AGE_DAYS, (
+        f"prices are {age} days old (PRICES_AS_OF {gen.PRICES_AS_OF}); re-read every vendor page "
+        f"in fcpxml/gen.py and update the table")
+
+
+def test_the_age_check_can_go_red():
+    """Mutation check: a table read 46 days before 'today' fails the rule above."""
+    from datetime import date, timedelta
+    stale_today = date.fromisoformat(gen.PRICES_AS_OF) + timedelta(days=gen.PRICE_MAX_AGE_DAYS + 1)
+    assert gen.prices_age_days(stale_today) > gen.PRICE_MAX_AGE_DAYS
+
+
+def test_retired_omni_model_is_refused():
+    """1.1 routes to 1.2 and bills at 1.2 rates from 2026-12-03; quoting it at
+    its old $0.10/s would quote a price nobody charges."""
+    with pytest.raises(gen.RefusedError, match="Unknown model 'omni-1[.]1-flash'"):
+        gen.quote("gemini", 6, "dusk", "omni-1" + ".1-flash")
 
 
 @pytest.mark.parametrize("provider,model,seconds,billable,usd", [
     ("fal", "kling-2.5", 7, 10, "0.70"),
     ("fal", "kling-2.5", "3.2", 5, "0.35"),
     ("fal", "wan-2.5", 5, 5, "0.75"),
-    ("gemini", "omni-1.1-flash", 5, 10, "1.00"),
-    ("runway", "aleph", "2.5", 3, "0.45"),
+    ("gemini", "omni-1.2-flash", 5, 10, "0.70"),
+    ("gemini", "omni-1.2-flash", 12, 15, "1.05"),
+    ("runway", "aleph", "2.5", 3, "0.84"),
+    ("runway", "aleph", "0.5", 2, "0.56"),
 ])
 def test_quote_bills_the_next_supported_length(provider, model, seconds, billable, usd):
     q = gen.quote(provider, seconds, "a street at dusk", model)
@@ -59,6 +90,8 @@ def test_quote_bills_the_next_supported_length(provider, model, seconds, billabl
     assert q.usd == Decimal(usd)
     assert q.prices_as_of == gen.PRICES_AS_OF
     assert q.as_dict()["price_verified"] is False
+    assert q.as_dict()["price_confirmed_on_vendor_page"] is True
+    assert q.as_dict()["price_source"].startswith("https://")
     assert q.as_dict()["estimated_usd"] == usd
 
 
@@ -305,13 +338,13 @@ def test_gemini_adapter_sends_one_omni_interaction_with_the_goog_header(monkeypa
         ]}),
     ])
     monkeypatch.setattr(gen, "_http", t)
-    data = gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10, image_path=str(frame))
+    data = gen.GeminiProvider("omni-1.2-flash").generate("dusk", 10, image_path=str(frame))
     assert data == b"OMNI"
     (call,) = t.calls
     assert call["url"] == gen.GeminiProvider.BASE + "interactions"
     assert call["headers"]["x-goog-api-key"] == "gm-key-0123456789"
     body = json.loads(call["body"])
-    assert body["model"] == "gemini-omni-1.1-flash"
+    assert body["model"] == "gemini-omni-1.2-flash"
     assert body["response_format"] == {"type": "video", "aspect_ratio": "16:9", "resolution": "720p"}
     assert [c["type"] for c in body["input"]] == ["image", "text"]
     assert body["input"][0]["mime_type"] == "image/png"
@@ -326,7 +359,7 @@ def test_gemini_reads_a_uri_video_from_googleapis_only(monkeypatch):
         (200, b"OMNI"),
     ])
     monkeypatch.setattr(gen, "_http", t)
-    assert gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10) == b"OMNI"
+    assert gen.GeminiProvider("omni-1.2-flash").generate("dusk", 10) == b"OMNI"
     assert t.calls[1]["headers"]["x-goog-api-key"] == "gm-key-0123456789"
 
 
@@ -341,7 +374,7 @@ def test_gemini_refuses_to_send_the_key_off_googleapis(monkeypatch, uri):
     t = _Transport([(200, {"steps": [{"type": "model_output", "content": [{"type": "video", "uri": uri}]}]})])
     monkeypatch.setattr(gen, "_http", t)
     with pytest.raises(gen.ProviderError, match="refusing to send the key"):
-        gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10)
+        gen.GeminiProvider("omni-1.2-flash").generate("dusk", 10)
     assert len(t.calls) == 1
 
 
@@ -350,14 +383,14 @@ def test_gemini_without_a_video_fails_loud(monkeypatch):
     t = _Transport([(200, {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "no"}]}]})])
     monkeypatch.setattr(gen, "_http", t)
     with pytest.raises(gen.ProviderError, match="no video"):
-        gen.GeminiProvider("omni-1.1-flash").generate("dusk", 10)
+        gen.GeminiProvider("omni-1.2-flash").generate("dusk", 10)
 
 
 def test_retired_veo_model_is_refused():
     with pytest.raises(gen.RefusedError, match="Unknown model 'veo-3.1'"):
         gen.quote("gemini", 6, "dusk", "veo-3.1")
-    with pytest.raises(gen.RefusedError, match="at most 10s"):
-        gen.quote("gemini", 11, "dusk")
+    with pytest.raises(gen.RefusedError, match="at most 15s"):
+        gen.quote("gemini", 16, "dusk")
 
 
 def test_runway_and_luma_are_honest_stubs():

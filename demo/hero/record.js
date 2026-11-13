@@ -1,6 +1,6 @@
 // Stub MCP Apps host for the README hero. Run by build.py; not meant to be run alone.
 //
-//   node demo/hero/record.js <work dir> <frames dir>
+//   node demo/hero/record.js <work dir> <frames dir> <assets dir>
 //
 // Loads the ui://fcp/timeline shell (work/app.html, exactly as the server
 // serves it) once per timeline state, speaks the MCP Apps draft protocol to
@@ -10,7 +10,10 @@
 // positions every element, so each captured frame is exact and a slow
 // screenshot cannot drift the animation. Frames are 960x540 CSS pixels at a
 // device scale of 2 (1920x1080) so the app's own 13px type stays legible at
-// README width.
+// README width. Every colour is a palette token handed over in states.json
+// (fcpxml/palette.py); none is typed here. Frame 0 is the finished cut
+// (states.loop_start), and the assets dir gets hero-still.png (that frame)
+// and timeline-app-frame.png (the app alone, for scripts/social_card.py).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -23,7 +26,7 @@ function loadPlaywright() {
   throw new Error("playwright not found: npm i playwright, or HERO_PLAYWRIGHT=/path/to/node_modules/playwright");
 }
 
-const [work, framesDir] = process.argv.slice(2);
+const [work, framesDir, assetsDir] = process.argv.slice(2);
 const states = JSON.parse(fs.readFileSync(path.join(work, "states.json"), "utf8"));
 const app = fs.readFileSync(path.join(work, "app.html"), "utf8");
 const FPS = 30;
@@ -32,9 +35,10 @@ const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 const iframes = states.states.map((s, i) =>
   `<iframe class="app" id="app${i}" sandbox="allow-scripts" srcdoc="${esc(app)}"></iframe>`).join("");
 
+const tokens = Object.entries(states.palette).map(([k, v]) => `--${k}:${v};`).join(" ");
 const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-  :root { --accent:#00e5ff; --mute:#8c8c96; --ink:#f2f2f5; --line:#26262c; }
-  html,body { margin:0; width:960px; height:540px; background:#000; color:var(--ink); overflow:hidden;
+  :root { ${tokens} }
+  html,body { margin:0; width:960px; height:540px; background:var(--ground); color:var(--ink); overflow:hidden;
     font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
   #top { position:absolute; left:28px; right:28px; top:16px; display:flex; justify-content:space-between;
     font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--mute); letter-spacing:.04em; }
@@ -53,14 +57,14 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   #mock { position:absolute; left:0; bottom:0; width:292px; color:var(--mute); font-size:10.5px; line-height:1.35;
     opacity:0; border-top:1px solid var(--line); padding-top:7px; }
   #stage { position:absolute; left:332px; top:48px; right:28px; bottom:28px; }
-  #frame { position:absolute; inset:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#09090b; }
-  .app { position:absolute; inset:0; width:100%; height:100%; border:0; opacity:0; background:#09090b; }
+  #frame { position:absolute; inset:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--ground); }
+  .app { position:absolute; inset:0; width:100%; height:100%; border:0; opacity:0; background:var(--ground); }
   #wipe { position:absolute; top:0; bottom:0; width:2px; background:var(--accent); opacity:0; z-index:6;
-    box-shadow:0 0 12px 2px rgba(0,229,255,.55); }
+    box-shadow:0 0 12px 2px var(--accent-wash); }
   #cap { position:absolute; right:14px; bottom:10px; font: 600 11px/1 ui-monospace, Menlo, monospace; color:var(--accent);
-    background:rgba(9,9,11,.92); padding:6px 9px; border-radius:6px; border:1px solid var(--line); opacity:0; z-index:5; }
+    background:var(--ground); padding:6px 9px; border-radius:6px; border:1px solid var(--line); opacity:0; z-index:5; }
   #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--mute);
-    font-size:13px; background:#09090b; }
+    font-size:13px; background:var(--ground); }
 </style></head><body>
 <div id="top"><span><b>fcp-mcp-server</b> · watch Claude cut</span><span>ui://fcp/timeline · MCP Apps · 1920×1080</span></div>
 <div id="chat">
@@ -148,10 +152,20 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   // Fonts and thumbnails settle before the first frame.
   await page.waitForTimeout(500);
   const total = Math.round(states.duration * FPS);
+  // The loop is rotated so frame 0 is the finished cut: the story still plays
+  // in order from the empty frame, it just enters at its last beat.
+  const offset = Math.round((states.loop_start || 0) * FPS) % total;
   for (let k = 0; k < total; k++) {
-    await page.evaluate((ms) => window.__seek(ms), (k / FPS) * 1000);
+    await page.evaluate((ms) => window.__seek(ms), (((k + offset) % total) / FPS) * 1000);
     await page.screenshot({ path: path.join(framesDir, String(k).padStart(5, "0") + ".png"), animations: "disabled" });
     if (k % 150 === 0) console.log("frame", k, "/", total);
+  }
+  if (assetsDir) {
+    await page.evaluate((ms) => window.__seek(ms), (offset / FPS) * 1000);
+    await page.screenshot({ path: path.join(assetsDir, "hero-still.png"), animations: "disabled" });
+    await page.evaluate(() => { for (const id of ["cap", "wipe"]) document.getElementById(id).style.visibility = "hidden"; });
+    await page.locator("#frame").screenshot({ path: path.join(assetsDir, "timeline-app-frame.png"), animations: "disabled" });
+    console.log("still + app frame written to", assetsDir);
   }
   await browser.close();
   console.log("frames:", total);

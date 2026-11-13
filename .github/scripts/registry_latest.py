@@ -2,7 +2,7 @@
 
 Reads the search-endpoint JSON on stdin. The endpoint returns EVERY version
 of a server, oldest first, so "the first match" is whichever version was
-published first (0.13.1 here, forever); the registry marks exactly one entry
+published first (the oldest version, forever); the registry marks exactly one entry
 isLatest and that is the only one that answers "what does the registry serve".
 
 A file rather than an inline ``python3 -c`` block: v0.22.0's check died of

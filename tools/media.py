@@ -312,7 +312,7 @@ async def handle_detect_beats(arguments: dict) -> Sequence[TextContent]:
     return srv._text_result(result_text)
 
 
-# ===== TRANSCRIPT INTELLIGENCE (v0.13.1) =====
+# ===== TRANSCRIPT INTELLIGENCE (v0.13) =====
 
 TRANSCRIBE_MAX_MEDIA = 10
 TRANSCRIBE_BACKENDS = BACKENDS
