@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.31.0] - 2026-11-12
+## [0.31.0] - 2026-11-13
 
 Front door. The first things a stranger sees (the GitHub card, the PyPI
 page, the README's first screen) were stale and on four palettes. Now they
