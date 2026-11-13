@@ -136,6 +136,34 @@ def test_text_reads_at_4_5_to_1(fg, bg, mode):
     assert ratio >= 4.5, f"{fg} on {bg}: {ratio:.2f}:1"
 
 
+@pytest.mark.parametrize("mode", [0, 1], ids=["dark", "light"])
+@pytest.mark.parametrize("fill,ground", palette.FILL_PAIRS)
+def test_block_fills_read_at_3_to_1(fill, ground, mode):
+    ratio = palette.contrast(palette.TOKENS[fill][mode], palette.TOKENS[ground][mode])
+    assert ratio >= 3.0, f"{fill} on {ground}: {ratio:.2f}:1"
+
+
+def legacy_fills(html: str) -> list[str]:
+    """The fill tokens the legacy preview paints its clip blocks with."""
+    rules = re.findall(r"\.clip[^{]*\{([^}]*)\}", html)
+    return [m for rule in rules for m in re.findall(r"background:\s*var\(--([\w-]+)\)", rule)]
+
+
+def test_the_legacy_preview_paints_blocks_with_3_to_1_fills():
+    from fcpxml.parser import FCPXMLParser
+    from fcpxml.preview import render_timeline_html
+
+    html = render_timeline_html(FCPXMLParser().parse_file(str(REPO / "examples" / "music-video.fcpxml")).timelines[0])
+    fills = legacy_fills(html)
+    assert fills and all((f, "panel") in palette.FILL_PAIRS for f in fills), fills
+    assert "inset 0 3px 0 var(--accent)" in html  # the thin accent strip on top
+
+
+def test_the_fill_rule_can_go_red():
+    """Mutation check: 0.31's first legacy fill (raised on panel) was 1.15:1."""
+    assert palette.contrast(palette.dark("raised"), palette.dark("panel")) < 3.0
+
+
 def test_the_contrast_rule_can_go_red():
     """Mutation check: the old light-mode idea of cyan text on white fails."""
     assert palette.contrast("#00E5FF", "#FFFFFF") < 4.5
@@ -173,6 +201,37 @@ def test_readme_badges_are_three_on_the_palette():
     assert badge_problems(readme_badges(text)) == []
     # and nothing else draws a badge in its own colour
     assert "actions/workflows/test.yml/badge.svg" not in text
+
+
+def test_badge_text_is_dark_on_the_cyan():
+    """shields.io decides the text colour from the background: the badge
+    colour must be past its brightness line, or the text is white at 1.8:1."""
+    value = palette.dark(palette.BADGE_MESSAGE)
+    assert palette.shields_brightness(value) > palette.SHIELDS_DARK_TEXT_ABOVE
+    assert palette.contrast("#333333", value) >= 4.5
+
+
+def test_the_badge_text_rule_can_go_red():
+    """Mutation check: the accent itself is under the line (white text)."""
+    assert palette.shields_brightness(palette.dark("accent")) <= palette.SHIELDS_DARK_TEXT_ABOVE
+
+
+VERSION = re.compile(r"v?\d+\.\d+\.\d+")
+
+
+def stale_version_badges(urls: list[str]) -> list[str]:
+    """A badge that prints a version must ask PyPI for it, never carry it."""
+    return [u for u in urls if "/pypi/v/" not in u and VERSION.search(urlparse(u).path + urlparse(u).query)]
+
+
+def test_the_version_badge_is_dynamic():
+    urls = readme_badges((REPO / "README.md").read_text(encoding="utf-8"))
+    assert any("/pypi/v/fcp-mcp-server" in u for u in urls)
+    assert stale_version_badges(urls) == []
+
+
+def test_the_dynamic_rule_can_go_red():
+    assert stale_version_badges(["https://img.shields.io/static/v1?label=PyPI&message=v0.30.0&color=33EBFF"])
 
 
 def test_the_badge_rule_can_go_red():

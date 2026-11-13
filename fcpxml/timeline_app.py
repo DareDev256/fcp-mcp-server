@@ -379,14 +379,19 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   #scroller { position: relative; overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line);
     border-radius: 8px; background: var(--panel); }
   #canvas { position: relative; min-width: 100%; }
-  .ruler { position: relative; height: 40px; border-bottom: 1px solid var(--line); cursor: crosshair;
+  .ruler { position: relative; height: 48px; border-bottom: 1px solid var(--line); cursor: crosshair;
     user-select: none; }
-  .tick { position: absolute; top: 18px; bottom: 0; border-left: 1px solid var(--line-strong); padding-left: 4px;
-    font: 10px/22px ui-monospace, Menlo, monospace; color: var(--mute); white-space: nowrap; }
+  .tick { position: absolute; top: 30px; bottom: 0; border-left: 1px solid var(--line-strong); padding-left: 4px;
+    font: 10px/18px ui-monospace, Menlo, monospace; color: var(--mute); white-space: nowrap; }
   .mlabel { position: absolute; top: 2px; font-size: 10px; color: var(--accent); white-space: nowrap;
-    padding: 0 3px 0 5px; border-left: 2px solid var(--accent); line-height: 14px; }
+    padding: 0 3px 0 5px; border-left: 2px solid var(--accent); line-height: 13px; }
+  .mlabel.row1 { top: 15px; }
+  /* A label that does not fit is hidden, never cut: its tick, flag or clip stays,
+     and the name is in the title tooltip. fitLabels() decides (tests/test_app_labels.py). */
+  .tick.unfit, .mlabel.unfit, .gap.unfit { color: transparent; }
+  .clip .label.unfit { visibility: hidden; }
   .lane { position: relative; height: 44px; border-bottom: 1px solid var(--line); }
-  .lane.spine { height: 58px; background: var(--gap); }
+  .lane.spine { height: 58px; }
   .lane.audio { height: 30px; }
   .lane-tag { position: sticky; left: 0; z-index: 3; display: block; width: 48px; height: 100%;
     padding: 4px 0 0 6px; font-size: 10px; color: var(--mute); background: var(--panel);
@@ -399,18 +404,18 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .clip.title { background: var(--raised-2); border-style: dashed; }
   .clip img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .85; }
   .clip .label { position: relative; z-index: 1; padding: 2px 6px; font-size: 11px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+    overflow: hidden; color: var(--ink); }
   .clip.has-thumb .label { color: var(--on-media); background: linear-gradient(transparent, var(--shade)); }
   .clip .role { font-size: 9px; color: var(--mute); margin-left: 6px; }
   .clip.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .clip .mk { position: absolute; top: 0; width: 2px; height: 8px; background: var(--accent); z-index: 2; }
-  .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed var(--line-strong); border-radius: 4px;
-    color: var(--mute); font-size: 10px; padding: 2px 6px; pointer-events: none; }
+  .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--gap);
+    color: var(--mute); font-size: 10px; padding: 2px 6px; pointer-events: none; overflow: hidden; white-space: nowrap; }
   .words { position: relative; height: 22px; border-bottom: 1px solid var(--line); overflow: hidden; }
   .word { position: absolute; top: 3px; font-size: 10px; color: var(--mute); white-space: nowrap;
     padding: 0 2px; border-left: 1px solid var(--line); }
   .word.hit { color: var(--ink); }
-  .markers { position: absolute; left: 0; right: 0; top: 40px; bottom: 0; pointer-events: none; }
+  .markers { position: absolute; left: 0; right: 0; top: 48px; bottom: 0; pointer-events: none; }
   .tmark { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px solid var(--accent);
     opacity: .55; }
   .playhead { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--accent);
@@ -537,11 +542,13 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   }
   var GUTTER = 48, MIN_PPS = 8;
   function extent() {
-    // Fit to what is cut, not to the declared duration: a 120s sequence with
-    // 54s of picture would otherwise spend half the width on the empty tail.
+    // Fit the whole sequence, like Final Cut's zoom to fit. Until 0.31 this
+    // fitted the clips only, because a ripple left the sequence's declared
+    // duration stale and the tail was empty; the writer now keeps them in
+    // step, and a tail that IS in the file is drawn rather than cut at the edge.
     var p = state.payload, end = 0;
     p.clips.forEach(function (c) { end = Math.max(end, frac(c.end)); });
-    return end || frac(p.duration) || 1;
+    return Math.max(end, frac(p.duration)) || 1;
   }
   function fit() {
     var w = $("scroller").clientWidth - GUTTER - 24;
@@ -562,16 +569,22 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     // chapter marker lives on its clip in FCPXML; every m.start is already
     // on the sequence clock), left to right, a name dropped when it would
     // overprint the previous one.
-    var lastLabelEnd = -1, named = p.markers.slice();
+    canvas.appendChild(ruler);  // attached first, so label widths below are measured, not guessed
+    var rowEnd = [-1, -1], named = p.markers.slice();
     p.clips.forEach(function (c) { (c.markers || []).forEach(function (m) { named.push(m); }); });
     named.sort(function (a, b) { return frac(a.start) - frac(b.start); });
     named.forEach(function (m) {
       var left = x(frac(m.start));
-      var lab = el("div", "mlabel", left - lastLabelEnd > 8 ? m.name : ""); lab.style.left = left + "px"; lab.title = m.name;
-      ruler.appendChild(lab); lastLabelEnd = Math.max(lastLabelEnd, left + (lab.textContent ? m.name.length * 6 + 10 : 2));
+      var lab = el("div", "mlabel", m.name); lab.style.left = left + "px"; lab.title = m.name;
+      ruler.appendChild(lab);
+      // The first of two rows the name fits on; on neither, the flag stays
+      // and the name is hidden (fitLabels), never printed over its neighbour.
+      var row = left > rowEnd[0] + 4 ? 0 : (left > rowEnd[1] + 4 ? 1 : -1);
+      if (row === 1) lab.classList.add("row1");
+      if (row < 0) { lab.classList.add("unfit", "crowded"); return; }
+      rowEnd[row] = left + lab.offsetWidth;
     });
     ruler.addEventListener("mousedown", rulerDown);
-    canvas.appendChild(ruler);
     var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
     p.lanes.forEach(function (lane) {
       var row = el("div", "lane " + lane.kind);
@@ -603,6 +616,28 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var ph = el("div", "playhead"); ph.id = "playhead"; canvas.appendChild(ph);
     var rg = el("div", "range"); rg.id = "range"; rg.hidden = true; canvas.appendChild(rg);
     placePlayhead();
+    fitLabels();
+  }
+  // Every label is either whole and inside the visible track area, or hidden.
+  // A clip label wider than its clip loses its role, then itself; a tick,
+  // marker or gap label that crosses the visible edge (the scroller's right
+  // side, or the sticky lane gutter on the left) hides its text until a
+  // scroll brings it fully into view. Its line, flag or clip stays drawn.
+  function fitLabels() {
+    var sc = $("scroller"); if (!sc || sc.hidden) return;
+    var r = sc.getBoundingClientRect(), left = r.left + GUTTER, right = r.right - 1;
+    sc.querySelectorAll(".clip .label").forEach(function (l) {
+      var role = l.querySelector(".role");
+      if (role && l.scrollWidth > l.clientWidth + 0.5) role.remove();
+      l.classList.toggle("unfit", l.scrollWidth > l.clientWidth + 0.5);
+    });
+    sc.querySelectorAll(".tick, .mlabel:not(.crowded), .gap, .clip .label:not(.unfit)").forEach(function (e) {
+      // The TEXT's extent, not the element's: a clip label's block is as wide
+      // as its clip, which may run past the view while the name itself is in it.
+      var range = document.createRange(); range.selectNodeContents(e);
+      var b = range.getBoundingClientRect(), own = e.scrollWidth > e.clientWidth + 0.5 && !e.classList.contains("tick") && !e.classList.contains("mlabel");
+      e.classList.toggle("unfit", own || b.left < left - 0.5 || b.right > right + 0.5);
+    });
   }
   function clipEl(c) {
     var thumbed = !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
@@ -612,7 +647,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     if (thumbed) { var img = document.createElement("img"); img.src = c.thumb; img.alt = ""; e.appendChild(img); }
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
-    if (wpx >= 28) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
+    if (wpx >= 20) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
     e.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); state.playhead = frac(c.start); placePlayhead(); });
     return e;
   }
@@ -680,7 +715,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   $("zin").addEventListener("click", function () { state.pps *= 1.5; draw(); });
   $("zout").addEventListener("click", function () { state.pps = Math.max(2, state.pps / 1.5); draw(); });
   window.addEventListener("resize", function () { if (state.payload) { draw(); } });
-  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state };
+  $("scroller").addEventListener("scroll", fitLabels);
+  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels };
 
   // ---- boot --------------------------------------------------------------
   state.inHost = window.parent && window.parent !== window;

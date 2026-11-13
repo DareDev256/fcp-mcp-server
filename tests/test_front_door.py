@@ -85,13 +85,17 @@ def test_the_sweep_actually_walks_the_repo():
 
 NAME = "fcp-mcp-server"
 SUBTITLE = "reads and writes FCPXML, no plugin, no patch"
+BENEFIT = "Edit Final Cut Pro by talking to Claude, and watch the cut change."
 
 
-def test_readme_opens_with_the_name_and_subtitle():
-    lines = (REPO / "README.md").read_text(encoding="utf-8").splitlines()
-    heading = next(line for line in lines if line.startswith("# "))
-    assert heading == f"# {NAME}"
-    assert any(SUBTITLE in line for line in lines[:12])
+def test_readme_opens_with_the_name_then_the_benefit_then_the_subtitle():
+    lines = [line for line in (REPO / "README.md").read_text(encoding="utf-8").splitlines() if line.strip()]
+    at = next(i for i, line in enumerate(lines) if line.startswith("# "))
+    assert lines[at] == f"# {NAME}"
+    assert lines[at + 1] == f"**{BENEFIT}**"
+    # non-breaking spaces keep "no plugin, no patch" together on a phone
+    assert lines[at + 2].replace("&nbsp;", " ") == SUBTITLE
+    assert "no&nbsp;patch" in lines[at + 2]
 
 
 def test_every_display_name_is_the_one_name():

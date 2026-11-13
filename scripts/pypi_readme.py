@@ -135,6 +135,10 @@ def check(artifacts: list[Path], fetch: bool) -> list[str]:
         problems += [f"{artifact.name}: relative target {t!r}" for t in relative_targets(text)]
         if "mcp-name: io.github.DareDev256/" not in text:
             problems.append(f"{artifact.name}: the MCP registry ownership marker is missing")
+        # PyPI serves images through its camo proxy, which refuses an SVG from
+        # raw.githubusercontent.com (served as text/plain): use a PNG.
+        problems += [f"{artifact.name}: SVG from the repository {u!r}; PyPI's image proxy may refuse it, use a PNG"
+                     for u in media_urls(text) if u.startswith("https://raw.githubusercontent.com/") and u.endswith(".svg")]
         if fetch:
             for url in media_urls(text):
                 code = status(url)

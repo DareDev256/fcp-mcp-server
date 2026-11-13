@@ -37,16 +37,39 @@ listed under Changed, so a cut in progress can tell which apply.
   (`price_source`), says whether that page is the vendor's own
   (`price_confirmed_on_vendor_page`), prints UNVERIFIED when it is not, and
   says how many days old the table is.
-- **The README hero opens on the finished cut** in both the GIF and the MP4,
-  from the generator (`demo/hero/record.js` rotates the loop); the GIF's
-  first frame had been fixed by hand in a51c13b and a rebuild would have lost
-  it, and the MP4 still opened on "Waiting for a timeline". Its synthesised
-  footage is on the palette too.
+- **A ripple that removes time removes it from the sequence.** Every rippled
+  edit (silence and transcript cuts, rippled deletes) moved the later clips
+  and left the sequence's declared `duration` alone, so cutting 6.33 s out of
+  a 37 s cut wrote a file that still said 37 s, and the removed time came
+  back as an empty tail in the app and in every report that reads the
+  duration. A sequence that ended where its spine ended still does after the
+  ripple; one that declared a deliberate run-out keeps it.
+- **The `view` app never draws a cut label.** A clip name, ruler time, marker
+  name or gap label that does not fit is hidden whole (its clip, tick or flag
+  stays, the name is in the tooltip) instead of printing "Ope...", "00:" or
+  "00:00:2("; marker names take a second row before giving up, so a marker
+  is no longer dropped without a trace; the view fits the whole sequence
+  (zoom to fit), and the gap hatch is drawn on gaps only.
+- **The legacy `preview://` page**: clip fills read at 3:1 against their
+  lane with a thin accent strip on top, and a name that does not fit its
+  block is hidden (pure CSS; the page has no script) instead of cut to "O.".
+- **The README hero opens on the finished cut.** The GIF opens on it and then
+  plays the story; the MP4 plays the story in order and carries the finished
+  frame as its poster (an attached picture), so it never jumps finished,
+  empty, finished. The GIF's first frame had been fixed by hand in a51c13b
+  and a rebuild would have lost it; the generator does it now. The demo was
+  recomposed: a taller window so the SERVER panel ends inside it, the
+  "re-rendered from" caption inside that panel, short source names so every
+  clip name fits, neutral grey stills for thumbnails (nothing competes with
+  the cyan), and a 10 s B-roll. The recorder refuses to write a frame with a
+  hidden name, a chat line wider than its column, a cut SERVER panel or a
+  caption outside it.
 
 ### Added (tooling, no new operations)
 - `scripts/social_card.py`: the 1280x640 GitHub card from the palette and a
-  real frame of the app, with no version and no star count; it refuses to
-  write a card whose text collides with the picture.
+  real frame (the prompt and tool calls beside the finished timeline,
+  `docs/assets/card-frame.png`), with no version and no star count; it
+  refuses to write a card whose text wraps, collides or leaves the card.
   `scripts/check_social_preview.py` compares what github.com serves with it.
 - `scripts/logo.py`: the logo redrawn in code from the tokens (SVG + PNG).
 - `scripts/pypi_readme.py` and two publish steps: the README's relative
@@ -60,7 +83,9 @@ listed under Changed, so a cut in progress can tell which apply.
   Apple); Mac only (Final Cut for iPad has no FCPXML path); the MCP protocol
   as a dated spec version; SpliceKit's last release re-read; the roadmap
   through 0.31.0; one name, `fcp-mcp-server`, with the subtitle "reads and
-  writes FCPXML, no plugin, no patch"; three badges on one hue; the logo.
+  writes FCPXML, no plugin, no patch" under the bold benefit line; three
+  badges on one hue with dark text; the logo (a PNG, so PyPI shows it), with
+  a lifted grey tile that still reads at 52 px on black; the hero GIF inline.
 
 ### Tests
 - `test_palette.py`: every colour in a surface file is a token; tokens are
@@ -74,6 +99,17 @@ listed under Changed, so a cut in progress can tell which apply.
   are at zero outside this changelog; one display name.
 - `test_pypi_readme.py`, and in `test_gen.py` the price table's sources and
   its age (red after 45 days, which the daily CI run notices).
+- `test_app_labels.py`: the real app shell in headless Chromium at 1440 and
+  390 on both fixtures and a stress payload; any visible label that is
+  truncated, outside its clip or cut by the view fails it, and so does a cut
+  name on the legacy page. A new CI job (`rendered-labels`) installs the
+  browser and runs it, failing rather than skipping without one.
+- `test_sequence_duration.py`: a cut and a rippled delete shorten a sequence
+  that ended with its spine, on a 0 s and a 01:00:00:00 start; a deliberate
+  run-out is kept.
+- The badge colour must be past shields.io's dark-text line (white on
+  `#00E5FF` read at 1.8:1), the version badge must be dynamic, block fills
+  must read at 3:1, and the PyPI check refuses an SVG from the repository.
 - Every new guard has a test that plants the failure and sees it go red.
 
 ## [0.30.0] - 2026-11-02

@@ -8,6 +8,11 @@ a playhead through the middle clip and two ``</>`` glyphs, redrawn in code so
 its colours are tokens (``fcpxml/palette.py``) instead of a purple bitmap that
 could only be recoloured by hand. The glyphs are strokes, not text, so the SVG
 looks the same wherever it is rendered.
+
+Small sizes: the tile is a lifted grey with black lane slots, so it still
+reads as a tile on a true-black page at 52 to 58 px (a black tile vanished
+there), and ``svg(glyphs=False)`` drops the ``</>`` marks for anything drawn
+at 64 px or smaller, where they turn to noise. The social card uses that one.
 """
 
 from __future__ import annotations
@@ -20,37 +25,35 @@ sys.path.insert(0, str(REPO))
 from fcpxml import palette  # noqa: E402
 
 ASSETS = REPO / "docs" / "assets"
+SMALL = 64  # px: at or below this, draw without the glyphs
 
 
-def svg() -> str:
+def svg(glyphs: bool = True) -> str:
     t = palette.dark
     lanes = "".join(
-        f'<rect x="88" y="{y}" width="224" height="36" rx="9" fill="{t("raised")}"/>' for y in (128, 182, 236)
+        f'<rect x="84" y="{y}" width="232" height="40" rx="10" fill="{t("ground")}"/>' for y in (124, 180, 236)
     )
 
     def glyph(x: float, y: float) -> str:
-        # "</>" in strokes, 46 wide and 20 tall, centred on (x, y)
+        # "</>" in strokes, 48 wide and 22 tall, centred on (x, y)
         return (
-            f'<g fill="none" stroke="{t("ink")}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">'
-            f'<polyline points="{x - 15},{y - 8} {x - 23},{y} {x - 15},{y + 8}"/>'
-            f'<line x1="{x + 4}" y1="{y - 10}" x2="{x - 4}" y2="{y + 10}"/>'
-            f'<polyline points="{x + 15},{y - 8} {x + 23},{y} {x + 15},{y + 8}"/></g>'
+            f'<g fill="none" stroke="{t("ink")}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">'
+            f'<polyline points="{x - 15},{y - 9} {x - 24},{y} {x - 15},{y + 9}"/>'
+            f'<line x1="{x + 4}" y1="{y - 11}" x2="{x - 4}" y2="{y + 11}"/>'
+            f'<polyline points="{x + 15},{y - 9} {x + 24},{y} {x + 15},{y + 9}"/></g>'
         )
 
+    marks = f"{glyph(266, 144)}{glyph(134, 256)}" if glyphs else ""
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">'
         '<title>fcp-mcp-server</title>'
-        f'<defs><filter id="glow" x="-40%" y="-80%" width="180%" height="260%">'
-        f'<feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="{t("accent")}" flood-opacity="0.55"/>'
-        '</filter></defs>'
-        f'<rect x="40" y="40" width="320" height="320" rx="72" fill="{t("ground")}" '
-        f'stroke="{t("line-strong")}" stroke-width="2"/>'
+        f'<rect x="36" y="36" width="328" height="328" rx="76" fill="{t("raised-2")}"/>'
         f'{lanes}'
-        f'<rect x="88" y="128" width="84" height="36" rx="9" fill="{t("accent")}"/>'
-        f'<rect x="156" y="182" width="88" height="36" rx="9" fill="{t("accent")}" filter="url(#glow)"/>'
-        f'<rect x="228" y="236" width="84" height="36" rx="9" fill="{t("accent")}"/>'
-        f'{glyph(262, 146)}{glyph(138, 254)}'
-        f'<line x1="200" y1="110" x2="200" y2="290" stroke="{t("ink")}" stroke-width="3" stroke-linecap="round"/>'
+        f'<rect x="84" y="124" width="92" height="40" rx="10" fill="{t("accent")}"/>'
+        f'<rect x="150" y="180" width="100" height="40" rx="10" fill="{t("accent")}"/>'
+        f'<rect x="224" y="236" width="92" height="40" rx="10" fill="{t("accent")}"/>'
+        f'{marks}'
+        f'<line x1="200" y1="104" x2="200" y2="296" stroke="{t("ink")}" stroke-width="6" stroke-linecap="round"/>'
         '</svg>'
     )
 

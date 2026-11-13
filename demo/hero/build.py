@@ -7,8 +7,10 @@ One command re-records it:
 
 What it does, in order:
 
-1. Synthesises four source clips with ffmpeg (slow colour gradients, 24 fps;
-   the interview take carries two stretches of real silence in its audio).
+1. Synthesises four source clips with ffmpeg (still, neutral grey radial
+   gradients at 24 fps, so the thumbnails never compete with the cyan the
+   app marks things with; the take carries two stretches of real silence in
+   its audio). Short source names, so every clip name fits on its clip.
    Nothing is kept as a fixture; the media is rebuilt every run.
 2. Runs the REAL tool handlers through ``server.call_tool`` — the same entry
    an MCP client reaches — and keeps every ``view_timeline`` result verbatim:
@@ -32,12 +34,14 @@ What it does, in order:
    the palette) plus the ``ui://fcp/timeline`` resource as served, then runs
    ``record.js`` (Playwright) to capture frames from the stub host page, and
    ffmpeg to encode ``docs/assets/hero-watch-claude-cut.{mp4,gif}``.
-4. The loop starts on the finished cut (``LOOP_START``), not on the empty
+4. The GIF opens on the finished cut (``LOOP_START``), not on the empty
    "waiting for a timeline" frame, so a viewer that shows only the first
-   frame (PyPI, a paused GIF, a link unfurl) sees the product. The recorder
-   also writes ``docs/assets/hero-still.png``, a 2x still of that frame and
-   the README's top image, and ``docs/assets/timeline-app-frame.png``, the
-   app alone, which ``scripts/social_card.py`` builds the GitHub card from.
+   frame (the README, PyPI, a paused GIF) sees the product. The MP4 plays the
+   story in order and carries that finished frame as its poster (an attached
+   picture), so it never jumps finished, empty, finished. The recorder also
+   writes ``docs/assets/hero-still.png`` (the finished frame, 2x) and
+   ``docs/assets/card-frame.png`` (the conversation beside the finished
+   timeline), which ``scripts/social_card.py`` builds the GitHub card from.
 
 Every colour, footage included, is a token from ``fcpxml/palette.py``.
 
@@ -82,16 +86,18 @@ def _tokens(*names: str) -> tuple[str, ...]:
 
 
 # name -> (seconds, gradient colours, audio expression or None)
-# The interview's audio is a 220 Hz tone with two stretches of digital silence
+# The take's audio is a 220 Hz tone with two stretches of digital silence
 # (6.0-9.5 s and 15.0-18.0 s): that is the dead air remove_media_silence cuts.
 CLIPS = {
-    "Opening": (4, _tokens("ground", "mute", "panel"), None),
-    "Interview_Take": (22, _tokens("light:accent", "accent", "ground"),
-                       "0.25*sin(2*PI*220*t)*(between(t,0,6)+between(t,9.5,15)+between(t,18,22))"),
-    "Studio": (5, _tokens("panel", "ink", "raised-2"), None),
-    "Closing": (4, _tokens("ground", "light:accent", "line-strong"), None),
+    "Opening": (5, _tokens("line-strong", "ground"), None),
+    "Take": (22, _tokens("mute", "raised-2"),
+             "0.25*sin(2*PI*220*t)*(between(t,0,6)+between(t,9.5,15)+between(t,18,22))"),
+    "Studio": (5, _tokens("ink", "line-strong"), None),
+    "Closing": (5, _tokens("raised-2", "ground"), None),
 }
-MOCK_BROLL = _tokens("panel", "accent", "ink")
+TAKE = "Take"
+MOCK_BROLL = _tokens("light:mute", "panel")
+BROLL_SECONDS = 10
 
 
 def ffmpeg(*args: str) -> None:
@@ -99,9 +105,9 @@ def ffmpeg(*args: str) -> None:
 
 
 def synth(path: Path, seconds: int, colours, audio: str | None) -> None:
-    c0, c1, c2 = colours
-    video = (f"gradients=s=1280x720:c0={c0}:c1={c1}:c2={c2}:nb_colors=3:"
-             f"speed=0.012:type=linear:r={FPS}:d={seconds}")
+    c0, c1 = colours
+    video = (f"gradients=s=1280x720:c0={c0}:c1={c1}:nb_colors=2:"
+             f"speed=0:type=radial:r={FPS}:d={seconds}")
     cmd = ["-f", "lavfi", "-i", video]
     if audio:
         cmd += ["-f", "lavfi", "-i", f"aevalsrc='{audio}':s=48000:d={seconds}"]
@@ -145,7 +151,7 @@ def main() -> None:
     for name, (seconds, colours, audio) in CLIPS.items():
         synth(media / f"{name}.mov", seconds, colours, audio)
     mock_clip = media / "mock-provider-broll.mp4"
-    synth(mock_clip, 5, MOCK_BROLL, None)
+    synth(mock_clip, BROLL_SECONDS, MOCK_BROLL, None)
 
     def call(tool: str, action: str, args: dict) -> str:
         return text_of(asyncio.run(server.call_tool(tool, {"action": action, "args": args})))
@@ -177,13 +183,13 @@ def main() -> None:
     states.append({"call": "view · view_timeline", "result": v0})
 
     r_silence = call("edit", "remove_media_silence",
-                     {"filepath": str(cut), "clip_name": "Interview_Take", "min_silence": 1.0,
+                     {"filepath": str(cut), "clip_name": TAKE, "min_silence": 1.0,
                       "output_path": str(project / "cut_silence_removed.fcpxml")})
     s1 = saved(r_silence)
     v1, p1 = view(s1)
     states.append({"call": "edit · remove_media_silence", "result": v1})
     removed = re.search(r"\*\*Total Removed\*\*: ([^\n]+)", r_silence).group(1).strip()
-    spans = sum(int(n) for n in re.findall(r"\| Interview_Take \| (\d+) \|", r_silence))
+    spans = sum(int(n) for n in re.findall(rf"\| {TAKE} \| (\d+) \|", r_silence))
 
     # One marker per section: the first clip of each source name, in timeline order.
     def tc(fraction: str) -> str:
@@ -204,7 +210,7 @@ def main() -> None:
     v2, p2 = view(s2)
     states.append({"call": "mark · batch_add_markers", "result": v2})
 
-    r_quote = call("gen", "gen_quote", {"provider": "fal", "seconds": 5, "prompt": BROLL_PROMPT})
+    r_quote = call("gen", "gen_quote", {"provider": "fal", "seconds": BROLL_SECONDS, "prompt": BROLL_PROMPT})
     quote_id = re.search(r"Quote (\w+)", r_quote).group(1)
     price = re.search(r"Estimated: (\$[\d.]+)", r_quote).group(1)
     model = re.search(r"— (fal/[\w.-]+)", r_quote).group(1)
@@ -219,8 +225,8 @@ def main() -> None:
     gen.provider_for = lambda p, m=None: MockProvider(gen.resolve_model(p, m))
     try:
         r_broll = call("gen", "gen_broll",
-                       {"filepath": str(s2), "clip_name": "Interview_Take", "prompt": BROLL_PROMPT,
-                        "seconds": 5, "at": 1, "quote_id": quote_id, "confirm": True,
+                       {"filepath": str(s2), "clip_name": TAKE, "prompt": BROLL_PROMPT,
+                        "seconds": BROLL_SECONDS, "at": 1, "quote_id": quote_id, "confirm": True,
                         "output_path": str(project / "cut_broll.fcpxml")})
     finally:
         gen.provider_for = real_provider_for
@@ -281,8 +287,13 @@ def encode(work: Path) -> None:
     frames = str(work / "frames" / "%05d.png")
     mp4 = ASSETS / "hero-watch-claude-cut.mp4"
     gif = ASSETS / "hero-watch-claude-cut.gif"
-    ffmpeg("-framerate", "30", "-i", frames, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22",
-           "-preset", "slow", "-movflags", "+faststart", str(mp4))
+    poster = ASSETS / "hero-still.png"
+    # The MP4 plays the story in order and carries the finished frame as its
+    # poster (an attached picture), so a player shows the finished cut before
+    # play without the video itself jumping from finished to empty.
+    ffmpeg("-framerate", "30", "-i", frames, "-i", str(poster), "-map", "0:v", "-map", "1:v",
+           "-c:v:0", "libx264", "-pix_fmt:v:0", "yuv420p", "-crf", "22", "-preset", "slow",
+           "-c:v:1", "mjpeg", "-disposition:v:1", "attached_pic", "-movflags", "+faststart", str(mp4))
     # Pillow writes the GIF: one global palette drawn from sample frames,
     # every frame quantised to it, identical consecutive frames merged and
     # each frame cropped to the pixels that changed. ffmpeg 9.0's gif muxer
@@ -294,6 +305,10 @@ def encode(work: Path) -> None:
         sys.exit("Pillow is needed to write the GIF: uv run --with pillow demo/hero/build.py")
     sources = sorted((work / "frames").glob("*.png"))
     picks = [sources[min(len(sources) - 1, round(i * 30 / GIF_FPS))] for i in range(round(len(sources) * GIF_FPS / 30))]
+    # The GIF loops and shows its first frame before it plays: start it on the
+    # finished cut, then the story from the empty frame.
+    turn = round(LOOP_START * GIF_FPS) % len(picks)
+    picks = picks[turn:] + picks[:turn]
 
     def small(path: Path) -> Image.Image:
         im = Image.open(path).convert("RGB")

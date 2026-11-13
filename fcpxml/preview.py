@@ -28,7 +28,15 @@ from .rational import fcp_frame_rate_name
 # every lane had its own hue (purple, pink, amber, green, cyan, yellow) and
 # the spine was default blue: four palettes on one product. Lanes now read as
 # separate layers by their row and label, and adjacent spine clips by
-# alternating two neutral fills (CSS nth-of-type); the accent marks markers.
+# alternating two neutral fills (CSS nth-of-type). Every fill reads at 3:1 or
+# better against its lane (palette.FILL_PAIRS) and carries a thin accent strip
+# on top; the accent also marks markers.
+#
+# A clip name that does not fit its block is HIDDEN, never cut to "O." or
+# "S...": the page has no script, so the rule is CSS. The name sits in a
+# one-line-tall wrapping flex row behind a zero-width spacer; a name wider
+# than the block wraps to the second flex line, which the row clips away.
+# The block keeps its title tooltip.
 
 
 def _left_width(offset_seconds: float, duration_seconds: float, total: float) -> tuple[float, float]:
@@ -52,7 +60,7 @@ def _render_clip_block(name: str, left: float, width: float, seconds: float, css
     return (
         f'<div class="{css_class}" style="left:{left:.3f}%;width:{width:.3f}%" '
         f'title="{escape(str(name))} ({seconds:.2f}s)">'
-        f'<span>{escape(str(name))}</span></div>'
+        f'<span class="fit"><i></i><span>{escape(str(name))}</span></span></div>'
     )
 
 
@@ -168,12 +176,13 @@ def render_timeline_html(timeline) -> str:
   .track {{ position: relative; height: 56px; background: var(--panel);
             border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }}
   .lane-track {{ height: 36px; }}
-  .clip, .lane-clip {{ position: absolute; top: 0; bottom: 0; box-shadow: inset -1px 0 0 var(--ground);
-           display: flex; align-items: center; overflow: hidden; background: var(--raised-2); }}
-  .clip:nth-of-type(even) {{ background: var(--raised); }}
-  .lane-clip {{ background: var(--raised); box-shadow: inset -1px 0 0 var(--ground), inset 0 2px 0 var(--line-strong); }}
-  .clip span, .lane-clip span {{ padding: 0 6px; font-size: 11px; color: var(--ink); white-space: nowrap;
-                overflow: hidden; text-overflow: ellipsis; min-width: 0; }}
+  .clip, .lane-clip {{ position: absolute; top: 0; bottom: 0; display: flex; align-items: center; overflow: hidden;
+           background: var(--mute); box-shadow: inset -1px 0 0 var(--ground), inset 0 3px 0 var(--accent); }}
+  .clip:nth-of-type(even) {{ background: var(--ink); }}
+  .fit {{ display: flex; flex-wrap: wrap; align-content: flex-start; box-sizing: border-box; width: 100%;
+          height: 15px; line-height: 15px; overflow: hidden; padding: 0 6px; }}
+  .fit i {{ flex: none; width: 0; height: 15px; }}
+  .fit span {{ flex: none; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--ground); }}
   .markers {{ position: relative; height: 14px; margin-top: 6px; }}
   .marker {{ position: absolute; width: 2px; height: 14px; background: var(--accent); }}
 </style>

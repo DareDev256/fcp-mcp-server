@@ -80,6 +80,18 @@ def test_check_goes_red_on_a_relative_image(tmp_path):
     assert problems and "relative target 'docs/assets/hero-still.png'" in problems[0]
 
 
+def test_check_goes_red_on_an_svg_from_the_repository(tmp_path):
+    """Mutation check: an SVG logo pinned to raw.githubusercontent fails the release."""
+    body = pypi_readme.rewrite('<img src="docs/assets/logo.svg">\n`mcp-name: io.github.DareDev256/x`\n', "v9.9.9")
+    problems = pypi_readme.check([_wheel(tmp_path, body)], fetch=False)
+    assert problems and "use a PNG" in problems[0]
+
+
+def test_the_readme_shows_no_svg_from_the_repository():
+    text = pypi_readme.rewrite((REPO / "README.md").read_text(encoding="utf-8"), "v9.9.9")
+    assert [u for u in pypi_readme.media_urls(text) if u.startswith(RAW) and u.endswith(".svg")] == []
+
+
 def test_check_goes_red_without_the_registry_marker(tmp_path):
     problems = pypi_readme.check([_wheel(tmp_path, "nothing here\n")], fetch=False)
     assert any("registry ownership marker" in p for p in problems)

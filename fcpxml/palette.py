@@ -35,12 +35,17 @@ TOKENS: dict[str, tuple[str, str]] = {
     "accent-fill": ("#00E5FF", "#00E5FF"),  # primary button fill (black ink on it)
     "accent-ink": ("#000000", "#000000"),   # text on accent-fill
     "accent-wash": ("#00E5FF1F", "#007A8A1F"),  # a selected range
+    # The README badges only. shields.io chooses the badge text itself: white
+    # on anything darker than brightness 0.69 ((299R + 587G + 114B) / 255000),
+    # and #00E5FF is 0.64, so white text sat on it at 1.8:1. This is the
+    # accent's own hue lifted just past that line, where shields draws #333.
+    "badge": ("#33EBFF", "#33EBFF"),
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
     "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
     "danger": ("#FF3B30", "#D70015"),       # FAIL and removed spans, nothing else
 }
 
-ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash")
+ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash", "badge")
 DANGER_TOKENS = ("danger",)
 
 # Text-on-background pairs that must read at 4.5:1 or better, in both modes.
@@ -51,11 +56,25 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
     ("accent-ink", "accent-fill"),
     ("on-media", "shade"),
     ("danger", "ground"),
+    ("ground", "mute"), ("ground", "ink"),  # names on the legacy preview's clip fills
 )
 
-# The README badges: black label, cyan message, black text on the cyan.
+# Fills a block sits on, against the ground it sits on: 3:1 or better, so a
+# clip reads as a shape before its name is read (WCAG 1.4.11, non-text).
+FILL_PAIRS: tuple[tuple[str, str], ...] = (
+    ("mute", "panel"), ("ink", "panel"),
+)
+
+# The README badges: black label, cyan message, dark text on the cyan.
 BADGE_LABEL = "ground"
-BADGE_MESSAGE = "accent-fill"
+BADGE_MESSAGE = "badge"
+SHIELDS_DARK_TEXT_ABOVE = 0.69  # shields.io's brightness threshold for #333 text
+
+
+def shields_brightness(hex_value: str) -> float:
+    """The brightness shields.io compares with SHIELDS_DARK_TEXT_ABOVE."""
+    r, g, b = rgb(hex_value)
+    return (r * 299 + g * 587 + b * 114) / 255000
 
 # Hexes that left the surfaces in 0.31. Named so the test can say which one
 # came back rather than only that something did.

@@ -2,17 +2,19 @@
 
     uv run --with playwright scripts/social_card.py     # from the repo root
 
-Writes ``docs/assets/social-card.png``. The picture on the right is
-``docs/assets/timeline-app-frame.png``, the ``ui://fcp/timeline`` app as the
-hero recorder captured it drawing a real ``view_timeline`` result
-(``demo/hero/build.py``); re-record the hero and re-run this to refresh it.
+Writes ``docs/assets/social-card.png``. The picture is
+``docs/assets/card-frame.png``: the prompt and the tool calls beside the
+finished ``ui://fcp/timeline`` app, as the hero recorder captured them from a
+real ``view_timeline`` result (``demo/hero/build.py``). "Talking to Claude"
+is the claim, so the conversation is in the picture; the idle selection
+panel is not. Re-record the hero and re-run this to refresh it.
 
 The card carries no version and no star count. The card it replaces showed
 a version and a star count that stayed frozen for seventeen releases, because
 a number printed into an image goes stale the day it is uploaded and GitHub
-has no API to replace the image. Uploading is one step in the repo's Settings (Social preview);
-``scripts/check_social_preview.py`` then compares what github.com serves with
-this file.
+has no API to replace the image. Uploading is one step in the repo's Settings
+(Social preview); ``scripts/check_social_preview.py`` then compares what
+github.com serves with this file.
 
 Before writing, the layout is measured in the browser and the script REFUSES
 (exit 1) when any text box overlaps the picture or another text box, or runs
@@ -33,13 +35,13 @@ sys.path.insert(0, str(REPO / "scripts"))
 import logo  # noqa: E402
 
 ASSETS = REPO / "docs" / "assets"
-FRAME = ASSETS / "timeline-app-frame.png"
+FRAME = ASSETS / "card-frame.png"
 OUT = ASSETS / "social-card.png"
 WIDTH, HEIGHT = 1280, 640
 
 NAME = "fcp-mcp-server"
-SUBTITLE = "reads and writes FCPXML, no plugin, no patch"
 PROMISE = "Edit Final Cut Pro by talking to Claude, and watch the cut change."
+SUBTITLE = "reads and writes FCPXML, no plugin, no patch"
 INSTALL = "uvx fcp-mcp-server"
 
 
@@ -50,25 +52,26 @@ def html(frame_png: bytes) -> str:
   html, body {{ margin: 0; width: {WIDTH}px; height: {HEIGHT}px; overflow: hidden; background: {t("ground")}; }}
   body {{ position: relative; font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
          color: {t("ink")}; }}
-  #copy {{ position: absolute; left: 64px; top: 64px; width: 470px; bottom: 64px;
-          display: flex; flex-direction: column; }}
-  #mark {{ width: 64px; height: 64px; margin: 0 0 28px -6px; }}
-  #mark svg {{ width: 64px; height: 64px; display: block; }}
-  #name {{ font-size: 60px; line-height: 1; font-weight: 700; letter-spacing: -0.035em; margin: 0; }}
-  #subtitle {{ margin: 16px 0 0; font-size: 21px; line-height: 1.3; color: {t("mute")}; }}
-  #promise {{ margin: 34px 0 0; font-size: 31px; line-height: 1.22; font-weight: 600; letter-spacing: -0.01em; }}
-  #install {{ margin-top: auto; align-self: flex-start; font: 600 19px/1 ui-monospace, "SF Mono", Menlo, monospace;
-             color: {t("accent")}; border: 1px solid {t("line-strong")}; border-radius: 8px; padding: 11px 14px; }}
-  #shot {{ position: absolute; left: 568px; top: 57px; width: 680px; border-radius: 14px;
-          border: 1px solid {t("line-strong")}; overflow: hidden; background: {t("ground")}; }}
+  #head {{ position: absolute; left: 56px; right: 56px; top: 40px; display: grid;
+          grid-template-columns: auto 1fr auto; column-gap: 18px; row-gap: 10px; align-items: center; }}
+  #mark {{ width: 58px; height: 58px; grid-row: 1 / span 2; align-self: start; }}
+  #mark svg {{ width: 58px; height: 58px; display: block; }}
+  #name {{ font-size: 46px; line-height: 1; font-weight: 700; letter-spacing: -0.035em; margin: 0; }}
+  #install {{ justify-self: end; font: 600 18px/1 ui-monospace, "SF Mono", Menlo, monospace; color: {t("accent")};
+             border: 1px solid {t("line-strong")}; border-radius: 8px; padding: 10px 13px; }}
+  #promise {{ grid-column: 2 / span 2; margin: 0; font-size: 25px; line-height: 1.2; font-weight: 600;
+             letter-spacing: -0.01em; }}
+  #subtitle {{ grid-column: 2 / span 2; margin: -4px 0 0; font-size: 17px; color: {t("mute")}; }}
+  #shot {{ position: absolute; left: 50%; transform: translateX(-50%); bottom: 34px; width: 1168px;
+          border: 1px solid {t("line")}; border-radius: 14px; overflow: hidden; background: {t("ground")}; }}
   #shot img {{ display: block; width: 100%; }}
 </style></head><body>
-<div id="copy">
-  <div id="mark">{logo.svg()}</div>
+<div id="head">
+  <div id="mark">{logo.svg(glyphs=False)}</div>
   <h1 id="name">{NAME}</h1>
-  <p id="subtitle">{SUBTITLE}</p>
-  <p id="promise">{PROMISE}</p>
   <div id="install">{INSTALL}</div>
+  <p id="promise">{PROMISE}</p>
+  <p id="subtitle">{SUBTITLE}</p>
 </div>
 <div id="shot"><img alt="" src="{shot}"></div>
 </body></html>"""
@@ -81,21 +84,24 @@ MEASURE = """() => {
   const text = (id) => { const el = document.getElementById(id), range = document.createRange();
     range.selectNodeContents(el); const rs = [...range.getClientRects()];
     return { id, x0: Math.min(...rs.map(r => r.left)), y0: Math.min(...rs.map(r => r.top)),
-             x1: Math.max(...rs.map(r => r.right)), y1: Math.max(...rs.map(r => r.bottom)) }; };
-  return { texts: ["name", "subtitle", "promise", "install"].map(id => id === "install" ? box(id) : text(id)),
+             x1: Math.max(...rs.map(r => r.right)), y1: Math.max(...rs.map(r => r.bottom)), lines: rs.length }; };
+  return { texts: [text("name"), text("promise"), text("subtitle"), box("install")],
            mark: box("mark"), shot: box("shot") };
 }"""
 
 
-def collisions(layout: dict, gap: float = 20) -> list[str]:
-    """Every overlap, and every box off the card. Empty means the card is clean."""
+def collisions(layout: dict, gap: float = 12) -> list[str]:
+    """Every overlap, every box off the card, every wrapped line. Empty means clean."""
     problems = []
     boxes = [layout["mark"], *layout["texts"]]
     shot = layout["shot"]
     for b in boxes:
-        if b["x1"] > shot["x0"] - gap:
-            problems.append(f"{b['id']} runs to x={b['x1']:.0f}, into the picture at x={shot['x0']:.0f}")
-        if b["x0"] < 0 or b["y0"] < 0 or b["y1"] > HEIGHT:
+        if b["y1"] > shot["y0"] - gap:
+            problems.append(f"{b['id']} runs to y={b['y1']:.0f}, into the picture at y={shot['y0']:.0f}")
+        if b.get("lines", 1) > 1:
+            problems.append(f"{b['id']} wraps onto {b['lines']} lines")
+    for b in [*boxes, shot]:
+        if b["x0"] < 0 or b["y0"] < 0 or b["x1"] > WIDTH or b["y1"] > HEIGHT:
             problems.append(f"{b['id']} is off the card: {b}")
     for i, a in enumerate(boxes):
         for b in boxes[i + 1:]:
