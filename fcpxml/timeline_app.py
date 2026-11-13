@@ -391,6 +391,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
      ruler tick is its label: one whose time does not fit goes whole, line and all. */
   .mlabel.unfit, .gap.unfit { color: transparent; }
   .tick.unfit { visibility: hidden; }
+  /* A ruler time the playhead would cut through is hidden while it is there. */
+  .tick.under-playhead { visibility: hidden; }
   .clip .label.unfit { visibility: hidden; }
   .lane { position: relative; height: 44px; border-bottom: 1px solid var(--line); }
   .lane.spine { height: 58px; }
@@ -404,7 +406,11 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .lane.spine .clip { background: var(--raised-2); }
   .lane.audio .clip { background: var(--panel); }
   .clip.title { background: var(--raised-2); border-style: dashed; }
-  .clip img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .85; }
+  /* Thumbnails tile along the clip at their own aspect, like Final Cut's filmstrip:
+     never stretched, never one frame blown up to fill a long clip. */
+  .clip .thumbs { position: absolute; inset: 0; opacity: .85; background-repeat: repeat-x;
+    background-size: auto 100%; background-position: left center; }
+  .clip.ghost { pointer-events: none; }
   .clip .label { position: relative; z-index: 1; padding: 2px 6px; font-size: 11px; white-space: nowrap;
     overflow: hidden; color: var(--ink); }
   /* The scrim is FULL shade (75% black) from 10px down, and the text starts at 12px: a
@@ -557,70 +563,150 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // A re-render after an edit MOVES things, the way Final Cut closes a gap: a
   // clip that was split slides its pieces together, the clips after it slide
   // left, a clip that is new is laid in from its left edge, and new markers
-  // land one after another, left to right. Only positions and sizes animate
-  // (and visibility, in steps), never opacity, so no frame shows the old
-  // layout and the new one at once; a clip's name stays hidden while its clip
-  // is too narrow for all of it and a marker lands whole, so no frame shows
-  // part of a name (tests/test_app_motion.py). Web Animations, so a recorder
-  // can pause and seek them (document.getAnimations()).
-  var MOTION = { duration: 400, easing: "cubic-bezier(0.22, 1, 0.36, 1)" };
+  // land one after another, left to right. Undoing it moves back: pieces that
+  // came from one clip merge into it, a clip with no successor shrinks out, and
+  // a marker with none leaves in turn, right to left. Only positions, sizes,
+  // colours and (in steps) visibility animate, never opacity, so no frame
+  // shows the old layout and the new one at once. A clip's scrim is drawn the
+  // whole time; its name stays transparent while the clip is too narrow for
+  // all of it and fades in over 120 ms once it fits, so no frame shows part of
+  // a name (tests/test_app_motion.py). Web Animations, so a recorder can pause
+  // and seek them (document.getAnimations()).
+  var MOTION = { duration: 400, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }, REVEAL_MS = 120, TURN_MS = 90;
   function snapshot() {
-    var s = { pps: state.pps, clips: [], keyed: {} };
-    document.querySelectorAll("#canvas .clip").forEach(function (e) {
-      if (e.__c) s.clips.push({ c: e.__c, left: parseFloat(e.style.left) });
+    var s = { pps: state.pps, clips: [], keyed: {}, els: {} };
+    document.querySelectorAll("#canvas .clip:not(.ghost)").forEach(function (e) {
+      if (e.__c) s.clips.push({ c: e.__c, left: parseFloat(e.style.left), width: parseFloat(e.style.width), el: e,
+                                row: e.parentNode && e.parentNode.dataset.lane });
     });
-    document.querySelectorAll("#canvas .tick, #canvas .mlabel, #canvas .tmark, #canvas .mk").forEach(function (e) {
-      if (e.__key != null) s.keyed[e.__key] = parseFloat(e.style.left);
+    document.querySelectorAll("#canvas .tick, #canvas .mlabel:not(.ghost), #canvas .tmark:not(.ghost), #canvas .mk").forEach(function (e) {
+      if (e.__key != null) { s.keyed[e.__key] = parseFloat(e.style.left); s.els[e.__key] = e; }
     });
     return s;
   }
+  function sameSource(c, o) { return !!c.media && o.c.media === c.media && o.c.lane === c.lane; }
   // The clip this one came from: same media, same lane, and its source in-point
   // inside the old clip's source range (a piece of a split clip, or the clip itself).
   function predecessor(c, olds) {
     var src = frac(c.source_start), hit = null;
     olds.forEach(function (o) {
-      if (hit || !c.media || o.c.media !== c.media || o.c.lane !== c.lane) return;
+      if (hit || !sameSource(c, o)) return;
       var os = frac(o.c.source_start), od = frac(o.c.duration);
       if (src >= os - 1e-6 && src < os + od - 1e-6) hit = o;
     });
     return hit;
   }
-  var HIDE_UNTIL_SETTLED = [{ visibility: "hidden" }, { visibility: "hidden", offset: 0.999 }, { visibility: "visible" }];
+  // The old clips this one swallowed (an undone split: its pieces merge back).
+  function merged(c, olds) {
+    var src = frac(c.source_start), end = src + frac(c.duration);
+    return olds.filter(function (o) {
+      var os = frac(o.c.source_start);
+      return sameSource(c, o) && os >= src - 1e-6 && os < end - 1e-6;
+    }).sort(function (a, b) { return a.left - b.left; });
+  }
+  function overlapsAny(o, clips) {
+    var os = frac(o.c.source_start), oe = os + frac(o.c.duration);
+    return clips.some(function (c) {
+      var cs = frac(c.source_start), ce = cs + frac(c.duration);
+      return sameSource(c, o) && cs < oe - 1e-6 && os < ce - 1e-6;
+    });
+  }
+  // cubic-bezier(0.22, 1, 0.36, 1): the fraction of MOTION's time at which the
+  // eased progress first reaches p (y is monotonic for this curve).
+  function timeForProgress(p) {
+    if (p <= 0) return 0; if (p >= 1) return 1;
+    var bx = function (u) { return 3 * (1 - u) * (1 - u) * u * 0.22 + 3 * (1 - u) * u * u * 0.36 + u * u * u; };
+    var by = function (u) { return 3 * (1 - u) * (1 - u) * u + 3 * (1 - u) * u * u + u * u * u; };
+    var lo = 0, hi = 1;
+    for (var i = 0; i < 40; i++) { var mid = (lo + hi) / 2; if (by(mid) < p) lo = mid; else hi = mid; }
+    return bx(hi);
+  }
+  // Hold el's colours (text, and fill if asked) transparent until its clip,
+  // growing from `from` to `to` px, is `need` px wide; then fade them in.
+  function revealWhenWide(el, from, to, need, fill) {
+    if (need <= from + 0.5) return null;
+    var at = to - from > 0.5 ? timeForProgress((need - from) / (to - from)) * MOTION.duration : MOTION.duration;
+    var total = Math.max(MOTION.duration, at + REVEAL_MS), cs = getComputedStyle(el);
+    var shut = { color: "transparent" }, open = { color: cs.color };
+    if (fill) { shut.backgroundColor = "transparent"; open.backgroundColor = cs.backgroundColor; }
+    var k = [Object.assign({ offset: 0 }, shut), Object.assign({ offset: at / total }, shut), Object.assign({ offset: Math.min(1, (at + REVEAL_MS) / total) }, open)];
+    if (k[2].offset < 1) k.push(Object.assign({ offset: 1 }, open));
+    return el.animate(k, { duration: total, easing: "linear" });
+  }
+  function revealLabel(e, from, to) {
+    var lab = e.querySelector(".label");
+    if (!lab || lab.classList.contains("unfit")) return;
+    var rg = document.createRange(); rg.selectNodeContents(lab);
+    var need = rg.getBoundingClientRect().width + 14;  // padding 12 + borders 2
+    revealWhenWide(lab, from, to, need, false);
+    lab.querySelectorAll(".role").forEach(function (r) { revealWhenWide(r, from, to, need, false); });
+  }
   function animateFrom(s) {
     if (!document.body.animate || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
+    var news = [];
     document.querySelectorAll("#canvas .clip").forEach(function (e) {
-      var c = e.__c, o = c && predecessor(c, s.clips), L = parseFloat(e.style.left), W = parseFloat(e.style.width);
-      var from = 0;
-      if (o) {
+      var c = e.__c, L = parseFloat(e.style.left), W = parseFloat(e.style.width), fl = L, from = 0;
+      if (!c) return;
+      news.push(c);
+      var m = merged(c, s.clips), o = m.length > 1 ? null : predecessor(c, s.clips);
+      if (m.length > 1) {
+        // pieces merging back: from the span they covered
+        fl = m[0].left; from = m[m.length - 1].left + m[m.length - 1].width - fl;
+      } else if (o) {
         // where this piece of footage sat before the edit, at the old scale
-        var fl = o.left + (frac(c.source_start) - frac(o.c.source_start)) * s.pps;
+        fl = o.left + (frac(c.source_start) - frac(o.c.source_start)) * s.pps;
         from = Math.max(3, frac(c.duration) * s.pps - 1);
-        if (Math.abs(fl - L) < 0.5 && Math.abs(from - W) < 0.5) return;
-        e.animate([{ left: fl + "px", width: from + "px" }, { left: L + "px", width: W + "px" }], MOTION);
       } else {
-        e.animate([{ width: "0px" }, { width: W + "px" }], MOTION);  // laid in from its left edge
+        from = 0;  // laid in from its left edge
       }
-      // its name only once the clip is wide enough for all of it
-      var lab = e.querySelector(".label");
-      if (lab && !lab.classList.contains("unfit")) {
-        var rg = document.createRange(); rg.selectNodeContents(lab);
-        if (rg.getBoundingClientRect().width + 14 > from) lab.animate(HIDE_UNTIL_SETTLED, MOTION);  // padding 12 + borders 2
-      }
+      if (Math.abs(fl - L) < 0.5 && Math.abs(from - W) < 0.5) return;
+      e.__motion = { from: from, to: W };
+      e.animate([{ left: fl + "px", width: from + "px" }, { left: L + "px", width: W + "px" }], MOTION);
+      revealLabel(e, from, W);
     });
-    var marks = [];
+    // A clip with no successor shrinks out where it was.
+    s.clips.forEach(function (o) {
+      if (overlapsAny(o, news)) return;
+      var row = document.querySelector('#canvas .lane[data-lane="' + o.row + '"]');
+      if (!row) return;
+      var g = o.el; g.classList.add("ghost"); g.classList.remove("selected");
+      g.querySelectorAll(".label, .mk, .hero-mock").forEach(function (x) { x.style.visibility = "hidden"; });
+      row.appendChild(g);
+      // (hidden at the end even if never removed: a paused recorder never fires finish)
+      var a = g.animate([{ width: o.width + "px" }, { width: "0px", offset: 0.999 }, { width: "0px", visibility: "hidden" }],
+                        Object.assign({ fill: "forwards" }, MOTION));
+      a.onfinish = function () { if (g.parentNode) g.parentNode.removeChild(g); };
+    });
+    var arrive = [], leave = [];
     document.querySelectorAll("#canvas .tick, #canvas .mlabel, #canvas .tmark, #canvas .mk").forEach(function (e) {
       var was = s.keyed[e.__key], L = parseFloat(e.style.left);
       if (was != null) {
         if (Math.abs(was - L) > 0.5 && !e.classList.contains("mk")) e.animate([{ left: was + "px" }, { left: L + "px" }], MOTION);
-      } else if (!e.classList.contains("tick")) marks.push(e);
+      } else if (!e.classList.contains("tick")) arrive.push(e);
     });
-    // New markers land whole, one after another, left to right (a flag and its
-    // clip tick together): hidden until their turn, never part-drawn.
-    var xs = marks.map(function (e) { return e.getBoundingClientRect().left; });
-    var order = xs.slice().sort(function (a, b) { return a - b; }).filter(function (v, i, a) { return i === 0 || v - a[i - 1] > 1; });
-    marks.forEach(function (e, i) {
-      var turn = order.findIndex(function (v) { return Math.abs(v - xs[i]) <= 1; });
-      if (turn > 0) e.animate([{ visibility: "hidden" }, { visibility: "hidden" }], { duration: turn * 90 });
+    var still = {};
+    document.querySelectorAll("#canvas .mlabel, #canvas .tmark").forEach(function (e) { if (e.__key != null) still[e.__key] = true; });
+    Object.keys(s.els).forEach(function (k) {
+      var e = s.els[k];
+      if (still[k] || !(e.classList.contains("mlabel") || e.classList.contains("tmark"))) return;
+      var host = document.querySelector(e.classList.contains("mlabel") ? "#canvas .ruler" : "#canvas .markers");
+      if (host) { e.classList.add("ghost"); host.appendChild(e); leave.push(e); }
+    });
+    // Markers arrive whole, one after another, left to right (a flag and its
+    // clip tick together), and leave the same way, right to left.
+    var turns = function (els, dir) {
+      var xs = els.map(function (e) { return e.getBoundingClientRect().left; });
+      var order = xs.slice().sort(function (a, b) { return dir * (a - b); })
+        .filter(function (v, i, a) { return i === 0 || Math.abs(v - a[i - 1]) > 1; });
+      return xs.map(function (v) { return order.findIndex(function (w) { return Math.abs(w - v) <= 1; }); });
+    };
+    var inTurn = turns(arrive, 1), outTurn = turns(leave, -1);
+    arrive.forEach(function (e, i) {
+      if (inTurn[i] > 0) e.animate([{ visibility: "hidden" }, { visibility: "hidden" }], { duration: inTurn[i] * TURN_MS });
+    });
+    leave.forEach(function (e, i) {
+      var a = e.animate([{ visibility: "visible" }, { visibility: "hidden" }], { duration: outTurn[i] * TURN_MS + 1, fill: "forwards" });
+      a.onfinish = function () { if (e.parentNode) e.parentNode.removeChild(e); };
     });
   }
   var GUTTER = 48, MIN_PPS = 8;
@@ -646,8 +732,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     canvas.style.width = width + "px";
     // ruler: ticks on the lower row, timeline marker names on the upper row
     var ruler = el("div", "ruler");
-    var step = niceStep(dur, width - GUTTER);
-    for (var t = 0; t <= dur; t += step) { var k = el("div", "tick", tcOf(t)); k.style.left = x(t) + "px"; k.__key = "t:" + t; ruler.appendChild(k); }
+    // Ticks sit on whole seconds of the timecode they print: at 23.98 a timecode
+    // second lasts 1.001 real seconds, so a tick at 30 real seconds read 00:00:29:23.
+    var step = niceStep(dur, width - GUTTER), perSec = (p.nominal_fps || 24) / (frac(p.fps) || 24);
+    for (var S = 0; S * perSec <= dur + 1e-9; S += step) {
+      var t = S * perSec, k = el("div", "tick", tcOf(t)); k.style.left = x(t) + "px"; k.__key = "t:" + S; ruler.appendChild(k);
+    }
     // Marker names on the upper row: sequence markers AND clip markers (a
     // chapter marker lives on its clip in FCPXML; every m.start is already
     // on the sequence clock), left to right, a name dropped when it would
@@ -676,7 +766,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     if (lanes.some(function (l) { return l.kind === "spine"; }) && !lanes.some(function (l) { return l.lane > 0; }))
       lanes.unshift({ lane: 1, kind: "video reserved", clips: [] });
     lanes.forEach(function (lane) {
-      var row = el("div", "lane " + lane.kind);
+      var row = el("div", "lane " + lane.kind); row.dataset.lane = String(lane.lane);
       row.appendChild(el("span", "lane-tag", lane.kind === "spine" ? "spine" : "lane " + lane.lane));
       if (lane.kind === "spine") p.gaps.forEach(function (g) {
         var ge = el("div", "gap", "gap " + secOfSeconds(frac(g.duration)));
@@ -733,7 +823,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var e = el("div", "clip" + (c.kind === "title" ? " title" : "") + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : ""));
     e.style.left = x(frac(c.start)) + "px"; e.style.width = Math.max(3, w(frac(c.duration)) - 1) + "px";
     e.title = c.name + " · " + secOfSeconds(frac(c.duration)); e.__c = c;
-    if (thumbed) { var img = document.createElement("img"); img.src = c.thumb; img.alt = ""; e.appendChild(img); }
+    if (thumbed) { var th = el("div", "thumbs"); th.style.backgroundImage = 'url("' + c.thumb + '")'; e.appendChild(th); }
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; mk.__key = "k:" + (c.media || c.name) + "@" + m.start; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
     if (wpx >= 20) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
@@ -745,7 +835,17 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     for (var i = 0; i < steps.length; i++) if (steps[i] >= target) return steps[i];
     return 600;
   }
-  function placePlayhead() { var ph = $("playhead"); if (ph) ph.style.left = x(state.playhead) + "px"; $("tc").textContent = tcOf(state.playhead);
+  function coverTicks() {
+    var ph = $("playhead"); if (!ph) return;
+    var parts = [ph.getBoundingClientRect()], head = ph.querySelector(".phead");
+    if (head) parts.push(head.getBoundingClientRect());
+    document.querySelectorAll("#canvas .tick").forEach(function (t) {
+      var r = document.createRange(); r.selectNodeContents(t); var b = r.getBoundingClientRect();
+      t.classList.toggle("under-playhead", b.width > 0 && parts.some(function (q) {
+        return q.left < b.right + 1 && b.left < q.right + 1 && q.top < b.bottom && b.top < q.bottom; }));
+    });
+  }
+  function placePlayhead() { var ph = $("playhead"); if (ph) ph.style.left = x(state.playhead) + "px"; $("tc").textContent = tcOf(state.playhead); coverTicks();
     var rg = $("range"); if (rg) { if (state.range) { rg.hidden = false; rg.style.left = x(state.range[0]) + "px"; rg.style.width = w(state.range[1] - state.range[0]) + "px"; } else rg.hidden = true; } }
   function rulerDown(ev) {
     var rect = $("canvas").getBoundingClientRect(), start = clamp((ev.clientX - rect.left - GUTTER) / state.pps), moved = false;
@@ -811,7 +911,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     drawnWidth = window.innerWidth; draw();
   });
   $("scroller").addEventListener("scroll", fitLabels);
-  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION, hideUntilSettled: HIDE_UNTIL_SETTLED };
+  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION,
+                      revealWhenWide: revealWhenWide, timeForProgress: timeForProgress, placePlayhead: placePlayhead };
 
   // ---- boot --------------------------------------------------------------
   state.inHost = window.parent && window.parent !== window;

@@ -110,10 +110,18 @@ def test_extension_is_advertised_where_the_sdk_has_the_slot():
 EXTERNAL = ("http://", "https://", "<link", "@import", "url(", 'src="//', "integrity=", "fetch(")
 
 
+# The one url() the shell writes: a thumbnail tile, and only for a payload
+# thumbnail that is already a data: URI (the `thumbed` check in clipEl).
+THUMB_URL = """'url("' + c.thumb + '")'"""
+THUMB_GUARD = 'c.thumb.indexOf("data:image/") === 0'
+
+
 def test_shell_reaches_nowhere():
     html = timeline_app.render_app_html()
+    assert html.count(THUMB_URL) == 1 and THUMB_GUARD in html
+    rest = html.replace(THUMB_URL, "")
     for needle in EXTERNAL:
-        assert needle not in html, needle
+        assert needle not in rest, needle
     assert "<script src" not in html
 
 

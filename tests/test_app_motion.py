@@ -189,12 +189,14 @@ def _with_two_markers(p: dict) -> dict:
     return q
 
 
+ALPHA = """(e) => { const m = getComputedStyle(e).color.match(/rgba?\\(([^)]+)\\)/); if (!m) return 1;
+  const v = m[1].split(',').map(Number); return v.length > 3 ? v[3] : 1; }"""
 NAMES = """() => {
-  const vis = (e) => getComputedStyle(e).visibility !== 'hidden';
-  const clip = [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'B-roll');
-  return { width: clip.getBoundingClientRect().width, name: vis(clip.querySelector('.label')),
+  const vis = (e) => getComputedStyle(e).visibility !== 'hidden', alpha = %s;
+  const clip = [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'B-roll' && !e.classList.contains('ghost'));
+  return { width: clip.getBoundingClientRect().width, name: alpha(clip.querySelector('.label')) > 0.99,
            flags: [...document.querySelectorAll('.mlabel')].filter(vis).map(e => e.textContent) };
-}"""
+}""" % ALPHA
 
 
 def test_a_new_clip_is_laid_in_and_new_markers_land_whole_in_turn(browser):
@@ -218,6 +220,235 @@ def test_a_new_clip_is_laid_in_and_new_markers_land_whole_in_turn(browser):
     assert "b-roll" in start["flags"] and "Finish" not in start["flags"]
     assert {"b-roll", "Finish"} <= set(end["flags"])
     assert set(steps) == {"visibility"}
+
+
+# ---------------------------------------------------------------------------
+# Round 6: the scrim stays, names fade in once they fit, thumbnails tile,
+# the playhead never cuts a ruler time, ticks sit on whole timecode seconds,
+# and an undo moves back.
+# ---------------------------------------------------------------------------
+
+# A 16:9 thumbnail, black on the left half and white on the right.
+HALVES = ("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='90'>"
+          "<rect width='80' height='90' fill='black'/><rect x='80' width='80' height='90' fill='white'/></svg>")
+
+
+def _thumbed(p: dict) -> dict:
+    q = copy.deepcopy(p)
+    for c in q["clips"]:
+        c["thumb"] = HALVES
+    return q
+
+
+FRAME_PROBLEMS = """(prev) => {
+  const alpha = %s, out = [], now = {};
+  document.querySelectorAll('#canvas .clip').forEach(c => {
+    if (c.classList.contains('ghost')) return;
+    const lab = c.querySelector('.label'); if (!lab || lab.classList.contains('unfit')) return;
+    const r = document.createRange(); r.selectNodeContents(lab);
+    const need = r.getBoundingClientRect().width + 14, w = c.getBoundingClientRect().width;
+    const key = c.__c.id, fits = w >= need - 0.5, a = alpha(lab);
+    now[key] = fits;
+    if (c.classList.contains('has-thumb')) {
+      const cs = getComputedStyle(lab);
+      if (cs.visibility === 'hidden' || !cs.backgroundImage.includes('gradient')) out.push('no scrim on ' + key);
+    }
+    if (a > 0.01 && !fits) out.push('a cut name on ' + key + ' (' + w.toFixed(1) + ' < ' + need.toFixed(1) + ')');
+    if (fits && prev[key] && a < 0.01) out.push('a dropped name on ' + key);
+  });
+  return [out, now];
+}""" % ALPHA
+
+
+def label_problems_through_motion(page, step_ms: int = 30) -> list[str]:
+    """Every name, frame by frame through the motion: scrim drawn, never shown
+    cut, never still invisible one frame after its clip got wide enough."""
+    out, prev = [], {}
+    for ms in range(0, MOTION_MS + 160, step_ms):
+        page.evaluate(SEEK, ms)
+        problems, prev = page.evaluate(FRAME_PROBLEMS, prev)
+        out += [f"{ms} ms: {x}" for x in problems]
+    return out
+
+
+def test_names_keep_their_scrim_and_fade_in_once_they_fit(browser):
+    a = _thumbed(_base())
+    page = _page(browser, width=390)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", a)
+        page.evaluate(SET, _thumbed(_with_lane_one(_split(_base()))))
+        problems = label_problems_through_motion(page)
+    finally:
+        page.close()
+    assert problems == []
+
+
+def test_the_name_check_goes_red_on_a_hidden_label(browser):
+    """Mutation check: the round-5 way (the whole label, scrim and all, hidden
+    until the motion settles) fails it."""
+    a = _thumbed(_base())
+    page = _page(browser, width=390)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", a)
+        page.evaluate(SET, _thumbed(_split(a)))
+        page.evaluate("""() => document.querySelectorAll('#canvas .clip .label').forEach(l => {
+            l.getAnimations().forEach(x => x.cancel());
+            const k = l.animate([{visibility: 'hidden'}, {visibility: 'hidden', offset: 0.999}, {visibility: 'visible'}], 400); k.pause(); })""")
+        problems = label_problems_through_motion(page)
+    finally:
+        page.close()
+    assert any("no scrim" in x for x in problems)
+
+
+TILE = """() => {
+  const c = [...document.querySelectorAll('#canvas .clip')].find(e => e.__c.name === 'Squat');
+  const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };
+}"""
+
+
+def first_dark_run(png: bytes) -> int:
+    """Pixels from the left edge of a clip's middle row to its first light pixel."""
+    from io import BytesIO
+
+    from PIL import Image
+    im = Image.open(BytesIO(png)).convert("L")
+    row = [im.getpixel((x, im.height // 2)) for x in range(im.width)]
+    return next((i for i, v in enumerate(row) if v > 128), len(row))
+
+
+def test_a_long_clip_tiles_its_thumbnail_at_its_own_aspect(browser):
+    """A clip 3x wider than its thumbnail repeats it, 16:9 at the clip's height:
+    the black half is height x 16/9 / 2 wide. Stretched (or a cover crop of one
+    frame) it would be half the clip."""
+    pytest.importorskip("PIL")
+    p = _thumbed(_base())
+    page = _page(browser, width=1440)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", p)
+        page.add_style_tag(content=".clip .label, .playhead, .mk { visibility: hidden !important; } .clip .thumbs { opacity: 1 !important; }")
+        box = page.evaluate(TILE)
+        shot = page.screenshot(clip={"x": box["x"] + 2, "y": box["y"] + 2, "width": box["w"] - 4, "height": box["h"] - 4})
+    finally:
+        page.close()
+    assert box["w"] > 3 * box["h"] * 16 / 9, box
+    expected = (box["h"] - 2) * 16 / 9 / 2 - 2  # inside the 1px border, less the 2px inset
+    assert abs(first_dark_run(shot) - expected) < 4, (first_dark_run(shot), expected)
+
+
+def test_the_tile_check_sees_a_stretched_thumbnail(browser):
+    """Mutation check: one frame stretched over the clip fails it."""
+    pytest.importorskip("PIL")
+    p = _thumbed(_base())
+    page = _page(browser, width=1440)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", p)
+        page.add_style_tag(content=".clip .label, .playhead, .mk { visibility: hidden !important; } "
+                           ".clip .thumbs { opacity: 1 !important; background-size: 100% 100% !important; }")
+        box = page.evaluate(TILE)
+        shot = page.screenshot(clip={"x": box["x"] + 2, "y": box["y"] + 2, "width": box["w"] - 4, "height": box["h"] - 4})
+    finally:
+        page.close()
+    expected = (box["h"] - 2) * 16 / 9 / 2 - 2
+    assert abs(first_dark_run(shot) - expected) > 20
+
+
+CUTS_A_TIME = """() => {
+  const ph = document.getElementById('playhead'), parts = [ph.getBoundingClientRect(), ph.querySelector('.phead').getBoundingClientRect()];
+  return [...document.querySelectorAll('.tick')].filter(t => getComputedStyle(t).visibility !== 'hidden').filter(t => {
+    const r = document.createRange(); r.selectNodeContents(t); const b = r.getBoundingClientRect();
+    return parts.some(q => q.left < b.right && b.left < q.right && q.top < b.bottom && b.top < q.bottom); }).map(t => t.textContent);
+}"""
+
+
+def _playhead_inside_first_time(page) -> None:
+    page.evaluate("""() => { const t = document.querySelector('.tick'), r = document.createRange(); r.selectNodeContents(t);
+      const b = r.getBoundingClientRect(), c = document.getElementById('canvas').getBoundingClientRect(), st = window.__fcpApp.state;
+      st.playhead = ((b.left + b.right) / 2 - c.left - 48) / st.pps; window.__fcpApp.placePlayhead(); }""")
+
+
+@pytest.mark.parametrize("how", ["select at 390", "inside the first time at 390", "inside the first time at 1440"])
+def test_the_playhead_never_cuts_through_a_ruler_time(browser, how):
+    """With a clip selected the playhead sits at the clip's start; at 390 it cut
+    through "00:00:00:00" (critic round 5). The time under it is hidden while it is there."""
+    page = _page(browser, width=1440 if how.endswith("1440") else 390)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", _base())
+        if how.startswith("select"):
+            page.locator(".lane.spine .clip").nth(1).click()
+        else:
+            _playhead_inside_first_time(page)
+        cut = page.evaluate(CUTS_A_TIME)
+        page.add_style_tag(content=".tick.under-playhead { visibility: visible !important; }")
+        exposed = page.evaluate(CUTS_A_TIME)
+    finally:
+        page.close()
+    assert cut == []
+    assert exposed, "the case did not put the playhead over a ruler time (no instrument)"
+
+
+def test_ticks_sit_on_whole_seconds_of_their_timecode():
+    """At 23.98 a timecode second is 1.001 real seconds: a tick every 15 real
+    seconds read 00:00:29:23. Every printed tick time ends in :00 frames."""
+
+
+@pytest.mark.parametrize("fps,nominal,label", [("24000/1001", 24, "23.98"), ("30000/1001", 30, "29.97"), ("24/1", 24, "24")])
+def test_every_ruler_time_is_a_whole_second(browser, fps, nominal, label):
+    p = _base()
+    p.update(fps=fps, nominal_fps=nominal, fps_label=label)
+    p["duration"] = "90/1"
+    page = _page(browser, width=1440)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", p)
+        times = page.evaluate("() => [...document.querySelectorAll('.tick')].map(t => t.textContent)")
+    finally:
+        page.close()
+    assert len(times) >= 3
+    assert all(t.endswith(":00") for t in times), times
+
+
+REWIND = """() => {
+  const all = [...document.querySelectorAll('#canvas .clip')];
+  const squat = all.filter(e => e.__c.name === 'Squat' && !e.classList.contains('ghost'));
+  const ghosts = all.filter(e => e.classList.contains('ghost') && getComputedStyle(e).visibility !== 'hidden')
+    .map(e => [e.__c.name, e.getBoundingClientRect().width]);
+  const box = (e) => [parseFloat(getComputedStyle(e).left), e.getBoundingClientRect().width];
+  const flags = [...document.querySelectorAll('.mlabel')].filter(e => getComputedStyle(e).visibility !== 'hidden').map(e => e.textContent);
+  return { squat: squat.map(box), ghosts, flags };
+}"""
+
+
+def test_an_undo_moves_back(browser):
+    """Back from the finished cut to the imported one: the pieces merge into
+    the long clip from the span they covered, the laid-in clip shrinks out, and
+    the markers leave in turn. Nothing jumps, nothing fades."""
+    a = _base()
+    done = _with_two_markers(_split(a))
+    page = _page(browser)
+    try:
+        page.evaluate("p => window.__fcpApp.setPayload(p)", done)
+        pieces = page.evaluate(CLIPS)
+        page.evaluate(SET, a)
+        start = page.evaluate(REWIND)
+        fades = motion_problems(page)
+        page.evaluate(SEEK, 50)
+        early = page.evaluate(REWIND)
+        page.evaluate(SEEK, 2000)
+        page.wait_for_timeout(50)
+        end = page.evaluate(REWIND)
+    finally:
+        page.close()
+    span = sorted((c for c in pieces if c["name"] == "Squat"), key=lambda c: c["left"])
+    width = span[-1]["left"] + span[-1]["width"] - span[0]["left"]
+    # the long clip starts as exactly the span its pieces covered
+    assert len(start["squat"]) == 1, start
+    assert abs(start["squat"][0][0] - span[0]["left"]) < 1 and abs(start["squat"][0][1] - width) < 1.5, (start, span)
+    # the laid-in clip is still there, whole, and shrinks out
+    assert [g[0] for g in start["ghosts"]] == ["B-roll"] and start["ghosts"][0][1] > 20
+    # markers leave in turn, right to left
+    assert {"b-roll", "Finish"} <= set(start["flags"])
+    assert "Finish" not in early["flags"] and "b-roll" in early["flags"]
+    assert end["ghosts"] == [] and end["flags"] == []
+    assert fades == []
 
 
 def test_reduced_motion_jumps(browser):
