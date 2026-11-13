@@ -30,15 +30,16 @@ PRESS = "2026-08-08_video-5107_singular_display.mov"
 # band whose centre is a fraction of the frame's height. The app takes each
 # clip's thumbnail at its MIDPOINT, so the segments are placed for that
 # frame to read as its own lift, and to differ from its neighbours:
-#   bench   ends on the bench itself (him sitting up on the pad, below the
-#           gym's sign), its last frame held so the midpoint lands on it
+#   bench   lying on the bench looking up: the bar across the frame and the
+#           plates of the ceiling fan behind it (14.0 s; critic round 6: the
+#           pad close-up read as a dark green blur)
 #   squat   three 5 s sets whose midpoints are standing (171.0 s), half way
 #           down (178.0 s) and at the bottom (187.0 s), 1.5 s rests between
 #   press   the arm and watch driving the bar (58.0 s)
 #   finish  the floor and the plates, after he sits up, last frame held
 # build.py's test tone is silent exactly over the squat's rests.
 CUTS = {
-    "bench": [(BENCH, 87.15, 2.75, 0.75, 2.75)],
+    "bench": [(BENCH, 11.25, 5.5, 0.61, 0)],
     "squat": [(SQUAT, 168.5, 5, 0.18, 0), (SQUAT, 173.5, 1.5, 0.18, 0), (SQUAT, 175.5, 5, 0.18, 0),
               (SQUAT, 180.5, 1.5, 0.18, 0), (SQUAT, 184.5, 5, 0.18, 0)],
     "press": [(PRESS, 55.5, 5, 0.54, 0)],

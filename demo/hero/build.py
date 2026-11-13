@@ -38,25 +38,35 @@ What it does, in order:
    REPLAYS the kept copy through the same gate, probe, insert, DTD check
    and journal, and the on-screen note says so. With no copy on file and
    no ``--generate``, the provider is mocked and the note says THAT plainly.
-4. Writes ``.work/states.json`` (the prompt, the tool lines, the four
-   payload-bearing results, the story's timing, the palette and the patterns
-   no image may carry, ``scripts/image_text.py``) plus the
-   ``ui://fcp/timeline`` resource as served, then runs ``record.js``
-   (Playwright). That composes the hero on a stage: the REAL timeline view
-   (the app as served, fed the four results in order, so every change is the
-   app's own motion) drawn 2.25x on true black, a caption with the prompt and
-   then one chip per call, and a virtual camera that pushes onto each edit.
-   The framing, captions and timing are composed; the view and the edits are
-   real, and the README says which is which. It encodes
-   ``docs/assets/hero-watch-claude-cut.mp4`` (1280x736, 30 fps, the finished
-   cut as frame 0 and as its attached poster) and ``.gif`` (the same frames,
-   960 wide, 15 fps), crossfading only the last 0.3 s into frame 0. It
-   refuses a hold over 1.5 s and a loop whose last frame is not frame 0.
-   ``--card`` also writes ``card-frame.png`` for the social card (frozen
-   since 0.31 round 6, so an ordinary build leaves it alone). A mocked
-   B-roll is relabelled in the file ("B-roll (mocked)", "mock b-roll: ...")
-   and gets a solid MOCK badge. The chat-client recording of round 5 is kept,
-   unedited, as ``docs/assets/hero-unedited-recording.mp4``.
+4. Writes ``.work/states.json`` (the prompt, the six calls with the notes
+   their results earn, the four payload-bearing results, the story's timing,
+   the palette and the patterns no image may carry, ``scripts/image_text.py``)
+   plus the ``ui://fcp/timeline`` resource as served, then runs two
+   recorders (Playwright) on that ONE states.json:
+
+   ``record.js`` composes the close-up: the REAL timeline view (the app as
+   served, fed the results in order, so every change is the app's own motion)
+   drawn 2.24x on true black, one caption line (the prompt, laid out at its
+   final wrap, then a chip per call whose note types at 42 characters a
+   second and holds 1.5 s or more), an empty beat before the first call, and
+   a virtual camera that leads each edit by 0.3 s, pushes 1.4x onto what it
+   changes and eases back out (``stage_story`` has the timing). It encodes
+   ``docs/assets/hero-watch-claude-cut.mp4`` (1280x736, 30 fps, about 18 s,
+   the finished cut as frame 0 and as its attached poster) and ``.gif`` (the
+   same frames, 864 wide, 15 fps, a still picture one frame with its delay).
+   ``record_client.js`` records the same run with the app inside a chat
+   client, uncropped: ``docs/assets/hero-unedited-recording.mp4``.
+
+   ``tie()`` then refuses unless both recordings showed the run's calls and
+   notes, result digests and thumbnail digests, and writes
+   ``docs/assets/hero-run.json`` with each file's sha256 (the test holds the
+   files to it). The recorders refuse the frame-level gates (record.js says
+   which); ``encode()`` refuses a hold over 1.5 s, a loop whose last frame is
+   not frame 0 and a GIF over 5 MB. ``--card`` also writes ``card-frame.png``
+   for the social card (frozen, so an ordinary build leaves it alone). A
+   mocked B-roll is relabelled in the file ("B-roll (mocked)", "mock b-roll:
+   ...") and gets a solid MOCK badge. ``--record-only`` re-derives the timing
+   and the app from this checkout and records the last run's results again.
 
 Requires ffmpeg/ffprobe on PATH, Pillow (for the GIF: it merges identical
 frames, which ffmpeg's gif muxer does not), and Node with the ``playwright``
@@ -95,7 +105,20 @@ GIF_MAX_BYTES = 5_000_000
 PROMPT = "Cut the rest between sets, mark every lift, and put B-roll over the long set."
 HOLD_MAX = 1.5      # seconds: no stretch of identical frames may last longer
 SEAM = 0.3          # seconds: the last frames crossfade into frame 0, the one crossfade
-GIF_WIDTH, GIF_EVERY = 960, 2  # the GIF: the same frames, 960 wide, every 2nd (15 fps)
+GIF_WIDTH, GIF_EVERY = 864, 2  # the GIF: the same frames, 864 wide, every 2nd (15 fps), under 5 MB
+# The story's reading pace (critic round 6): a result note types at CPS
+# characters a second and then holds, fully typed, for HOLD seconds; the
+# prompt holds PROMPT_HOLD. The recorder refuses a result held under 1.5 s
+# (the prompt under 1.8 s), so these carry a margin.
+CPS, HOLD, PROMPT_HOLD = 42, 1.55, 1.9
+FOOTAGE_NOTE = "Footage: the author's own gym session; its audio is a test tone, so the rests are real silence."
+NOTES = {
+    "replay": ("B-roll: one real Gemini Omni Flash generation from the prompt alone, replayed here from the "
+               "copy kept in demo/hero/footage through the same quote gate, probe, insert and journal."),
+    "real": "B-roll: one real Gemini Omni Flash generation from the prompt alone.",
+    "mock": ("B-roll provider MOCKED: no real generation was available for this recording, so the quote "
+             "gate, probe, insert, DTD check and journal ran on a stand-in clip."),
+}
 MOCK_CLIP, MOCK_MARKER = "B-roll (mocked)", "mock b-roll: Toronto skyline at dusk"
 LONG_SET = "Squat"
 
@@ -169,9 +192,15 @@ def main() -> None:
     if "--record-only" in sys.argv:
         if not (WORK / "states.json").is_file():
             sys.exit("no previous run under demo/hero/.work; run without --record-only first")
-        shutil.rmtree(WORK / "frames", ignore_errors=True)
+        st = json.loads((WORK / "states.json").read_text())
+        st["story"] = stage_story(st["lines"])  # the timing is this file's: re-derive it
+        import server  # noqa: E402  (the app as served NOW, never a stale copy)
+        from fcpxml import timeline_app  # noqa: E402
+        (WORK / "app.html").write_text(asyncio.run(server.read_resource(timeline_app.APP_URI))[0].content, encoding="utf-8")
+        (WORK / "states.json").write_text(json.dumps(st), encoding="utf-8")
         record(WORK, os.environ.get("HOME", ""))
         encode(WORK)
+        tie(WORK)
         return
     mode = broll_mode()
     if WORK.exists():
@@ -305,35 +334,27 @@ def main() -> None:
     assert journaled >= 4, r_history
 
     made = "provider mocked" if mode == "mock" else "generated"
-    # The cut was imported (generate · import_edl_json) before the prompt, so
-    # the chat lists the six calls Claude makes in answer. Each line lands as
-    # its re-render starts to move (record.js starts the motion 0.1 s after
-    # "at"); the timeline first appears WITH the view call, a second in.
-    # The story (seconds): frame 0 is the finished cut; at 0.4 the app rewinds
-    # to the imported cut (its own undo motion) while the prompt types, then
-    # each call's chip lands just before its edit moves and the camera pushes
-    # onto what changed. Every hold has typing in it; none lasts 1.5 s.
+    # The six calls Claude makes in answer, each with the note its result
+    # earns, from the real replies above. The cut was imported (generate ·
+    # import_edl_json) before the prompt. Both recordings show these words.
     lines = [
-        {"at": 1.9, "call": "view · view_timeline", "note_at": 2.2, "note": "drawn inline: ui://fcp/timeline"},
-        {"at": 2.75, "call": "edit · remove_media_silence", "note_at": 3.6,
-         "note": f"{rests} rests cut, {removed} removed", "state": 1},
-        {"at": 4.45, "call": "mark · batch_add_markers", "note_at": 5.25, "note": f"{len(lifts)} lift markers", "state": 2},
-        {"at": 6.0, "call": "gen · gen_quote", "note_at": 6.3, "note": "priced under the cap, waits for confirm"},
-        {"at": 7.15, "call": "gen · gen_broll", "note_at": 7.9,
-         "note": f"lane {placed.group(1)}, {float(placed.group(3)):.0f} s, {made}", "state": 3},
-        {"at": 8.8, "call": "organize · history", "note_at": 9.1, "note": f"{journaled} outputs journaled, undo ready"},
+        {"call": "view · view_timeline", "note": "drawn inline: ui://fcp/timeline", "state": 0},
+        {"call": "edit · remove_media_silence", "note": f"{rests} rests cut, {removed} removed", "state": 1},
+        {"call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
+        {"call": "gen · gen_quote", "note": "priced under the cap, waits for confirm"},
+        {"call": "gen · gen_broll", "note": f"lane {placed.group(1)}, {float(placed.group(3)):.0f} s, {made}", "state": 3},
+        {"call": "organize · history", "note": f"{journaled} outputs journaled, undo ready"},
     ]
-    story = {
-        "duration": 10.2, "seam": SEAM, "prompt": [0.4, 1.5],
-        "deliveries": [{"at": 0.4, "state": 0}, {"at": 3.0, "state": 1}, {"at": 4.7, "state": 2}, {"at": 7.4, "state": 3}],
-        "calls": lines,
-        "pushes": [{"on": "squat", "in": 2.95, "out": 3.75}, {"on": "markers", "in": 4.65, "out": 5.45},
-                   {"on": "broll", "in": 7.35, "out": 8.15}],
+    story = stage_story(lines)
+    client = {
+        "duration": 16.5, "loop_start": 15.0, "prompt": {"you": 0.05, "type": [0.15, 0.85], "claude": 0.9},
+        "lines": [dict(line, at=at) for line, at in zip(lines, (1.0, 3.8, 6.6, 9.2, 11.4, 14.0))],
+        "footer": f"{FOOTAGE_NOTE} {NOTES[mode]}",
     }
     app_html = asyncio.run(server.read_resource(timeline_app.APP_URI))[0].content
     (WORK / "app.html").write_text(app_html, encoding="utf-8")
     (WORK / "states.json").write_text(json.dumps({
-        "prompt": PROMPT, "lines": lines, "states": states, "story": story, "long_set": LONG_SET,
+        "prompt": PROMPT, "lines": lines, "states": states, "story": story, "client": client, "long_set": LONG_SET,
         "palette": palette.as_json()["dark"], "mock_clip": MOCK_CLIP if mode == "mock" else None,
         "stale": {"host": image_text.patterns("host"), "app": image_text.patterns("app")},
     }), encoding="utf-8")
@@ -344,6 +365,76 @@ def main() -> None:
 
     record(WORK, real_home)
     encode(WORK)
+    tie(WORK)
+
+
+def stage_story(lines: list[dict]) -> dict:
+    """The staged close-up's timing, in seconds, from the calls and notes.
+
+    Frame 0 is the finished cut under the last result ("organize · history"),
+    which holds round the loop's seam. The prompt types over it; the app
+    rewinds (its own undo motion: the B-roll collapses, the squat's pieces
+    stretch back into one clip, the markers leave) and the stage empties (the
+    clips leave in turn). Each call then lands whole in a chip and its note
+    types at CPS, then holds HOLD seconds; the result it re-renders lands 0.5
+    s after the chip (the view call draws the imported cut in at 0.35 s), and
+    the camera leads it by 0.3 s, pushing onto what changes (panning along
+    the marker row as the markers land), and eases back out before the next
+    call. Nothing on screen is
+    still for 1.5 s (build.py checks the frames)."""
+    note_lead = 0.15
+    caps, deliveries = [], [{"at": 2.0, "state": 0}, {"at": 3.0, "state": "empty"}]
+    prompt_typed = 0.4 + len(PROMPT) / CPS
+    caps.append({"kind": "prompt", "at": 0.4, "type_at": 0.4, "until": round(prompt_typed + PROMPT_HOLD, 2)})
+    t, land = caps[-1]["until"], {}
+    for line in lines:
+        typed = t + note_lead + len(line["note"]) / CPS
+        until = typed + HOLD
+        caps.append({"kind": "chip", "call": line["call"], "note": line["note"], "at": round(t, 2),
+                     "type_at": round(t + note_lead, 2), "until": round(until, 2)})
+        land[line["call"].split(" · ")[1]] = t
+        t = until
+    end_hold = 1.25  # the last result's hold before the seam; it goes on to the prompt at 0.4
+    duration = round(caps[-1]["type_at"] + len(lines[-1]["note"]) / CPS + end_hold, 2)
+    caps[-1]["until"] = duration
+    v, e, m = land["view_timeline"], land["remove_media_silence"], land["batch_add_markers"]
+    q, b, hs = land["gen_quote"], land["gen_broll"], land["history"]
+    deliveries += [{"at": round(v + 0.35, 2), "state": 0}, {"at": round(e + 0.5, 2), "state": 1},
+                   {"at": round(m + 0.5, 2), "state": 2}, {"at": round(b + 0.5, 2), "state": 3}]
+    cam = [(0, "rest"), (e + 0.2, "rest"), (e + 0.65, "squat"), (e + 1.3, "squat"), (e + 1.8, "rest"),
+           (m + 0.2, "rest"), (m + 0.6, "markers<"), (m + 0.68, "markers<"), (m + 1.0, "markers>"),
+           (m + 1.25, "markers>"), (m + 1.75, "rest"),
+           (q + 0.9, "rest"), (q + 1.5, "broll@1.12"), (b + 0.2, "broll@1.12"), (b + 0.65, "broll"),
+           (hs + 0.6, "broll"), (hs + 1.2, "rest"), (duration, "rest")]
+    return {"duration": duration, "seam": SEAM, "cps": CPS, "captions": caps, "deliveries": deliveries,
+            "camera": [{"t": round(at, 2), "on": on} for at, on in cam]}
+
+
+def tie(work: Path) -> None:
+    """Both recordings from ONE run: what each showed (its calls and notes as
+    drawn, the digests of the results it was fed, the digests of the
+    thumbnails in its last one) must be the run's, or the build refuses.
+    docs/assets/hero-run.json records it with each file's sha256, and
+    tests/test_hero_assets.py holds the files to it."""
+    st = json.loads((work / "states.json").read_text())
+    final = json.loads(st["states"][-1]["result"].split("```json fcp-timeline-app", 1)[1].split("```", 1)[0])
+    run = {
+        "calls": [[line["call"], line["note"]] for line in st["lines"]],
+        "results": [hashlib.sha256(x["result"].encode()).hexdigest() for x in st["states"]],
+        "thumbs": {f'{c["name"]} @ {c["start"]}': hashlib.sha256(c["thumb"].encode()).hexdigest()
+                   for c in final["clips"] if c.get("thumb")},
+    }
+    recordings = {}
+    for name, shown in (("hero-watch-claude-cut.mp4", "shown-stage.json"), ("hero-unedited-recording.mp4", "shown-client.json")):
+        seen = json.loads((work / shown).read_text())
+        for key in ("calls", "results", "thumbs"):
+            if seen[key] != run[key]:
+                sys.exit(f"REFUSED: {name} showed other {key} than the run: {seen[key]} vs {run[key]}")
+        recordings[name] = {"sha256": hashlib.sha256((ASSETS / name).read_bytes()).hexdigest(), "shown": seen}
+    recordings["hero-watch-claude-cut.gif"] = {"sha256": hashlib.sha256((ASSETS / "hero-watch-claude-cut.gif").read_bytes()).hexdigest(),
+                                               "shown": recordings["hero-watch-claude-cut.mp4"]["shown"]}
+    (ASSETS / "hero-run.json").write_text(json.dumps({"run": run, "recordings": recordings}, indent=1) + "\n", encoding="utf-8")
+    print("both recordings show the one run: docs/assets/hero-run.json")
 
 
 def relabel_mock(path: Path) -> None:
@@ -391,12 +482,17 @@ def keep_generation(reply: str, quoted: Decimal) -> None:
 
 
 def record(work: Path, home: str) -> None:
-    frames = work / "frames"
-    frames.mkdir()
+    """The staged close-up (record.js) and the unedited chat-client recording
+    (record_client.js), from the same states.json."""
+    for d in ("frames", "client-frames"):
+        shutil.rmtree(work / d, ignore_errors=True)
+        (work / d).mkdir()
     env = {**os.environ, "HOME": home}  # Playwright finds its browsers under the real HOME
     card = ["--card"] if "--card" in sys.argv else []  # the card is frozen: only on request
-    subprocess.run(["node", str(HERE / "record.js"), str(work), str(frames), str(ASSETS), *card],
-                   check=True, timeout=1800, env=env)
+    subprocess.run(["node", str(HERE / "record.js"), str(work), str(work / "frames"), str(ASSETS), *card],
+                   check=True, timeout=3600, env=env)
+    subprocess.run(["node", str(HERE / "record_client.js"), str(work), str(work / "client-frames")],
+                   check=True, timeout=3600, env=env)
 
 
 def encode(work: Path) -> None:
@@ -445,7 +541,11 @@ def encode(work: Path) -> None:
     write_gif(gif, picks, GIF_WIDTH, Image, [int(d) for d in durations])
     if gif.stat().st_size > GIF_MAX_BYTES:
         sys.exit(f"REFUSED: the GIF is {gif.stat().st_size / 1e6:.2f} MB, over {GIF_MAX_BYTES / 1e6:.0f} MB")
-    for p in (mp4, gif):
+    # The unedited recording: the chat client, every frame, no crop.
+    unedited = ASSETS / "hero-unedited-recording.mp4"
+    ffmpeg("-framerate", str(fps), "-i", str(work / "client-frames" / "%05d.png"), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           "-crf", "22", "-preset", "slow", "-movflags", "+faststart", str(unedited))
+    for p in (mp4, gif, unedited):
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
 
 

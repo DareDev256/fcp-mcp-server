@@ -84,7 +84,7 @@ def test_the_sweep_actually_walks_the_repo():
 # ---------------------------------------------------------------------------
 
 NAME = "fcp-mcp-server"
-SUBTITLE = "reads and writes FCPXML, no plugin, no patch"
+SUBTITLE = "Reads and writes FCPXML, no plugin, no patch"
 BENEFIT = "Edit Final Cut Pro by talking to Claude, and watch the cut change."
 
 
@@ -120,6 +120,39 @@ def first_screen_problems(readme: str, pyproject: str) -> list[str]:
     return out
 
 
+HERO_IMG = "](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)"
+INSTALL = "claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server"
+STAGED = "Staged close-up of the real app's results · [unedited recording →](docs/assets/hero-unedited-recording.mp4)"
+
+
+def hero_line_problems(readme: str) -> list[str]:
+    """Round 7: the install command is on the 1440 first screen (above the
+    hero), and the line directly under the hero says it is staged and links
+    the unedited recording."""
+    lines = readme.splitlines()
+    hero = next((i for i, line in enumerate(lines) if HERO_IMG in line), None)
+    if hero is None:
+        return ["no hero"]
+    out = []
+    if not any(INSTALL in line for line in lines[:hero]):
+        out.append("the install command is not above the hero")
+    after = [line for line in lines[hero + 1:hero + 4] if line.strip()]
+    if not after or after[0] != STAGED:
+        out.append(f"the line under the hero is {after[:1]}")
+    return out
+
+
+def test_the_first_screen_installs_and_the_hero_says_it_is_staged():
+    assert hero_line_problems((REPO / "README.md").read_text(encoding="utf-8")) == []
+
+
+def test_the_hero_line_check_can_go_red():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert hero_line_problems(readme.replace(STAGED, "")) != []
+    head, tail = readme.split(HERO_IMG, 1)
+    assert hero_line_problems(head.replace(INSTALL, "uvx") + HERO_IMG + tail) != []
+
+
 def test_the_first_screen_states_the_requirements():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert first_screen_problems(readme, (REPO / "pyproject.toml").read_text(encoding="utf-8")) == []
@@ -136,10 +169,11 @@ def test_the_requirements_check_can_go_red():
 # FROZEN since 0.31 round 6 (the coordinator's call): the social card and the
 # logo. A hero re-render must not regenerate them (build.py writes the card's
 # picture only with --card); changing one is a deliberate act that updates
-# this pin in the same commit.
+# this pin in the same commit. Thawed once, in round 7 (the bench thumbnail;
+# the card at 390: a 32 px install chip, no ruler times), and re-pinned.
 FROZEN = {
-    "docs/assets/social-card.png": "8a3e9a93b88d075752b2012fbb06b550f1dd2fefd22b4ee809c63ff567f85943",
-    "docs/assets/card-frame.png": "da40537231a852c12a6922960de1ab9b3e461b5baac0f171b072beacf9085826",
+    "docs/assets/social-card.png": "4c420049baa5a26eab7ea688ded966d76250a5891bd644a739b3a49efa9456aa",
+    "docs/assets/card-frame.png": "e9ffc9d75601a40a10e18640baccd2435e8f961b50e8adbbf694dbfb9d489c5c",
     "docs/assets/logo.svg": "fa7c7916d339e37bbcef2abfc80ca4334d7a3d82cfe1b9365213b3054d6bcaa9",
     "docs/assets/logo-small.svg": "15cfe199da6a7e1d1996e79befe75725f5da3e0cc3f13852046a15ccdcfd99cb",
     "docs/assets/logo-400.png": "4302206c442cee1153a97d1a0225dd746e45e84a56ec335c33b61fce616563a6",
@@ -179,9 +213,10 @@ def test_an_ordinary_hero_build_leaves_the_card_alone():
     assert "if (WITH_CARD) await writeCardFrame(browser);" in record
 
 
-def recorded_calls(build_source: str) -> list[str]:
-    """The calls demo/hero/build.py puts in the hero's chat, in its order."""
-    return re.findall(r'\{"at": [\d.]+, "call": "([^"]+)"', build_source)
+def recorded_calls(run_record: str) -> list[str]:
+    """The calls the hero recordings showed, in order (docs/assets/hero-run.json,
+    written by demo/hero/build.py from what each recording drew)."""
+    return [call for call, _note in json.loads(run_record)["run"]["calls"]]
 
 
 def readme_calls(readme: str) -> list[str]:
@@ -193,14 +228,14 @@ def readme_calls(readme: str) -> list[str]:
 def test_the_readme_lists_the_calls_the_hero_records():
     """At 390 px the GIF is the timeline alone; the chat is README text, so it
     must be the same calls in the same order as the recording."""
-    recorded = recorded_calls((REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8"))
+    recorded = recorded_calls((REPO / "docs" / "assets" / "hero-run.json").read_text(encoding="utf-8"))
     assert len(recorded) == 6, recorded
     assert readme_calls((REPO / "README.md").read_text(encoding="utf-8")) == recorded
 
 
 def test_the_call_list_check_can_go_red():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    recorded = recorded_calls((REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8"))
+    recorded = recorded_calls((REPO / "docs" / "assets" / "hero-run.json").read_text(encoding="utf-8"))
     dropped = readme.replace("6. `organize · history`", "6. organize · history", 1)
     swapped = readme.replace("2. `edit", "2. `EDIT", 1)
     assert readme_calls(dropped) != recorded
@@ -309,3 +344,30 @@ def test_both_image_builders_use_the_guard():
     assert "image_text.stale_in(" in (REPO / "scripts" / "social_card.py").read_text(encoding="utf-8")
     assert "image_text.patterns(" in (REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8")
     assert "refuseStale(" in (REPO / "demo" / "hero" / "record.js").read_text(encoding="utf-8")
+
+
+def _social_card():
+    import sys
+    sys.path.insert(0, str(REPO / "scripts"))
+    import social_card
+    return social_card
+
+
+def _card_layout(install_px: float) -> dict:
+    texts = [{"id": "name", "x0": 164, "y0": 40, "x1": 520, "y1": 92, "lines": 1, "px": 52},
+             {"id": "promise", "x0": 80, "y0": 104, "x1": 740, "y1": 200, "lines": 2, "px": 44},
+             {"id": "install", "x0": 820, "y0": 32, "x1": 1200, "y1": 84, "px": install_px}]
+    return {"texts": texts, "mark": {"id": "mark", "x0": 80, "y0": 30, "x1": 144, "y1": 94},
+            "shot": {"id": "shot", "x0": 80, "y0": 226, "x1": 1200, "y1": 612}}
+
+
+def test_no_text_on_the_card_is_under_30_px():
+    """Critic round 6: the install chip was 20 px, 6 px when the card is shown
+    390 wide. The card refuses any text under 30 px (9 px at 390)."""
+    sc = _social_card()
+    assert sc.INSTALL_PX >= sc.MIN_TEXT_PX == 30
+    assert sc.collisions(_card_layout(sc.INSTALL_PX)) == []
+
+
+def test_the_card_size_rule_can_go_red():
+    assert any("under 30" in p for p in _social_card().collisions(_card_layout(20)))

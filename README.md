@@ -4,7 +4,7 @@
 
 **Edit Final Cut Pro by talking to Claude, and watch the cut change.**
 
-reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
+Reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server?label=PyPI&color=33EBFF&labelColor=000000)](https://pypi.org/project/fcp-mcp-server/)
 [![tests](https://img.shields.io/github/actions/workflow/status/DareDev256/fcp-mcp-server/test.yml?branch=main&label=tests&color=33EBFF&labelColor=000000)](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml)
@@ -12,7 +12,15 @@ reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 
 Python 3.10+ · Final Cut Pro for Mac 10.4 to 12.4 ([compatibility](#compatibility))
 
-[![A staged clip of the real ui://fcp/timeline view, drawn large on black, with a caption naming each of Claude's tool calls: the finished cut rewinds to the imported one, then the long squat set splits and its pieces slide together as the rests are cut, a marker lands on the ruler for each lift, and a B-roll clip marked MOCK is laid in on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+```bash
+claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server
+```
+
+Then `File → Export XML…` in Final Cut Pro, and ask Claude to work on the file.
+
+[![A staged close-up of the real ui://fcp/timeline view, drawn large on black, with a caption naming each of Claude's tool calls and its result: the finished cut rewinds and empties, view_timeline draws the imported cut in, then the camera pushes in as the long squat set splits and its pieces slide together (the rests cut), as a marker lands on each lift, and as a B-roll clip marked MOCK is laid in on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+
+Staged close-up of the real app's results · [unedited recording →](docs/assets/hero-unedited-recording.mp4)
 
 **You:** Cut the rest between sets, mark every lift, and put B-roll over the
 long set.
@@ -33,12 +41,15 @@ long set.
 serves it, drawing the real `view_timeline` results of the real calls above,
 and every change is the app's own animation from one result to the next. What
 is composed: the stage (only the view's ruler and lanes, drawn large on
-black), the captions, the timing and the camera's push onto each edit. The
+black), the captions, the timing, the empty beat before the first call (the
+app is handed the imported cut with its clips taken out, so they leave) and
+the camera's push onto each edit. The
 footage is the author's own gym session (its audio is a test tone, so the
 rests are real silence), and the B-roll provider is mocked: the clip is named
 "B-roll (mocked)" and carries a MOCK badge. The
-[unedited recording](docs/assets/hero-unedited-recording.mp4) shows the same
-calls with the app inside a chat client. [MP4](docs/assets/hero-watch-claude-cut.mp4),
+[unedited recording](docs/assets/hero-unedited-recording.mp4) is the same
+run (the same results, notes and thumbnails, checked by a test) with the app
+inside a chat client. [MP4](docs/assets/hero-watch-claude-cut.mp4),
 [poster](docs/assets/hero-still.png), recorded with
 [`demo/hero/build.py`](demo/hero/build.py).*
 
@@ -55,12 +66,6 @@ transcript edits, cross-NLE export, and a push into a running Final Cut Pro.
 changed under the model, and generation is quote-then-confirm under a
 per-call cap. 182 adversarial-input security tests, `defusedxml` everywhere,
 sandboxed writes, no private APIs, and a [disclosure channel](SECURITY.md).
-
-```bash
-claude mcp add fcpxml -e FCP_PROJECTS_DIR=~/Movies -- uvx fcp-mcp-server
-```
-
-Then `File → Export XML…` in Final Cut Pro, and ask Claude to work on the file.
 
 ---
 

@@ -12,10 +12,26 @@
   ],
   "zoom": 2.2439,
   "fps": 30,
-  "frames": 306,
+  "frames": 542,
   "min_coverage": 0.6866,
   "min_type_px_at_358": 10.04,
-  "push": 1.08,
-  "seam_s": 0.3
+  "pushes": {
+   "squat": 1.4,
+   "markers<": 1.4,
+   "markers>": 1.4,
+   "broll": 1.4
+  },
+  "seam_s": 0.3,
+  "split_frames": 14,
+  "caption_holds_s": {
+   "prompt": 1.9,
+   "view · view_timeline": 1.6,
+   "edit · remove_media_silence": 1.57,
+   "mark · batch_add_markers": 1.57,
+   "gen · gen_quote": 1.57,
+   "gen · gen_broll": 1.6,
+   "organize · history": 1.63
+  },
+  "max_clip_count_step": 2
  }
 }
