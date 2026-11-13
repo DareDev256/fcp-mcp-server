@@ -132,13 +132,14 @@ def test_preview_timeline_draws_the_sample_project():
     and marker in time order with its timecode."""
     text = _call("preview_timeline", {"filepath": SAMPLE})[0].text
     rows = text.splitlines()
+    assert "9 clips + 0 connected" in rows[0]
     assert rows[1].startswith("time") and "0.0s" in rows[1]
     assert set(rows[2].strip()) == {"|", " "} or set(rows[2].strip()) == {"|"}
     assert rows[3].startswith("markers") and "^" in rows[3]
     assert rows[4].startswith("spine") and "[" in rows[4]
-    listed = [r for r in rows if r[:2] == "00"]
-    assert listed == sorted(listed), "the event list is not in time order"
-    assert "00:00:00:00  marker   Intro" in listed
+    events = [r for r in rows if r[:1].isdigit()]
+    assert len(events) == 9 and [r.split()[2] for r in events] == sorted(r.split()[2] for r in events)
+    assert any(r.split()[:3] == ["marker", "00:00:00:00", "Intro"] for r in rows if r.startswith("    marker"))
 
 
 def test_preview_timeline_flags_missing_media():

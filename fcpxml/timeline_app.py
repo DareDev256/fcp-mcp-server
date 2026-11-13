@@ -432,8 +432,14 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
      label over a white frame still reads at 10:1 (tests/test_palette.py, test_app_labels.py). */
   .clip.has-thumb .label { color: var(--on-media); padding-top: 12px;
     background: linear-gradient(to bottom, transparent 0, var(--shade) 10px); }
-  .clip .role { font-size: 9px; color: var(--mute); margin-left: 6px; }
+  .clip .role { font-size: 12px; color: var(--mute); margin-left: 6px; text-transform: uppercase; letter-spacing: .04em; }
   .clip.has-thumb .role { color: var(--on-media); }
+  .clip .num { position: absolute; left: 2px; bottom: 2px; z-index: 1; padding: 0 3px; border-radius: 3px;
+    font-size: 11px; font-weight: 600; color: var(--ink); background: var(--ground); visibility: hidden; white-space: nowrap; }
+  .clip .num.on { visibility: visible; }
+  #key { margin-top: 6px; font-size: 12px; color: var(--mute); line-height: 1.6; }
+  #key b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+  #key span { margin-right: 14px; white-space: nowrap; }
   .clip.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .clip .mk { position: absolute; top: 0; width: 2px; height: 8px; background: var(--accent); z-index: 2; }
   .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--gap);
@@ -469,6 +475,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   /* No opacity: a 45% button read at 4.1:1. Disabled text is the mute token (palette.TEXT_PAIRS). */
   button:disabled { color: var(--mute); cursor: default; }
   button.primary:disabled { background: var(--raised); color: var(--mute); border-color: var(--line-strong); font-weight: 400; }
+  /* Read only (preview://, no host): the controls are OFF, not merely unwired. */
+  .readonly button, .readonly input[type=text] { background: transparent; border-style: dashed; color: var(--mute);
+    cursor: not-allowed; font-weight: 400; }
+  .readonly-note { width: 100%; font-size: 12px; color: var(--mute); }
   input[type=text] { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line-strong);
     background: var(--ground); color: var(--ink); flex: 1 1 120px; min-width: 0; max-width: 100%; }
   #log { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--mute);
@@ -485,6 +495,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
 </header>
 <div id="empty">Waiting for a timeline. Call the <b>view</b> tool with <code>view_timeline</code> and a filepath.</div>
 <div id="scroller" hidden><div id="canvas"></div></div>
+<div id="key" hidden></div>
 <div id="panel" hidden>
   <div class="card">
     <h2>Selection</h2>
@@ -571,7 +582,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     state.payload = p; state.sel = null; state.range = null; state.playhead = 0;
     $("empty").hidden = true; $("scroller").hidden = false; $("panel").hidden = false;
     $("title").textContent = p.name || "timeline";
-    $("meta").textContent = p.clips.length + " clips · " + secOfSeconds(frac(p.duration)) + " · " + p.width + "×" + p.height + " @ " + p.fps_label + "fps" + (p.gap_based ? " · gap-based storyline" : "");
+    var spineN = p.clips.filter(function (c) { return !c.lane; }).length, connN = p.clips.length - spineN;
+    // the clip count worded as every other output words it (proofs.counts_label)
+    $("meta").textContent = spineN + (spineN === 1 ? " clip" : " clips") + " + " + connN + " connected · " + secOfSeconds(frac(p.duration)) + " · " + p.width + "×" + p.height + " @ " + p.fps_label + "fps" + (p.gap_based ? " · gap-based storyline" : "");
     fit(); draw(); updateSel();
     if (before) animateFrom(before);
   }
@@ -781,7 +794,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       a.onfinish = function () { if (e.parentNode) e.parentNode.removeChild(e); };
     });
   }
-  var GUTTER = 48, MIN_PPS = 8;
+  var GUTTER = 48, MIN_PPS = 0.25;
   function extent() {
     // Fit the whole sequence, like Final Cut's zoom to fit. Until 0.31 this
     // fitted the clips only, because a ripple left the sequence's declared
@@ -792,6 +805,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     return Math.max(end, frac(p.duration)) || 1;
   }
   function fit() {
+    // The whole sequence in the width, however long (0.32: an 8 px/s floor
+    // ran a 164 s cut 14 s past the edge with no sign of it).
     var w = $("scroller").clientWidth - GUTTER - 24;
     state.pps = Math.max(MIN_PPS, w / extent());
   }
@@ -831,6 +846,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     });
     ruler.addEventListener("mousedown", rulerDown);
     var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
+    state.num = {};
+    // record order, as the sheet and the text timeline number them: by start,
+    // the spine first, then lanes from the lowest
+    p.clips.slice().sort(function (a, b) {
+      return frac(a.start) - frac(b.start) || (!!a.lane - !!b.lane) || (a.lane || 0) - (b.lane || 0); })
+      .forEach(function (c, i) { state.num[c.id] = i + 1; });
     // Room for a connected clip: a spine with nothing above it keeps one empty
     // lane-1 row, so a clip laid on lane 1 (gen_broll) appears in place instead
     // of pushing the spine, and everything under it, down.
@@ -889,6 +910,25 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var b = range.getBoundingClientRect(), own = e.scrollWidth > e.clientWidth + 0.5 && !e.classList.contains("tick") && !e.classList.contains("mlabel");
       e.classList.toggle("unfit", own || b.left < left - 0.5 || b.right > right + 0.5);
     });
+    // A clip whose name is hidden shows its number when the number fits
+    // whole inside it and the view; the key under the timeline names it.
+    var keyed = [];
+    sc.querySelectorAll(".clip").forEach(function (c) {
+      var num = c.querySelector(".num"); if (!num) return;
+      var lab = c.querySelector(".label"), named = lab && !lab.classList.contains("unfit");
+      var nb = num.getBoundingClientRect(), cb = c.getBoundingClientRect();
+      var on = !named && nb.right <= cb.right - 1 && nb.left >= left - 0.5 && nb.right <= right + 0.5;
+      num.classList.toggle("on", on);
+      if (on && c.__c) keyed.push([Number(num.textContent), c.__c.name]);
+    });
+    var key = $("key");
+    if (key) {
+      key.textContent = "";
+      keyed.sort(function (a, b) { return a[0] - b[0]; }).forEach(function (k) {
+        var sp = el("span"); sp.appendChild(el("b", null, String(k[0]))); sp.appendChild(document.createTextNode(k[1])); key.appendChild(sp);
+      });
+      key.hidden = keyed.length === 0;
+    }
   }
   function clipEl(c) {
     var thumbed = !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
@@ -899,6 +939,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; mk.__key = "k:" + (c.media || c.name) + "@" + m.start; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
     if (wpx >= 20) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
+    if (state.num && state.num[c.id]) e.appendChild(el("div", "num", String(state.num[c.id])));
     e.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); state.playhead = frac(c.start); placePlayhead(); });
     return e;
   }
@@ -961,6 +1002,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       edit("edit", { action: "delete_clips", args: { filepath: file, clip_ids: [c.name], expected_sha256: p.file.sha256 } });
     }, !!c && c.kind === "spine" && ok);
     [inspect, similar, name, mark, del].forEach(function (b) { acts.appendChild(b); });
+    acts.classList.toggle("readonly", !ok);
+    if (!ok) {
+      [inspect, similar, mark, del].forEach(function (b) { b.setAttribute("aria-disabled", "true"); b.title = "read only here"; });
+      name.disabled = true; name.setAttribute("aria-disabled", "true");
+      acts.appendChild(el("div", "readonly-note", "Read only: these edits run when the view tool's timeline is open in an MCP Apps host."));
+    }
   }
   function btn(label, fn, enabled, primary) { var b = el("button", primary ? "primary" : null, label); b.disabled = !enabled; b.addEventListener("click", fn); return b; }
   function edit(tool, args) {

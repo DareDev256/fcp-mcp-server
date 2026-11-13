@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote, unquote
@@ -2166,11 +2167,13 @@ def _detect_gaps(tl: Any, *, min_gap_frames: int = 1) -> list:
     return gaps
 
 
-def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source") -> list:
+def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source", include_connected: bool = False) -> list:
     """Group clips that share a source media reference.
 
     Returns a list of ``DuplicateGroup`` objects.  Shared by
-    ``handle_detect_duplicates`` and ``handle_validate_timeline``.
+    ``handle_detect_duplicates`` and ``handle_validate_timeline``;
+    ``include_connected`` counts connected clips too (validate does: a
+    cutaway from the same take shows the same frames twice).
     """
     source_groups: dict[str, list[dict]] = {}
     for clip in tl.clips:
@@ -2184,6 +2187,18 @@ def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source") -> list:
             'source_start': clip.source_start.seconds if clip.source_start else 0,
             'source_duration': clip.duration_seconds,
             'timecode': format_timecode(clip.start),
+        })
+    for clip in (getattr(tl, 'connected_clips', []) or []) if include_connected else []:
+        if not clip.media_path:
+            continue
+        at = clip.timeline_start or clip.offset
+        source_groups.setdefault(clip.media_path, []).append({
+            'name': f"{clip.name} (L{clip.lane})",
+            'start': at.seconds if at else 0,
+            'duration': clip.duration_seconds,
+            'source_start': clip.source_start.seconds if clip.source_start else 0,
+            'source_duration': clip.duration_seconds,
+            'timecode': format_timecode(at) if at else "—",
         })
 
     duplicates: list[DuplicateGroup] = []
@@ -2258,13 +2273,12 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
 {shape}
 ## Overview
 - **sha256**: {_journal.file_hash(arguments["filepath"])} (pass as `expected_sha256` to edit this exact file)
-- **Duration**: {format_duration(tl.duration.seconds)}
+- **Duration**: {_duration_line(tl)}
 - **Resolution**: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 
 ## Clip Statistics
-- **Total Clips**: {tl.total_clips}
-- **Connected Clips**: {len(tl.connected_clips)}
-- **Total Cuts**: {tl.total_cuts}
+- **Clips**: {_proofs().counts_label(tl)}
+- **Edit points**: {_edit_points(tl)}
 - **Transitions**: {len(tl.transitions)}
 
 ## Pacing
@@ -2275,9 +2289,45 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
 - **Cuts/Minute**: {tl.cuts_per_minute:.1f}
 
 ## Markers
-- **Total**: {len(tl.markers)}
-- **Chapters**: {len([m for m in tl.markers if m.marker_type == MarkerType.CHAPTER])}
+- **Total**: {len(_all_markers(tl))} (on the timeline and on its clips, connected clips included)
+- **Chapters**: {len([m for m in _all_markers(tl) if m.marker_type == MarkerType.CHAPTER])}
 """)
+
+
+def _proofs():
+    from fcpxml import proofs
+    return proofs
+
+
+def _duration_line(tl) -> str:
+    """"00:00:30:04 (724f, 30.17s)": timecode and frames, as every proof prints it."""
+    fps = tl.frame_rate or 24
+    nominal = max(1, int(round(fps)))
+    frames = int(round(tl.duration.seconds * fps))
+    return f"{_proofs().frames_timecode(frames, nominal)} ({frames}f, {format_duration(tl.duration.seconds)})"
+
+
+def _all_markers(tl) -> list:
+    """Every marker of the edit: the timeline's own and every clip's,
+    connected clips included (0.32: analyze_timeline counted the
+    timeline-level ones only and read 0 for a cut with four chapters)."""
+    markers = list(tl.markers)
+    for clip in tl.all_clips():
+        markers.extend(clip.markers)
+    return markers
+
+
+def _edit_points(tl) -> str:
+    """"5 (4 cuts, 1 dissolve)": a transition is an edit point but not a cut."""
+    points = tl.total_cuts
+    kinds: dict = {}
+    for t in tl.transitions:
+        word = "dissolve" if "dissolve" in (t.name or "").lower() else "transition"
+        kinds[word] = kinds.get(word, 0) + 1
+    joined = sum(kinds.values())
+    parts = [f"{points - joined} cut{'' if points - joined == 1 else 's'}"]
+    parts += [f"{n} {w}{'' if n == 1 else 's'}" for w, n in sorted(kinds.items())]
+    return f"{points} ({', '.join(parts)})"
 
 
 async def handle_list_clips(arguments: dict) -> Sequence[TextContent]:
@@ -2782,71 +2832,117 @@ async def handle_fill_gaps(arguments: dict) -> Sequence[TextContent]:
 VERDICT = {"FAIL": "✗ FAIL", "WARN": "⚠ WARN", "INFO": "· INFO", "PASS": "✓ PASS"}
 
 
+def _overlap(group) -> tuple | None:
+    """The first source range two uses of one file both show, as (start,
+    end) seconds on the asset clock, or None."""
+    uses = sorted(group.clips, key=lambda c: c.get('source_start', 0))
+    for i, a in enumerate(uses):
+        for b in uses[i + 1:]:
+            lo = max(a['source_start'], b['source_start'])
+            hi = min(a['source_start'] + a['source_duration'], b['source_start'] + b['source_duration'])
+            if hi > lo + 1e-9:
+                return lo, hi
+    return None
+
+
 async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     checks = arguments.get("checks", ["all"])
     run_all = "all" in checks
+    fps = tl.frame_rate
+    nominal = max(1, int(round(fps)))
 
     # (verdict, where, what): where is the timecode it happens at, or "—"
     issues: list[tuple[str, str, str]] = []
-    flash_count = 0
-    gap_count = 0
-    duplicate_count = 0
-    flash_where: list[str] = []
-    gap_where: list[str] = []
-    duplicate_where: list[str] = []
+    fixes: list[str] = []
+    rows = []
 
     if run_all or "flash_frames" in checks:
-        flashes = _detect_flash_frames(tl)
-        flash_count = len(flashes)
-        for f in flashes:
+        # Two readings of one question. The clips: a spine or connected clip
+        # shorter than six frames. The PICTURE: what is actually seen frame by
+        # frame, top layer first (0.32: a connected clip ending one frame before
+        # the next cut leaves one frame of the spine showing, and no clip is
+        # short). Both are reported; a position found by both is said once.
+        verdicts, where_list = [], []
+        seen: set = set()
+        clip_flashes = _detect_flash_frames(tl)
+        for f in clip_flashes:
             verdict = "FAIL" if f.severity == FlashFrameSeverity.CRITICAL else "WARN"
             where = format_timecode(f.start)
-            flash_where.append(where)
+            seen.add(f.start.frames)
+            verdicts.append(verdict)
+            where_list.append(where)
             issues.append((verdict, where, f"Flash frame: {f.clip_name} ({f.duration_frames}f)"))
+        if clip_flashes:
+            fixes.append("Flash frames (short clips): `edit · fix_flash_frames` extends or removes them.")
+        from fcpxml import filtergraph as _fg
+        from fcpxml import proofs as _pf
+
+        for at, frames, what, before, after in _pf.picture_flashes(_fg.compile_timeline(tl)):
+            if at in seen:
+                continue
+            verdict = "FAIL" if frames < 2 else "WARN"
+            where = _pf.frames_timecode(at, nominal)
+            verdicts.append(verdict)
+            where_list.append(where)
+            between = f" between {before} and {after}" if before and after else ""
+            issues.append((verdict, where, f"Flash frame in the picture: {what} shows for {frames}f{between}"))
+            if before and after:
+                fixes.append(f"Flash at {where}: extend {before} by {frames}f, or start {after} "
+                             f"{frames}f earlier, so they meet (in Final Cut; no server action moves "
+                             f"that edge).")
+        verdict = "PASS" if not verdicts else ("FAIL" if "FAIL" in verdicts else "WARN")
+        rows.append((verdict, "Flash Frames", len(verdicts), where_list))
 
     if run_all or "gaps" in checks:
         detected_gaps = _detect_gaps(tl)
-        gap_count = len(detected_gaps)
         for g in detected_gaps:
-            gap_where.append(str(g.timecode))
             issues.append(("WARN", str(g.timecode), f"Gap: {g.duration_frames}f"))
+        if detected_gaps:
+            fixes.append("Gaps: `edit · fill_gaps` closes them.")
+        rows.append(("PASS" if not detected_gaps else "WARN", "Gaps", len(detected_gaps),
+                     [str(g.timecode) for g in detected_gaps]))
 
     if run_all or "duplicates" in checks:
-        dup_groups = _detect_duplicate_groups(tl)
-        for group in dup_groups:
-            duplicate_count += group.count
+        uses_total, where_all, worst, files = 0, [], "PASS", 0
+        for group in _detect_duplicate_groups(tl, include_connected=True):
+            uses_total += group.count
+            files += 1
             uses = [c.get("timecode") for c in group.clips if c.get("timecode")]
-            duplicate_where.append(uses[0] if uses else "—")
-            issues.append(("INFO", ", ".join(uses[:3]) + (" …" if len(uses) > 3 else "") if uses else "—",
-                           f"Duplicate source: {group.source_name} ({group.count} uses)"))
+            where_all.append(f"{group.source_name}: {', '.join(uses)}")
+            overlap = _overlap(group)
+            if overlap:
+                lo, hi = overlap
+                worst = "WARN"
+                issues.append(("WARN", ", ".join(uses),
+                               f"Same frames used twice: {group.source_name} source "
+                               f"{_proofs().timecode(Fraction(lo).limit_denominator(100000), fps)} to "
+                               f"{_proofs().timecode(Fraction(hi).limit_denominator(100000), fps)} "
+                               f"({', '.join(c['name'] for c in group.clips)})"))
+            else:
+                worst = "INFO" if worst == "PASS" else worst
+                issues.append(("INFO", ", ".join(uses),
+                               f"Source used {group.count} times, different ranges: {group.source_name}"))
+        rows.append((worst, "Duplicate Sources",
+                     f"{uses_total} uses of {files} file{'' if files == 1 else 's'}" if files else 0,
+                     ["; ".join(where_all)] if where_all else []))
 
-    error_weight = 10
-    warning_weight = 3
-    info_weight = 1
+    # FAIL costs 10, WARN 3; INFO is information and costs nothing
     errors = sum(1 for v, _, _ in issues if v == "FAIL")
     warnings = sum(1 for v, _, _ in issues if v == "WARN")
-    infos = sum(1 for v, _, _ in issues if v == "INFO")
-    penalty = (errors * error_weight) + (warnings * warning_weight) + (infos * info_weight)
-    health_score = max(0, 100 - penalty)
+    health_score = max(0, 100 - errors * 10 - warnings * 3)
 
     def where(times: list) -> str:
-        return "—" if not times else ", ".join(times[:3]) + (f" (+{len(times) - 3})" if len(times) > 3 else "")
+        return "—" if not times else ", ".join(times)
 
-    flash_verdict = "PASS" if flash_count == 0 else ("FAIL" if errors else "WARN")
-    rows = [
-        (flash_verdict, "Flash Frames", flash_count, where(flash_where)),
-        ("PASS" if gap_count == 0 else "WARN", "Gaps", gap_count, where(gap_where)),
-        ("PASS" if duplicate_count == 0 else "INFO", "Duplicate Sources", duplicate_count, where(duplicate_where)),
-    ]
     result = f"""# Timeline Validation: {tl.name}
 
-## Health Score: {health_score}%
+## Health Score: {health_score}% (each FAIL -10, each WARN -3, INFO 0)
 
 ## Summary
 | Result | Check | Count | Where |
 |--------|-------|-------|-------|
-""" + "\n".join(f"| {VERDICT[v]} | {name} | {count} | {at} |" for v, name, count, at in rows) + f"""
+""" + "\n".join(f"| {VERDICT[v]} | {name} | {count} | {where(at)} |" for v, name, count, at in rows) + f"""
 
 ## Issues ({len(issues)})
 """
@@ -2865,11 +2961,12 @@ async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
         result += (
             f"\n\n> **Gap-based primary storyline**: the spine holds only gaps and the "
             f"{len(tl.connected_clips)} connected clips carry the edit. Flash frames were "
-            f"checked on the connected clips; the gap and duplicate-source checks apply to "
+            f"checked on the connected clips and on the picture; the gap check applies to "
             f"the spine and did not evaluate them."
         )
 
-    result += "\n\n*Use `fix_flash_frames` and `fill_gaps` to automatically resolve issues.*"
+    if fixes:
+        result += "\n\n## Fix\n" + "\n".join(f"- {line}" for line in fixes)
     return _text_result(result)
 
 

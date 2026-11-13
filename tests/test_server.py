@@ -377,7 +377,8 @@ class TestHandleAnalyzeTimeline:
         assert "# Timeline Analysis" in text
         assert "Music Video Edit" in text
         assert "1920" in text
-        assert "Total Clips" in text
+        assert "**Clips**: 9 clips + 0 connected" in text
+        assert "**Edit points**" in text
 
 
 class TestHandleListClips:

@@ -122,6 +122,17 @@ def test_tokens_are_grey_or_cyan_or_red():
                 assert palette.is_neutral(value), (name, value)
 
 
+def test_neutral_tokens_are_exact_greys():
+    """0.32: the panels were blue-tinted near-black (#121216, #1C1C22) and
+    read as off-black beside the true-black ground. A neutral is r == g == b."""
+    for name, pair in palette.TOKENS.items():
+        if name in palette.ACCENT_HUE_TOKENS or name in palette.DANGER_TOKENS:
+            continue
+        for value in pair:
+            r, g, b = palette.rgb(value)[:3]
+            assert r == g == b, (name, value)
+
+
 def test_the_hue_rule_can_go_red():
     """Mutation check: amber and purple are not neutral and not cyan."""
     for value in ("#F59E0B", "#8B5CF6", "#3B82F6"):

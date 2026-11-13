@@ -10,9 +10,12 @@ its colours are tokens (``fcpxml/palette.py``) instead of a purple bitmap that
 could only be recoloured by hand. The glyphs are strokes, not text, so the SVG
 looks the same wherever it is rendered.
 
-The tile is true black (the ground) with a hairline in raised-2 (#2A2A32)
-and raised lane slots, so it is a tile on a black page and on a white one;
-checked at 16, 32 and 64 px (round 6). ``svg(glyphs=False)`` drops the
+The tile is true black (the ground) with a hairline in raised-2 and raised
+lane slots, so it is a tile on a black page and on a white one; checked at
+16, 32 and 64 px (round 6). The committed logo is frozen (tests/
+test_front_door.py pins it): it keeps the 0.31 greys, which carried a slight
+blue tint that 0.32's exact-grey tokens dropped. Regenerating it is a
+deliberate act that moves the pin. ``svg(glyphs=False)`` drops the
 ``</>`` marks for anything drawn at 96 px or smaller, where they turn to
 noise.
 """

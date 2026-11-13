@@ -196,14 +196,13 @@ async def handle_preview_sheet(args: dict):
     _open_beside_terminal(sheet["pages"])
     cells = sheet["cells"]
     fps = getattr(timeline, "frame_rate", 24) or 24
-    lines = [f"Contact sheet ({layout}): {len(cells)} cuts on {len(sheet['pages'])} page(s), "
+    lines = [f"Contact sheet ({layout}): {proofs.counts_label(timeline)} on {len(sheet['pages'])} page(s), "
              f"{sheet['per_page']} cells a page."]
     lines += [f"Page {i + 1}: {p}" for i, p in enumerate(sheet["pages"])]
-    lines.append("Cuts: " + "; ".join(f"#{c.index} {c.name} at {proofs.timecode(c.start, fps)}"
-                                      + (" (media missing)" if c.missing else "") for c in cells))
-    lanes = sum(1 for s in graph.segments if s.lane != 0 and s.kind == "clip")
-    if lanes:
-        lines.append(f"Not on the sheet: {lanes} connected clip(s) (see preview_render).")
+    nominal = proofs.nominal_fps(fps)
+    lines.append("Clips: " + "; ".join(
+        f"#{c.index}{f' L{c.lane}' if c.lane else ''} {c.name} rec {proofs.frames_timecode(c.start, nominal)} "
+        f"{proofs.length_label(c.frames)}" + (" (media missing)" if c.missing else "") for c in cells))
     lines += _crossfade_line(graph.transitions)
     for note in graph.substitutions:
         lines.append(f"Substituted: {note}")
@@ -227,7 +226,14 @@ async def handle_preview_frame(args: dict):
         return text_result(str(exc))
 
     target = str(render.cache_dir() / "frame.png")
-    written = render.render_frame(source, position, target)
+    # the frame the timecode names (ffmpeg returns the first frame at or
+    # after the seek, so seek a quarter frame before that frame's start)
+    rate = proofs.rational_fps(_source_fps(source)) if Path(source).is_file() else None
+    seek = position
+    if rate:
+        k = int(position * rate + Fraction(1, 2))
+        seek = max(Fraction(0), Fraction(k) / rate - 1 / (4 * rate))
+    written = render.render_frame(source, seek, target)
     if not written:
         return text_result(
             f"No frame extracted from {source}. Check the file exists and that "
@@ -237,10 +243,10 @@ async def handle_preview_frame(args: dict):
     text = f"Frame at {at}s: {written}"
     if args.get("burn") and picture is not None:
         fps = _source_fps(source)
-        tc = proofs.timecode(position, fps)
-        proofs.burn_timecode(picture, tc)
+        lines = proofs.frame_lines(source, position, fps)
+        proofs.burn_chip(picture, lines)
         picture.save(written)
-        text += f" (timecode {tc} burned in)"
+        text += f" (burned in: {''.join(t for t, _ in lines[0])})"
     _open_beside_terminal([written])
     return _with_images(text, [proofs.fit_for_model(picture)])
 
@@ -253,11 +259,17 @@ async def handle_preview_check(args: dict):
             "preview_check requires 'source', 'start' and 'end' (seconds)."
         )
     target = str(render.cache_dir() / "check.png")
+    kept = None
+    if args.get("filepath"):
+        timeline, message = _timeline_or_message(args.get("filepath"))
+        if timeline is None:
+            return text_result(message)
+        kept = proofs.kept_ranges(filtergraph.compile_timeline(timeline), source) or None
     try:
         cut = _seconds(args["cut"], "cut") if args.get("cut") is not None else None
         result = proofs.visual_check(
             source, _seconds(start, "start"), _seconds(end, "end"), target, cut=cut,
-            frames=int(args.get("frames", 12)), fps=_source_fps(source),
+            frames=int(args.get("frames", proofs.CHECK_FRAMES)), fps=_source_fps(source), kept=kept,
         )
     except (ValueError, TypeError) as exc:
         return text_result(str(exc))
@@ -274,6 +286,13 @@ async def handle_preview_check(args: dict):
     elif result["spans"]:
         lines.append("Silence (at or under " f"{proofs.SILENCE_DB:.0f} dBFS, {float(proofs.SILENCE_MIN):.1f}s or longer): "
                      + ", ".join(f"{float(a):.2f}s to {float(b):.2f}s" for a, b in result["spans"]))
+    fps = _source_fps(source)
+    if result.get("removed"):
+        lines.append("Removed by the edit: " + ", ".join(
+            f"{proofs.timecode(a, fps)} to {proofs.timecode(b - Fraction(1, proofs.nominal_fps(fps)), fps)}"
+            for a, b in result["removed"]))
+    if result.get("pair"):
+        lines += result["pair"]["lines"]
     if result["problems"]:
         lines.append("Legibility: " + "; ".join(result["problems"]))
     return _with_images("\n".join(lines), [result["raster"]])
@@ -297,7 +316,7 @@ ACTIONS = {
 
 DESCRIPTION = (
     "See the edit without opening Final Cut Pro; pictures come back inline: a "
-    "720p proxy (burn_in: timecode, names), a labelled sheet of every cut "
-    "(layout: phone), a frame (burn), or a filmstrip-and-waveform check of the "
-    "SOURCE MEDIA (cut). preview_check confirms a fix."
+    "720p proxy (burn_in), a labelled sheet of every clip (layout: phone), a "
+    "frame (burn), or a filmstrip+waveform check of the SOURCE MEDIA (cut; "
+    "filepath: what the edit removed). Confirms a fix."
 )

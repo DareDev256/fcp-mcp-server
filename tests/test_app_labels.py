@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from fractions import Fraction
 from pathlib import Path
 
@@ -328,6 +329,53 @@ def test_the_preview_page_draws_itself_with_no_host(browser, fixture, width):
         page.close()
     assert drawn == len(payload["clips"])
     assert offenders == []
+
+
+PAGE_FACTS = """() => {
+  const sc = document.getElementById('scroller'), r = sc.getBoundingClientRect();
+  const clips = [...document.querySelectorAll('#canvas .clip')].map(c => {
+    const lab = c.querySelector('.label'), num = c.querySelector('.num');
+    const nb = num.getBoundingClientRect(), cb = c.getBoundingClientRect();
+    // whole inside its clip and inside the visible track area (right of the 48 px lane gutter)
+    const fits = nb.right <= cb.right - 1 && nb.left >= r.left + 48 - 0.5 && nb.right <= r.right - 0.5;
+    return { name: c.title.split(' · ')[0], named: !!lab && !lab.classList.contains('unfit'),
+             num: num.textContent, on: num.classList.contains('on'), fits };
+  });
+  const key = [...document.querySelectorAll('#key span')].map(s => [s.querySelector('b').textContent, s.textContent.slice(s.querySelector('b').textContent.length)]);
+  const acts = [...document.querySelectorAll('#acts button')].map(b => ({ aria: b.getAttribute('aria-disabled'),
+             border: getComputedStyle(b).borderStyle }));
+  const role = document.querySelector('.clip .role');
+  return { overflow: sc.scrollWidth - sc.clientWidth, clips, key, acts,
+           note: (document.querySelector('.readonly-note') || {}).textContent || '',
+           role: role ? { size: parseFloat(getComputedStyle(role).fontSize), upper: getComputedStyle(role).textTransform } : null,
+           card: getComputedStyle(document.querySelector('.card')).backgroundColor };
+}"""
+
+
+@pytest.mark.parametrize("width", [980, 1440, 390])
+def test_the_preview_page_fits_names_and_keys_every_clip(browser, width):
+    """The whole 164 s sequence in the width (an 8 px/s floor ran it 14 s
+    past the edge); every clip named, or numbered with a key when its name
+    does not fit and its number does; the edit controls visibly off with
+    the reason, read only; the role tag 12 px capitals; the panels a
+    neutral grey."""
+    tl = FCPXMLParser().parse_file(str(EXAMPLES / "music-video.fcpxml")).timelines[0]
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    try:
+        page.set_content(timeline_app.render_page_html(timeline_app.build_payload(tl)))
+        page.wait_for_timeout(50)
+        facts = page.evaluate(PAGE_FACTS)
+    finally:
+        page.close()
+    assert facts["overflow"] <= 1, facts["overflow"]
+    for c in facts["clips"]:
+        assert c["on"] == (not c["named"] and c["fits"]), c
+    assert facts["key"] == [[c["num"], c["name"]] for c in sorted(facts["clips"], key=lambda c: int(c["num"])) if c["on"]]
+    assert all(b["aria"] == "true" and b["border"] == "dashed" for b in facts["acts"])
+    assert "Read only" in facts["note"]
+    assert facts["role"]["size"] >= 12 and facts["role"]["upper"] == "uppercase"
+    r, g, b = (int(v) for v in re.findall(r"\d+", facts["card"])[:3])
+    assert r == g == b, facts["card"]
 
 
 HEAD_GAP = """() => {

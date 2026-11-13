@@ -35,6 +35,7 @@ FFMPEG_DEFAULT_THRESHOLD = 0.3
 CONTENT_DEFAULT_THRESHOLD = 27.0
 ADAPTIVE_DEFAULT_THRESHOLD = 3.0
 _PTS_RE = re.compile(r"pts_time:\s*(-?\d+(?:\.\d+)?)")
+_SCORE_RE = re.compile(r"lavfi\.scene_score=(\d+(?:\.\d+)?)")
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
 
 
@@ -53,14 +54,35 @@ def backends_available() -> dict[str, bool]:
 
 
 def parse_showinfo(stderr: str) -> tuple[list[float], Optional[float]]:
-    """Cut times from ``showinfo`` stderr, plus the container duration."""
-    cuts = [float(m) for m in _PTS_RE.findall(stderr)]
+    """Cut times from ``showinfo`` stderr, plus the container duration. Only
+    the showinfo lines count when there are any (``metadata=print`` writes a
+    pts_time of its own for each frame)."""
+    lines = [ln for ln in stderr.splitlines() if "showinfo" in ln]
+    cuts = [float(m) for m in _PTS_RE.findall("\n".join(lines) if lines else stderr)]
     duration = None
     m = _DURATION_RE.search(stderr)
     if m:
         h, mi, s = m.groups()
         duration = int(h) * 3600 + int(mi) * 60 + float(s)
     return cuts, duration
+
+
+def parse_scores(stderr: str) -> dict[float, float]:
+    """{cut time: ffmpeg scene score} from ``metadata=print`` stderr: each
+    ``pts_time`` line is followed by its ``lavfi.scene_score``."""
+    scores, at = {}, None
+    for line in stderr.splitlines():
+        if "Parsed_metadata" not in line:
+            continue
+        m = _PTS_RE.search(line)
+        if m:
+            at = round(float(m.group(1)), 6)
+            continue
+        m = _SCORE_RE.search(line)
+        if m and at is not None:
+            scores[at] = float(m.group(1))
+            at = None
+    return scores
 
 
 def _scenes_from_cuts(cuts: list[float], duration: Optional[float], min_scene_len: float) -> list[tuple[float, float]]:
@@ -87,7 +109,7 @@ def _ffmpeg_backend(path: str, threshold: float, min_scene_len: float) -> Option
         result = subprocess.run(
             [
                 "ffmpeg", "-hide_banner", "-nostdin", "-i", path,
-                "-an", "-vf", f"select='gt(scene,{threshold})',showinfo",
+                "-an", "-vf", f"select='gt(scene,{threshold})',metadata=print,showinfo",
                 "-f", "null", "-",
             ],
             capture_output=True, text=True, timeout=SCENE_TIMEOUT_SECONDS,
@@ -98,9 +120,11 @@ def _ffmpeg_backend(path: str, threshold: float, min_scene_len: float) -> Option
     if result.returncode != 0:
         return None
     cuts, duration = parse_showinfo(result.stderr[-2_000_000:])
+    scored = parse_scores(result.stderr[-2_000_000:])
     scenes = _scenes_from_cuts(cuts, duration, min_scene_len)
-    return {"backend": "ffmpeg", "cuts": [s for s, _ in scenes[1:]], "scenes": scenes,
-            "duration": duration}
+    kept = [s for s, _ in scenes[1:]]
+    return {"backend": "ffmpeg", "cuts": kept, "scenes": scenes, "duration": duration,
+            "scores": [scored.get(round(c, 6)) for c in kept], "threshold": threshold}
 
 
 def _scenedetect_backend(path: str, mode: str, threshold: Optional[float], min_scene_len: float) -> Optional[dict]:
@@ -125,8 +149,11 @@ def _scenedetect_backend(path: str, mode: str, threshold: Optional[float], min_s
         return None
     scenes = [(a.get_seconds(), b.get_seconds()) for a, b in pairs]
     duration = scenes[-1][1] if scenes else None
+    used = threshold if threshold is not None else (
+        ADAPTIVE_DEFAULT_THRESHOLD if mode == "adaptive" else CONTENT_DEFAULT_THRESHOLD)
+    # PySceneDetect's detect() does not hand back the per-cut score
     return {"backend": mode, "cuts": [s for s, _ in scenes[1:]], "scenes": scenes,
-            "duration": duration}
+            "duration": duration, "scores": [None] * max(0, len(scenes) - 1), "threshold": used}
 
 
 def detect_scenes(
