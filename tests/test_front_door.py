@@ -98,6 +98,34 @@ def test_readme_opens_with_the_name_then_the_benefit_then_the_subtitle():
     assert "no&nbsp;patch" in lines[at + 2]
 
 
+def recorded_calls(build_source: str) -> list[str]:
+    """The calls demo/hero/build.py puts in the hero's chat, in its order."""
+    return re.findall(r'\{"at": [\d.]+, "call": "([^"]+)"', build_source)
+
+
+def readme_calls(readme: str) -> list[str]:
+    """The calls the README lists under the hero, in its order."""
+    block = readme.split("<!-- hero-calls", 1)[1].split("<!-- /hero-calls -->", 1)[0]
+    return re.findall(r"^\d+\. `([^`]+)`", block, flags=re.M)
+
+
+def test_the_readme_lists_the_calls_the_hero_records():
+    """At 390 px the GIF is the timeline alone; the chat is README text, so it
+    must be the same calls in the same order as the recording."""
+    recorded = recorded_calls((REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8"))
+    assert len(recorded) == 6, recorded
+    assert readme_calls((REPO / "README.md").read_text(encoding="utf-8")) == recorded
+
+
+def test_the_call_list_check_can_go_red():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    recorded = recorded_calls((REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8"))
+    dropped = readme.replace("6. `organize · history`", "6. organize · history", 1)
+    swapped = readme.replace("2. `edit", "2. `EDIT", 1)
+    assert readme_calls(dropped) != recorded
+    assert readme_calls(swapped) != recorded
+
+
 def test_every_display_name_is_the_one_name():
     plugin = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert plugin["displayName"] == NAME

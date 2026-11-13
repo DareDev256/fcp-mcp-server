@@ -10,16 +10,31 @@ reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 [![Final Cut Pro for Mac 10.4 to 12.4](https://img.shields.io/static/v1?label=Final%20Cut%20Pro&message=Mac%2010.4%E2%80%9312.4&color=33EBFF&labelColor=000000)](#compatibility)
 [![License: MIT](https://img.shields.io/static/v1?label=license&message=MIT&color=33EBFF&labelColor=000000)](LICENSE)
 
-[![Watch Claude cut a gym session: one prompt on the left with the seven tool calls Claude made, and on the right the ui://fcp/timeline app re-rendering after each one. The long squat set loses its rests, four lift markers appear on the ruler, and a B-roll clip lands on lane 1](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+[![Watch Claude cut a gym session in the ui://fcp/timeline app, which re-renders inline after each tool call: the long squat set loses its rests, a marker appears on the ruler for each lift, and a B-roll clip marked MOCK lands on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
 
-*One prompt, seven tool calls, and the timeline re-rendered inline after each
-write. The loop opens on the finished cut, then plays the calls in order
-([MP4](docs/assets/hero-watch-claude-cut.mp4),
+**You:** Cut the rest between sets, mark every lift, and put B-roll over the
+long set.
+
+**Claude**, on four clips already imported with `generate · import_edl_json`:
+
+<!-- hero-calls: the calls demo/hero/build.py records, in its order -->
+1. `view · view_timeline` draws the timeline inline (`ui://fcp/timeline`)
+2. `edit · remove_media_silence` cuts the rests out of the long squat set
+3. `mark · batch_add_markers` puts a marker on each lift
+4. `gen · gen_quote` prices the B-roll under the per-call cap; nothing runs
+   until `confirm=true`
+5. `gen · gen_broll` lays the clip on lane 1 over the long set
+6. `organize · history` lists every journaled output, each one undoable
+<!-- /hero-calls -->
+
+*The loop opens on the finished cut, then plays the calls in order
+([MP4 with the chat beside the app](docs/assets/hero-watch-claude-cut.mp4),
 [full-size still](docs/assets/hero-still.png)). Every frame is the real
 `ui://fcp/timeline` app drawing a real `view_timeline` result, cut from the
 author's own gym session (its audio is a test tone, so the rests are real
-silence). The B-roll provider is mocked for this recording and the frame
-says so on screen. Re-recorded with [`demo/hero/build.py`](demo/hero/build.py).*
+silence). The B-roll provider is mocked for this recording: the clip is
+named "B-roll (mocked)" and carries a MOCK badge. Re-recorded with
+[`demo/hero/build.py`](demo/hero/build.py).*
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a
 host with MCP Apps draws it inline: lanes, thumbnails, markers, transcript

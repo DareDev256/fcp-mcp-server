@@ -412,16 +412,17 @@ def encode(work: Path) -> None:
     sources = sorted((work / "frames").glob("*.png"))
     picks = [sources[min(len(sources) - 1, round(i * 30 / GIF_FPS))] for i in range(round(len(sources) * GIF_FPS / 30))]
     # The README GIF is the timeline alone (crop.json from record.js): the chat
-    # moves into the README as text, and the app's own type stays at least
-    # 20 px at source instead of shrinking to a few pixels on a phone.
+    # moves into the README as text, and the app's own 10-11 px type is 20-22
+    # px in a 1000 px GIF instead of shrinking to a few pixels on a phone.
     box = json.loads((work / "crop.json").read_text())
     crop = (box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"])
     Image.open(poster).convert("RGB").crop(crop).save(ASSETS / "hero-timeline-still.png")
-    for width in (box["w"], 960):  # full crop width, narrower only if over GIF_MAX_BYTES
-        write_gif(gif, picks, width, Image, crop)
-        if gif.stat().st_size <= GIF_MAX_BYTES:
-            break
-        print(f"gif at {width} px is {gif.stat().st_size / 1e6:.2f} MB, over the cap; narrower")
+    # Always the full crop width: a narrower GIF would shrink the type the
+    # crop exists to keep, so over the cap is a refusal, not a resize.
+    write_gif(gif, picks, box["w"], Image, crop)
+    if gif.stat().st_size > GIF_MAX_BYTES:
+        sys.exit(f"the GIF is {gif.stat().st_size / 1e6:.2f} MB at {box['w']} px, over the "
+                 f"{GIF_MAX_BYTES / 1e6:.0f} MB cap: shorten the story or lower GIF_FPS")
     for p in (mp4, gif):
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
 

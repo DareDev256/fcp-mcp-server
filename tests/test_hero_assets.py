@@ -5,7 +5,10 @@ first decoded frame before anything plays. The 0.31 first pass checked the
 MP4's attached poster and called it done while frame 0 was still the empty
 "waiting for a timeline" state; this decodes the frames themselves with
 ffmpeg and compares them with ``docs/assets/hero-still.png`` (the finished
-frame the recorder writes).
+frame the recorder writes). The README GIF is the timeline alone, cropped
+from the same frames so its type stays large at phone width; its frame 0 is
+compared with ``hero-timeline-still.png``, the same crop of the finished
+frame.
 """
 
 from __future__ import annotations
@@ -24,8 +27,10 @@ ASSETS = Path(__file__).resolve().parent.parent / "docs" / "assets"
 MP4 = ASSETS / "hero-watch-claude-cut.mp4"
 GIF = ASSETS / "hero-watch-claude-cut.gif"
 STILL = ASSETS / "hero-still.png"
-SAME = 6.0     # mean grey difference out of 255: re-encoding stays well under this
-DIFFERENT = 15.0
+TIMELINE_STILL = ASSETS / "hero-timeline-still.png"
+CARD_FRAME = ASSETS / "card-frame.png"
+SAME = 6.0     # mean grey difference out of 255: re-encoding stays well under this (0.3 measured)
+DIFFERENT = 10.0  # the story's opening frame against the finished cut measures ~14
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")
 
@@ -55,21 +60,45 @@ def test_the_mp4s_first_decoded_frame_is_the_finished_cut():
 
 @needs_ffmpeg
 def test_the_instrument_can_tell_the_story_from_the_finished_cut():
-    """Mutation check: a frame from the story's start (the empty stage, the
-    prompt being typed) reads as different from the finished cut."""
+    """Mutation check: a frame from the story's start (the imported cut of
+    four clips, the prompt being typed, no calls yet) reads as different
+    from the finished cut."""
     assert difference(mp4_frame(4.0), Image.open(STILL)) > DIFFERENT
 
 
 def test_the_gifs_first_frame_is_the_finished_cut():
     with Image.open(GIF) as g:
         g.seek(0)
-        assert difference(g.convert("RGB"), Image.open(STILL)) < SAME
+        assert difference(g.convert("RGB"), Image.open(TIMELINE_STILL)) < SAME
 
 
-def test_the_gif_is_wide_and_under_5_mb():
+def test_the_gif_check_can_tell_a_later_frame():
+    """Mutation check: the frame after the loop's seam (the imported cut,
+    four clips, no markers) reads as different from the finished cut."""
     with Image.open(GIF) as g:
-        assert g.width >= 1440
+        finished = Image.open(TIMELINE_STILL)
+        later = []
+        for i in range(1, g.n_frames):
+            g.seek(i)
+            later.append(difference(g.convert("RGB"), finished))
+    assert max(later) > DIFFERENT
+
+
+def test_the_gif_is_the_timeline_crop_and_under_5_mb():
+    """The timeline alone at full crop width (1000 px: the app's 10-11 px type
+    is 20-22 px), not the whole 1720 px frame with the chat beside it."""
+    still = Image.open(STILL)
+    with Image.open(GIF) as g:
+        assert g.size == Image.open(TIMELINE_STILL).size
+        assert 1000 <= g.width < still.width
+        assert g.height < still.height / 2
     assert GIF.stat().st_size <= 5_000_000
+
+
+def test_the_card_frame_has_no_transparency():
+    """Flattened onto the ground, so no host draws its own colour into the corners."""
+    with Image.open(CARD_FRAME) as im:
+        assert im.mode == "RGB"
 
 
 @needs_ffmpeg

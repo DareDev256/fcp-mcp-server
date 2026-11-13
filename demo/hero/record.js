@@ -8,8 +8,9 @@
 // view_timeline result as ui/notifications/tool-result), and lays a chat
 // column beside it. The page is a pure function of time: window.__seek(ms)
 // positions every element, so each captured frame is exact and a slow
-// screenshot cannot drift the animation. Frames are 960x600 CSS pixels at a
-// device scale of 2 (1920x1200).
+// screenshot cannot drift the animation. Frames are 860x600 CSS pixels at a
+// device scale of 2 (1720x1200): the app gets 500 CSS pixels, so its own
+// 10-11px type is 20-22 px in a README GIF only 1000 px wide.
 //
 // The story opens on the imported cut (states.start_state), so there is no
 // empty stage; each write cross-fades (180 ms) to the re-rendered timeline.
@@ -19,7 +20,7 @@
 // finished cut. Written beside the frames: crop.json, the device-pixel box
 // of the timeline (header, ruler, lanes) that build.py cuts the README GIF
 // to. The assets dir gets hero-still.png (the finished frame) and
-// card-frame.png (four calls beside the ruler and lanes at 1.4x).
+// card-frame.png (four calls beside the ruler and lanes at 1.75x).
 //
 // A mocked B-roll tile (states.mock_clip) carries a solid MOCK pill at its
 // top right, measured onto the tile, never over its label.
@@ -46,7 +47,7 @@ function loadPlaywright() {
 const [work, framesDir, assetsDir] = process.argv.slice(2);
 const states = JSON.parse(fs.readFileSync(path.join(work, "states.json"), "utf8"));
 const app = fs.readFileSync(path.join(work, "app.html"), "utf8");
-const FPS = 30, W = 960, H = 600, SCALE = 2, FADE = 0.18;
+const FPS = 30, W = 860, H = 600, SCALE = 2, FADE = 0.18;
 const last = states.states.length - 1;
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
