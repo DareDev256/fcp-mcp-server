@@ -14,9 +14,10 @@ expensive to undo.
 1. `inspect` with action `analyze_timeline` for shape, duration, resolution.
 2. `diagnose` with action `validate_timeline` for gaps, flash frames, duplicates.
 3. Read the `preview://<path>` resource to actually SEE the timeline before
-   you change anything. It renders a self-contained HTML timeline, including
-   connected clips on their own lane rows, so you can see B-roll and audio
-   layers, not just the primary storyline.
+   you change anything. It is the `view` app with the timeline inlined,
+   including connected clips on their own lane rows, so you can see B-roll and
+   audio layers, not just the primary storyline. `preview_sheet` gives you
+   every cut as one labelled picture (cut number, name, timecode).
 
 ## The seven groups
 
@@ -29,7 +30,7 @@ expensive to undo.
 | `generate` | Build new structure: rough cuts, montages, A/B roll, templates, and `import_edl_json` from a video-use cut list. |
 | `transcript` | Transcribe locally, then edit or clean up by what was SAID. `transcript_pack` puts the whole shoot on one page — read it before planning a dialogue edit. Every action takes `backend: "elevenlabs"` for speaker labels and audio events; that uploads the media to ElevenLabs and needs `ELEVENLABS_API_KEY` — the default `local` never leaves the machine. |
 | `deliver` | Export to other NLEs, reformat, relink, push into FCP. |
-| `preview` | SEE the edit: proxy render, contact sheet, and a filmstrip+waveform read from the source media. |
+| `preview` | SEE the edit: a 720p proxy (`burn_in` for timecode and names), a labelled contact sheet of every cut, a frame, and a filmstrip+waveform read from the source media (`cut` marks a cut). The pictures come back inline: read the timecodes off them. |
 | `watch` | Close the round-trip: notice the operator's Cmd-E export and diff it against the last one. |
 | `index` | The analysis cache. `index_status` says how old it is; `index_build` warms every source in a timeline; `index_clear` drops it. Nothing depends on it. |
 | `scenes` | Shot boundaries from the pixels. `detect_scenes` lists cuts per clip in source and timeline time (PySceneDetect when installed via `[scenes]`, else ffmpeg's coarser scene filter); `scenes_to_markers` drops a marker on each; `scenes_split` cuts the clips there. Results are cached in the index. |

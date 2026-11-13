@@ -2,6 +2,153 @@
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-13
+
+Proof you can read. Every picture the preview tools make now carries the
+edit's names, timecodes and cuts, drawn by the server, and comes back to the
+model as an MCP image block beside its path, so a cut is read off the picture
+instead of taken on trust. No new operations. `preview_render`'s default size
+moves and seven outputs change shape; all of it is under Changed, so a cut in
+progress can tell which apply.
+
+**Not verified in a host UI.** The image blocks and the resource link were
+checked on the wire through `server.call_tool` on `mcp` 1.28.1 and 2.3.0, not
+displayed in Claude Desktop.
+
+### Changed (existing outputs moved)
+- **`preview_render` is 1280x720 by default** (was 854x480; `height` still
+  sets it). The reply now ends with a poster frame (the middle of the
+  timeline) as an image block and a `resource_link` to the MP4.
+  `burn_in: true` writes a second file, `<name>_proxy_burnin.mp4`, with the
+  timeline timecode and the spine clip under the playhead bottom left on every
+  frame and an `L<lane>  <name>` badge across the top of each connected clip
+  while it is on screen, on black at 70% opacity. It is composited onto the
+  clean proxy AFTER `verify_lanes()` has read it: the instrument measures the
+  timeline's pixels, never our labels.
+- **`preview_sheet` is one composed sheet**, not one loose unlabelled PNG per
+  cut with no paths in the reply: 16:9 frames, the cut number top left, the
+  clip name and its timeline timecode (and length) under each frame, a bowtie
+  on each transition's cut, and a header with the project, length, frame
+  rate, short file hash and date. At most 12 frames a page, extra pages
+  numbered; up to 4 pages come back inline. `layout: "phone"` draws two
+  columns on a 780 px page meant for a 390 px screen. The reply lists every
+  cut with its timecode.
+- **`preview_check` is redrawn** (was a 1200x168 ffmpeg tile over a
+  waveform with no times): 1512 px wide, two rows of frames 240 px wide with
+  each frame's timecode, a labelled time ruler, `cut` (new) marked on the
+  ruler and through the waveform with the first frame after it edged in
+  cyan, the waveform in cyan on black over a baseline, and every silence
+  (-40 dBFS or quieter for 0.3 s or longer) shaded and labelled with its
+  length; the reply lists them. `frames` defaults to 12 (was 8) and must be
+  even, 2 to 12, one row of half each.
+- **`preview_frame`** returns its frame inline (scaled into the vision budget
+  when larger; the file keeps full size) and takes `burn: true` to burn the
+  source timecode in.
+- **`detect_scenes`** adds the frame before and after every cut it found,
+  labelled with the cut number, the timeline and source timecodes and the
+  clip, as pictures (pages of 6 cuts) after its table.
+- **`validate_timeline` reads by a verdict column**: `✓ PASS`, `⚠ WARN`,
+  `✗ FAIL`, `· INFO` with the word beside the glyph, a `Where` column with the
+  timecodes, and the issues as a table with a timecode each. Flash frames
+  that are only warnings now read WARN (they read FAIL). The health score is
+  unchanged.
+- **`preview_timeline`** prints a time row and a ruler, a marker row, the
+  lanes above the spine, the spine with an `X` on each transition's cut, the
+  lanes below, then every clip, marker and transition in time order with its
+  timecode (was one `#` row per clip).
+- **`preview://` serves the `view` app with the timeline inlined** (one
+  JSON block, `<` escaped), so the resource and the inline app are one
+  picture. Outside an MCP Apps host it is read only. The legacy static
+  renderer `fcpxml/preview.py` and the old check `fcpxml/visual.py` are
+  deleted: code importing `fcpxml.preview.render_timeline_html` or
+  `fcpxml.visual.visual_check` must move to
+  `fcpxml.timeline_app.render_page_html` and `fcpxml.proofs.visual_check`.
+- **Lengths round half up**: the sheet and the text timeline print 5.25 s as
+  5.3s (a float's half-to-even printed 5.2).
+
+### Fixed
+- **A dissolve after a run of hard cuts failed the full render.** `xfade`
+  refuses inputs on different timebases, and a `concat` output runs on
+  1/1000000 against a trimmed clip's 1/24; ffmpeg failed the graph and the
+  fallback rendered every transition as a hard cut and dropped the sound. On
+  the gym fixture 0.31.0 reports exactly that; 0.32.0 compiles the dissolve
+  and mixes the audio. Each xfade input is set to 1/24 first; the gym render
+  is held to no fallback and one compiled dissolve (red with the reset taken
+  out).
+
+### Added
+- **`fcpxml/raster.py`**: a pure-Python raster with ffmpeg as the encoder and
+  decoder. No Pillow, no `drawtext` (ffmpeg builds without libfreetype
+  exist), no new required dependency. Text is one bundled open-licence
+  bitmap font, Spleen 12x24 and 16x32 (BSD-2-Clause; `fcpxml/fonts/`,
+  shipped as package data with its licence), scaled by whole pixels.
+  `read_text` reads drawn text back off the pixels (PNG, JPEG, H.264) and is
+  what the timecode gates use. A TrueType face was not added (see Not done).
+- **`fcpxml/proofs.py`**: the sheet, the check, the scenes strip, the
+  burn-in and the text timeline, on one palette (true black, cyan `#00E5FF`,
+  red only for "media missing").
+- **The legibility rule**, from Claude's vision docs
+  (https://platform.claude.com/docs/en/build-with-claude/vision, "Resolution
+  and token cost", read 2026-11-13): an image is kept at full size when its
+  long edge is at most 1,568 px and its ceil(w/28) x ceil(h/28) patches number
+  at most 1,568 (the brief's "about 1500" is that 1,568; the high-resolution
+  tier allows 2,576 px and 4,784 patches). Every page stays inside the
+  standard tier (sheet 1344 px, check 1512 px), letters are at least 14 px
+  tall at the size they are delivered at, and a page holds at most 12
+  frames. An inline image block is at most 1.5 MB (the docs allow 10 MB of
+  base64 per image on the API and 5 MB on Bedrock): PNG, else a light JPEG,
+  else the path alone with a line saying so.
+- **`demo/fixtures/gym_session.py`**: the real-footage fixture, the author's
+  own gym session from the 0.31 hero (silent proxies plus a synthesised
+  tone), built through the server's own tools: an EDL import, the rests cut
+  by `remove_media_silence`, a dissolve, chapter markers and a connected
+  clip, plus one take with hard cuts for `detect_scenes`. Not in the wheel.
+- **Tests**: `test_proofs.py` (31), `test_visual.py` rewritten for the new
+  check (15), `test_preview.py` rewritten for the inlined page (10), the font in
+  the built wheel (`test_packaging.py`), and the publish job draws text with
+  the installed wheel's font.
+
+### Gates, each broken once in the real code and seen red (2026-11-13)
+30 mutations on `mcp` 1.28.1, all red; the image-block and burn-order five
+also on `mcp` 2.3.0, all red.
+- A burned timecode that differs from the timeline: every one of the 724
+  frames of the burned gym proxy is read back (timecode and clip name)
+  against its own frame number (red when the burn runs a frame ahead, and
+  when `timecode()` is off by one); every cut's timecode read back off the
+  sheet PNG equals the parsed timeline's clip start (red with the cells a
+  frame late), the phone page also read at its delivered 390 px.
+- A 6 px font (red with the 14 px floor dropped, and with the phone page at
+  1x), a long edge over budget (red with the desktop page at 1700 px, and
+  with the cap raised), more than 12 frames a page (red at 16).
+- A ruler tick more than 1 px off its time, read off every tick column and
+  every row it claims (red at +2 px); the labels read back are the tick's time.
+- Burning in before `verify_lanes()`: a white quarter-size picture-in-picture
+  verifies on the clean render and fails on the burned one; red when
+  `render_proxy` verifies the burned file.
+- The image block missing (red with it dropped from the reply, with the
+  poster dropped from `preview_render`, and with the journal seam rebuilding
+  a reply from its text) or over its cap (red with the cap ignored).
+- Text collisions (red with the detector blinded), a truncated name (red when
+  wrapping keeps one line), red outside a failure (red with names drawn in
+  red), contrast under 4.5:1 (red with the burn box at 20%).
+- The check: waveform not in the accent (red), a silence unlabelled (red),
+  the cut line short (red), a frame's time wrong (red). The text timeline
+  without its `X` or its marker row (red). `validate_timeline` without the
+  timecodes where (red). The scenes strip a frame off (red). The font left
+  out of the package data (red, in the declaration and in a built wheel).
+  `preview://` with `<` unescaped (red) or not drawing its inlined timeline
+  in Chromium (red).
+
+### Not done
+- **No TrueType path.** The bitmap face meets the 14 px rule at every size
+  delivered, and the read-back gates depend on its exact glyphs; an optional
+  extra would add a second face for no reader.
+- The ffmpeg scene backend finds 2 of the 3 cuts in the fixture's take
+  (unchanged; PySceneDetect is the `scenes` extra).
+- Residue for 0.34, not touched here: the three Squat pieces join in one
+  frame on the hero's rewind (73 to 74), and 1 px slivers at 103 to 111 as
+  clips leave.
+
 ## [0.31.0] - 2026-11-13
 
 Front door. The first things a stranger sees (the GitHub card, the PyPI
