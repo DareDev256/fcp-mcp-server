@@ -7,6 +7,7 @@
 reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 
 [![PyPI](https://img.shields.io/pypi/v/fcp-mcp-server?label=PyPI&color=33EBFF&labelColor=000000)](https://pypi.org/project/fcp-mcp-server/)
+[![tests](https://img.shields.io/github/actions/workflow/status/DareDev256/fcp-mcp-server/test.yml?branch=main&label=tests&color=33EBFF&labelColor=000000)](https://github.com/DareDev256/fcp-mcp-server/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/static/v1?label=license&message=MIT&color=33EBFF&labelColor=000000)](LICENSE)
 
 Python 3.10+ · Final Cut Pro for Mac 10.4 to 12.4 ([compatibility](#compatibility))
