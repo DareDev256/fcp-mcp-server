@@ -120,7 +120,7 @@ exact JSON. `preview` returns images and an MP4 path everywhere. Checked
 
 | Host | What you get | Source |
 |---|---|---|
-| Claude Desktop | the timeline, inline | listed by the [MCP Apps overview](https://modelcontextprotocol.io/extensions/apps/overview); **not yet captured here** ([`scripts/capture-claude-desktop.md`](scripts/capture-claude-desktop.md)) |
+| Claude Desktop | the timeline, inline | listed by the [MCP Apps overview](https://modelcontextprotocol.io/extensions/apps/overview); **not verified in Claude Desktop** for this release (the capture steps are in [`scripts/capture-claude-desktop.md`](scripts/capture-claude-desktop.md)) |
 | Claude on the web (claude.ai) | the timeline, inline | listed by the MCP Apps overview; not captured here |
 | VS Code GitHub Copilot, Microsoft 365 Copilot, Goose, Postman, MCPJam, Archestra.AI | the timeline, inline | listed by the MCP Apps overview; not captured here |
 | `ext-apps` basic host (the reference host) | the timeline, inline, with Inspect and Find calling back into the server | run here on 2026-11-12 against 0.30.0 |

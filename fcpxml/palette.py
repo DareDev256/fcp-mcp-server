@@ -35,10 +35,12 @@ TOKENS: dict[str, tuple[str, str]] = {
     "accent-fill": ("#00E5FF", "#00E5FF"),  # primary button fill (black ink on it)
     "accent-ink": ("#000000", "#000000"),   # text on accent-fill
     "accent-wash": ("#00E5FF1F", "#007A8A1F"),  # a selected range
-    # The README badges only. shields.io chooses the badge text itself: white
-    # on anything darker than brightness 0.69 ((299R + 587G + 114B) / 255000),
-    # and #00E5FF is 0.64, so white text sat on it at 1.8:1. This is the
-    # accent's own hue lifted just past that line, where shields draws #333.
+    # The README badges only, and the ONE exception to "one cyan everywhere":
+    # kept because the contrast rule needs it. shields.io chooses the badge
+    # text itself, white on anything darker than brightness 0.69
+    # ((299R + 587G + 114B) / 255000); #00E5FF is 0.64, so white text sat on it
+    # at 1.8:1. This is the accent's own hue lifted just past that line, where
+    # shields draws #333 (8.7:1). Every other surface uses accent / accent-fill.
     "badge": ("#33EBFF", "#33EBFF"),
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
     "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
