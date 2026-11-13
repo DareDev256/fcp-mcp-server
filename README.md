@@ -476,7 +476,7 @@ verbs**, not 102 flat tool names:
 | `generate` | Building new structure — rough cuts, montages, A/B roll, templates |
 | `transcript` | Local Whisper transcription and transcript-driven cuts; `transcript_pack` puts the whole shoot on one page; `backend: elevenlabs` opts into speaker labels and audio events (audio leaves the machine) |
 | `deliver` | Getting the timeline out — NLE export, reformat, relink, push-to-FCP |
-| `preview` | **Seeing** the edit — a 720p proxy (timecode and names burned in on request), a labelled contact sheet of every cut, and a filmstrip+waveform check read from the SOURCE MEDIA; every picture comes back inline |
+| `preview` | **Seeing** the edit — a 720p proxy (timecode and names burned in on request), a labelled contact sheet of every clip, and a filmstrip+waveform check read from the SOURCE MEDIA; every picture comes back inline |
 | `watch` | Closing the round-trip — notice the operator's Cmd-E export and diff it against the last one |
 | `index` | The analysis cache — status with its age, warm every source in a timeline, clear. Nothing depends on it; `FCP_MCP_INDEX=off` and every tool still answers, only slower |
 | `scenes` | Shot boundaries from the pixels — list cuts per clip in source and timeline time, drop a marker on each, or split the clips there. PySceneDetect when installed, ffmpeg otherwise |
@@ -521,8 +521,9 @@ separate static render; there is now one timeline picture.)
 ![Timeline preview: the 164-second music-video fixture as the preview:// page draws it, two connected video lanes above and the music bed on lane -1, on a true-black page](docs/assets/timeline-preview.png)
 
 *`examples/music-video.fcpxml`, 164 seconds, drawn from its FCPXML alone:
-eight connected clips on three lanes over a gap-based storyline, zoomed to
-fit.*
+eight connected clips on three lanes over a gap-based storyline, the whole
+sequence in the width. A clip too narrow for its name shows its number,
+named in the key under the timeline.*
 
 ### Proof you can read (v0.32.0)
 
@@ -532,27 +533,57 @@ cuts, drawn by the server (one bundled bitmap font, no Pillow, no ffmpeg
 model reads the cut instead of being told about it. Each one is sized for
 Claude's vision input: long edge at most 1,568 px and at most 1,568 patches of
 28 px ([vision docs](https://platform.claude.com/docs/en/build-with-claude/vision),
-"Resolution and token cost", read 2026-11-13), letters at least 14 px tall
-where they are seen, at most 12 frames a page.
+"Resolution and token cost", read 2026-11-13), capitals at least 14 px tall
+where they are seen, at most 12 frames a page. Lengths are whole frames
+everywhere they add up (`121f`): a start plus a length is the next start.
+Below, the same calls on the author's own gym session, 0.31.0 above each
+picture and 0.32.0 under it.
 
-![Before and after on the author's own gym session: 0.31.0's six loose frames, unlabelled check, 854x480 proxy and table of cut times beside 0.32.0's labelled sheet, check with ruler, cut and silence, burned-in 1280x720 proxy frame and before/after strip](docs/screenshots/2026-11-13_before-after-1440-032.png)
+**`preview_sheet`**: every video clip, connected ones badged with their lane
+(`#5 L1`), each with its length, record timecode and source in and out (the
+three takes of one lift told apart), a bowtie with the dissolve's length on
+its cut, and a header with the duration, frame rate, clip count and the
+file's `sha256` prefix. `layout: "phone"` draws two columns for a 390 px
+screen (shown here).
 
-- **`preview_sheet`**: one sheet of every cut, cut number top left, name and
-  timeline timecode under each frame, a bowtie on a transition's cut, and a
-  header with the project, length, frame rate, file hash and date.
-  `layout: "phone"` draws two columns for a 390 px screen.
-- **`preview_check`**: two rows of frames from the source with their times,
-  a labelled ruler, `cut` marked through the waveform, and every silence
-  shaded and named with its length.
-- **`preview_render`**: 1280x720 by default, a poster frame inline and a
-  link to the MP4. `burn_in: true` writes a second file with the timeline
-  timecode and the clip under the playhead on every frame and a badge on
-  each connected clip, added after the lane check has read the clean render.
-- **`preview_frame`** takes `burn: true`; **`detect_scenes`** returns the
-  frame before and after every cut it finds; **`preview_timeline`** prints a
-  ruler, markers, lanes above and below the spine and every event in time
-  order; **`validate_timeline`** reads by a ✓ PASS / ⚠ WARN / ✗ FAIL column
-  with the timecode where.
+![preview_sheet before and after: 0.31.0's six loose unlabelled frames above 0.32.0's phone sheet with numbers, names, lengths, record and source timecodes](docs/screenshots/2026-11-13_before-after-sheet-032.png)
+
+**`preview_check`**: the source media in two bands, each its frames over its
+own ruler and its own waveform on that band's time axis, as Final Cut stacks
+a filmstrip over a waveform. With `filepath`, what the edit removed is dimmed
+and marked on the ruler, the first kept frame after the cut is lit, and the
+last and first kept frames are shown side by side with the cut's record
+time. The waveform is RMS and peak in dB with the -40 dB silence threshold
+dashed; silences are named with their length.
+
+![preview_check before and after: 0.31.0's untimed strip and flat bar above 0.32.0's two bands with rulers, removed frames, the cut pair and dB levels](docs/screenshots/2026-11-13_before-after-check-032.png)
+
+**`preview_render`**: 1280x720 by default, a poster frame inline and a link
+to the MP4. `burn_in: true` writes a second file with one opaque chip on
+every frame naming what is on screen, top layer first (`Bench (L1) over
+Squat`), and the source file and timecode of the top layer, added after the
+lane check has read the clean render. 0.31.0's frame is from a render that
+had fallen back: a dissolve after hard cuts failed the full graph, so the
+dissolve was dropped and the sound with it (fixed in 0.32.0).
+
+![preview_render before and after: 0.31.0's 854x480 frame above 0.32.0's 1280x720 frame burned with REC 00:00:18:00 Bench (L1) over Squat and SRC Bench.mov 00:00:00:21](docs/screenshots/2026-11-13_before-after-proxy-032.png)
+
+**`detect_scenes`**: the frame before and the frame after each cut it finds,
+each with its own timecode, the detector's score against its threshold, and
+the scenes with their lengths. **`preview_frame`** with `burn: true` names the
+file, the source timecode and the frame number.
+
+![detect_scenes before and after: 0.31.0's table of times above 0.32.0's before and after frames, scores and scene list](docs/screenshots/2026-11-13_before-after-scenes-032.png)
+
+**`preview_timeline`** prints a ruler, the markers, lanes above and below the
+spine, then every clip in record order as an EDL row (record in and out,
+length in frames, source file, source in and out) with the markers and the
+dissolve's span at their place. **`validate_timeline`** reads by a ✓ PASS /
+⚠ WARN / ✗ FAIL column with the timecode where, checks flash frames in the
+composited PICTURE as well as clip lengths (a connected clip ending one frame
+before the next cut leaves a frame of the spine showing), counts connected
+clips among duplicate sources, charges nothing for INFO, and prints a fix
+only for what failed, as the grouped call that runs it.
 
 ### See the cut inline — the MCP Apps timeline (v0.26.0)
 
@@ -896,7 +927,7 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 2651 tests across 97 suites (collected 2026-11-13) — see Testing below
+├── tests/                 2673 tests across 97 suites (collected 2026-11-13) — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -1046,7 +1077,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-2651 tests across 97 suites, measured 2026-11-13 on v0.32.0: 2646 pass and 5 skip locally (`mcp` 1.28.1, ffmpeg 9.0.1, Pillow, Playwright's Chromium); 2582 pass and 5 skip on `mcp` 2.3.0 and 2578 pass and 9 skip on ffmpeg 6.1 via `scripts/test-ffmpeg6.sh` (no browser or Pillow there, so the rendered-label, motion and hero-asset suites skip as modules; CI runs them in their own job); 2622 pass and 29 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the labelled proof pictures (timecodes read back off every sheet and every burned frame), the `preview://` page and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+2673 tests across 97 suites, measured 2026-11-13 on v0.32.0: 2668 pass and 5 skip locally (`mcp` 1.28.1, ffmpeg 9.0.1, Pillow, Playwright's Chromium); 2601 pass and 5 skip on `mcp` 2.3.0 and 2597 pass and 9 skip on ffmpeg 6.1 via `scripts/test-ffmpeg6.sh` (no browser or Pillow there, so the rendered-label, motion and hero-asset suites skip as modules; CI runs them in their own job); 2644 pass and 29 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the labelled proof pictures (timecodes read back off every sheet and every burned frame), the `preview://` page and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 
@@ -1056,7 +1087,7 @@ Several of those are **mutation checks** — they exist to prove an instrument c
 - `test_a_touched_source_drops_its_rows` re-exports a source and asserts the cache forgets it; with the (mtime, size) check removed the stale rows survive and the test goes red.
 - `test_key_goes_in_the_header_and_nowhere_else` — moving the ElevenLabs key into the URL makes it fail.
 - `test_version.py` asserts `server.__version__` matches `pyproject.toml`; the two had disagreed since v0.17.0 without anything noticing.
-- `test_proofs.py` (v0.32.0) reads every timecode back off the pictures it guards (each sheet cell against the parsed timeline, each of the 724 burned frames against its frame number, each ruler tick to a pixel) and was broken 30 ways in the real code and seen red.
+- `test_proofs.py` (v0.32.0) reads every timecode back off the pictures it guards (each sheet cell against the parsed timeline, both lines of each of the 724 burned frames against the clips on screen at that frame, each thumbnail against the ruler drawn under it, each ruler tick to a pixel, the picture-flash at 00:00:20:03) and was broken 59 ways in the real code and seen red.
 - `test_palette.py`, `test_schema_budget.py`, `test_front_door.py` and `test_pypi_readme.py` (v0.31.0) each plant the failure they guard against: amber back in a surface, one more character in a tool description, the old card's version in the README, a relative image in the built PyPI description.
 
 ---
