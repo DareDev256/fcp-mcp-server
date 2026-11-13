@@ -2283,12 +2283,44 @@ class FCPXMLModifier:
             start_index: First child index to adjust (inclusive).
             delta: Signed time shift (positive = later, negative = earlier).
         """
+        sequence = self._sequence_of(spine)
+        # A sequence that ended where its spine ended still does after the
+        # ripple. Until 0.31 a ripple moved the clips and left the declared
+        # duration alone, so remove_media_silence on a 35 s cut reported
+        # "6.33s removed" and wrote a sequence that still said 35 s: the
+        # removed time came back as an empty tail. A sequence that declared
+        # MORE than its spine (deliberate run-out) is left as it was.
+        tight = sequence is not None and self._spine_span(spine) == self._parse_time(
+            sequence.get('duration', '0s'))
         children = list(spine)
         for child in children[start_index:]:
             if child.tag in SPINE_ELEMENT_TAGS:
                 current_offset = self._parse_time(child.get('offset', '0s'))
                 new_offset = current_offset + delta
                 child.set('offset', new_offset.to_fcpxml())
+        if tight:
+            sequence.set('duration', self._spine_span(spine).to_fcpxml())
+
+    def _sequence_of(self, spine: ET.Element) -> Optional[ET.Element]:
+        """The ``<sequence>`` whose primary storyline is *spine*, or None."""
+        for seq in self.root.iter('sequence'):
+            if any(child is spine for child in seq):
+                return seq
+        return None
+
+    def _spine_span(self, spine: ET.Element) -> 'TimeValue':
+        """First start to last end of the spine's own elements (titles and
+        gaps included: they take storyline time)."""
+        starts, ends = [], []
+        for child in spine:
+            if child.get('offset') is None or child.get('duration') is None:
+                continue
+            start = self._parse_time(child.get('offset'))
+            starts.append(start)
+            ends.append(start + self._parse_time(child.get('duration')))
+        if not starts:
+            return TimeValue.zero()
+        return max(ends) - min(starts)
 
     def _ripple_after_clip(self, target_clip: ET.Element, delta: TimeValue) -> None:
         """Shift all clips after the given clip by delta."""

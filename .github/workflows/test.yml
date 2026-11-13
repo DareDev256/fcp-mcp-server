@@ -110,6 +110,37 @@ jobs:
       - name: Run tests with every installable extra present
         run: pytest tests/ -q
 
+  # The timeline app is drawn by a browser, so a label cut off at an edge is
+  # invisible to every job above: they have no browser. This one renders the
+  # real shell in headless Chromium at 1440 and 390 and measures every label
+  # (tests/test_app_labels.py). FCP_MCP_REQUIRE_BROWSER turns a missing
+  # browser into a failure instead of a skip that would read as green.
+  rendered-labels:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg (decodes the hero's first frame)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # Pillow measures pixels: the label scrim over a white frame, and the
+      # hero's first decoded frame against the finished still.
+      - name: Install dependencies and a headless Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" playwright pillow
+          python -m playwright install --with-deps chromium
+
+      - name: No label in the timeline app is cut, and the hero opens on the finished cut
+        env:
+          FCP_MCP_REQUIRE_BROWSER: "1"
+        run: pytest tests/test_app_labels.py tests/test_app_motion.py tests/test_hero_assets.py -v
+
   # An inline `actions/github-script` block is JavaScript that nothing parses
   # until the day it runs. The `report` job in publish.yml — the one whose
   # entire purpose is to be the surface that survives a failed release — held

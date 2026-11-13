@@ -68,6 +68,9 @@ Gemini Omni 1.1 Flash $0.10 at 720p, quoted as a 10 s call (Gemini API; replaced
 $0.04–0.07), Wan 2.5 $0.15 (fal; $0.05–0.15), Runway Aleph $0.15 (15
 credits/s at $0.01), Luma Ray Modify — no per-second figure published, so no
 price on file and the quote says so. `prices_as_of` is in every quote.
+*Superseded 2026-11-12 (v0.31.0): Omni 1.2 Flash at $0.07/s replaces 1.1,
+and Runway lists Aleph 2.0 at $0.28/s. The current figures, each with the
+vendor page it was read on, are in `fcpxml/gen.py`.*
 
 **Left out.** Runway and Luma are video-to-video: the input is a clip, not a
 prompt, and doing it cleanly means uploading source media to a third party

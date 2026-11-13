@@ -17,7 +17,7 @@ def _entry(version, is_latest, name=NAME):
 
 
 def test_reads_the_islatest_entry_not_the_first():
-    payload = {"servers": [_entry("0.13.1", False), _entry("0.21.2", False), _entry("0.22.0", True)]}
+    payload = {"servers": [_entry("0.12.0", False), _entry("0.21.2", False), _entry("0.22.0", True)]}
     assert registry_latest.latest_version(payload) == "0.22.0"
 
 
@@ -28,7 +28,7 @@ def test_ignores_other_servers_that_match_the_search():
 
 
 def test_empty_when_nothing_is_latest():
-    assert registry_latest.latest_version({"servers": [_entry("0.13.1", False)]}) == ""
+    assert registry_latest.latest_version({"servers": [_entry("0.12.0", False)]}) == ""
     assert registry_latest.latest_version({}) == ""
 
 

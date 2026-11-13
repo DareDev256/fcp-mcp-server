@@ -21,25 +21,22 @@ negative lanes below, per FCPXML's magnetic-timeline semantics
 
 from html import escape
 
+from . import palette
 from .rational import fcp_frame_rate_name
 
-# Distinct hues per lane so connected clips (B-roll, titles, connected audio)
-# read as separate layers from each other and from the spine.
-_LANE_COLORS = [
-    "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#eab308",
-]
-
-# Primary track (spine) clips alternate between these two shades so adjacent
-# clips still read as separate blocks.
-_CLIP_COLORS = ["#3b82f6", "#2563eb"]
-
-
-def _clip_color(index: int) -> str:
-    return _CLIP_COLORS[index % len(_CLIP_COLORS)]
-
-
-def _lane_color(lane: int) -> str:
-    return _LANE_COLORS[abs(int(lane or 0)) % len(_LANE_COLORS)]
+# Colours come from fcpxml/palette.py only (tests/test_palette.py). Until 0.31
+# every lane had its own hue (purple, pink, amber, green, cyan, yellow) and
+# the spine was default blue: four palettes on one product. Lanes now read as
+# separate layers by their row and label, and adjacent spine clips by
+# alternating two neutral fills (CSS nth-of-type). Every fill reads at 3:1 or
+# better against its lane (palette.FILL_PAIRS) and carries a thin accent strip
+# on top; the accent also marks markers.
+#
+# A clip name that does not fit its block is HIDDEN, never cut to "O." or
+# "S...": the page has no script, so the rule is CSS. The name sits in a
+# one-line-tall wrapping flex row behind a zero-width spacer; a name wider
+# than the block wraps to the second flex line, which the row clips away.
+# The block keeps its title tooltip.
 
 
 def _left_width(offset_seconds: float, duration_seconds: float, total: float) -> tuple[float, float]:
@@ -59,12 +56,11 @@ def _left_width(offset_seconds: float, duration_seconds: float, total: float) ->
     return left, width
 
 
-def _render_clip_block(name: str, left: float, width: float, color: str, seconds: float, css_class: str) -> str:
+def _render_clip_block(name: str, left: float, width: float, seconds: float, css_class: str) -> str:
     return (
-        f'<div class="{css_class}" style="left:{left:.3f}%;width:{width:.3f}%;'
-        f'background:{color}" '
+        f'<div class="{css_class}" style="left:{left:.3f}%;width:{width:.3f}%" '
         f'title="{escape(str(name))} ({seconds:.2f}s)">'
-        f'<span>{escape(str(name))}</span></div>'
+        f'<span class="fit"><i></i><span>{escape(str(name))}</span></span></div>'
     )
 
 
@@ -116,11 +112,11 @@ def render_timeline_html(timeline) -> str:
     origin = _timeline_origin(timeline, connected)
 
     spine_rows = []
-    for i, clip in enumerate(timeline.clips):
+    for clip in timeline.clips:
         seconds = float(clip.duration.seconds or 0)
         offset = float(clip.start.seconds or 0) - origin
         left, width = _left_width(offset, seconds, total)
-        spine_rows.append(_render_clip_block(clip.name, left, width, _clip_color(i), seconds, "clip"))
+        spine_rows.append(_render_clip_block(clip.name, left, width, seconds, "clip"))
 
     # Group connected clips (B-roll, titles, connected audio) by lane.
     # Positive lanes render above the spine, negative lanes below — matching
@@ -138,7 +134,7 @@ def render_timeline_html(timeline) -> str:
             position = cc.timeline_start if getattr(cc, "timeline_start", None) else cc.offset
             cc_offset = float(position.seconds or 0) if position else 0.0
             left, width = _left_width(cc_offset - origin, seconds, total)
-            blocks.append(_render_clip_block(cc.name, left, width, _lane_color(lane), seconds, "lane-clip"))
+            blocks.append(_render_clip_block(cc.name, left, width, seconds, "lane-clip"))
         return (
             f'<div class="lane-label">Lane {lane}</div>'
             f'<div class="track lane-track">{"".join(blocks)}</div>'
@@ -171,21 +167,24 @@ def render_timeline_html(timeline) -> str:
 <meta charset="utf-8" />
 <title>{escape(str(timeline.name))}</title>
 <style>
-  :root {{ color-scheme: light dark; }}
+  {palette.css_root()}
   body {{ font: 14px ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 24px;
-         background: #0b0b0f; color: #e7e7ea; }}
+         background: var(--ground); color: var(--ink); }}
   h1 {{ font-size: 18px; margin: 0 0 4px; }}
-  .meta {{ color: #9a9aa4; font-size: 13px; margin-bottom: 20px; }}
-  .lane-label {{ color: #9a9aa4; font-size: 11px; margin: 10px 0 4px; }}
-  .track {{ position: relative; height: 56px; background: #16161c;
-            border-radius: 6px; overflow: hidden; }}
+  .meta {{ color: var(--mute); font-size: 13px; margin-bottom: 20px; }}
+  .lane-label {{ color: var(--mute); font-size: 11px; margin: 10px 0 4px; }}
+  .track {{ position: relative; height: 56px; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }}
   .lane-track {{ height: 36px; }}
-  .clip, .lane-clip {{ position: absolute; top: 0; bottom: 0; border-right: 1px solid #0b0b0f;
-           display: flex; align-items: center; overflow: hidden; }}
-  .clip span, .lane-clip span {{ padding: 0 6px; font-size: 11px; color: #fff; white-space: nowrap;
-                text-shadow: 0 1px 2px rgba(0,0,0,.6); }}
+  .clip, .lane-clip {{ position: absolute; top: 0; bottom: 0; display: flex; align-items: center; overflow: hidden;
+           background: var(--mute); box-shadow: inset -1px 0 0 var(--ground), inset 0 3px 0 var(--accent); }}
+  .clip:nth-of-type(even) {{ background: var(--ink); }}
+  .fit {{ display: flex; flex-wrap: wrap; align-content: flex-start; box-sizing: border-box; width: 100%;
+          height: 15px; line-height: 15px; overflow: hidden; padding: 0 6px; }}
+  .fit i {{ flex: none; width: 0; height: 15px; }}
+  .fit span {{ flex: none; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--ground); }}
   .markers {{ position: relative; height: 14px; margin-top: 6px; }}
-  .marker {{ position: absolute; width: 2px; height: 14px; background: #f43f5e; }}
+  .marker {{ position: absolute; width: 2px; height: 14px; background: var(--accent); }}
 </style>
 </head>
 <body>

@@ -39,7 +39,23 @@ jobs:
           python-version: "3.12"
 
       - run: pip install build twine
+
+      # PyPI cannot resolve a repository-relative image, so through 0.30.0
+      # every picture on the project page was broken while GitHub showed them
+      # all. The README in the repo stays relative (GitHub needs nothing
+      # else); this checkout's copy is pinned to the tag being released, so
+      # each version's page keeps that version's pictures.
+      - name: Pin the README's images to this tag for PyPI
+        run: python scripts/pypi_readme.py rewrite --ref "$GITHUB_REF_NAME"
+
       - run: python -m build
+
+      # Read the description out of what was BUILT, not the file it came
+      # from, and ask GitHub for every image: a rewrite that ran on the wrong
+      # file, or a path that does not exist at this tag, fails here, before
+      # an upload that can never be replaced.
+      - name: The published description holds no relative path and every image answers 200
+        run: python scripts/pypi_readme.py check dist/*.whl dist/*.tar.gz --fetch
 
       # Fail before upload if the tag and the packaged version disagree —
       # otherwise `git tag v0.17.0` on a tree still saying 0.16.0 silently
@@ -120,7 +136,7 @@ jobs:
           exit 1
 
   # PyPI is not the only index people install from. The MCP registry sat at
-  # 0.13.1 for eight releases because publishing to it was a laptop command
+  # its first published version for eight releases because publishing to it was a laptop command
   # nobody remembered — and `mcp-publisher validate` had been failing the
   # whole time on a description that grew past the registry's 100-char cap,
   # silently, because nothing ran it. Both are now on the tag.

@@ -1,6 +1,6 @@
 # MCP Ecosystem & Companion Tools
 
-How **FCPXML MCP** fits into the broader Model Context Protocol ecosystem, and which companion servers pair well with video editing workflows.
+How **fcp-mcp-server** fits into the broader Model Context Protocol ecosystem, and which companion servers pair well with video editing workflows.
 
 ---
 
@@ -26,12 +26,12 @@ This is the key insight: **MCP servers compose**. You don't need one server that
 
 **Why it's relevant (relevance: 85%):**
 
-| Capability | How It Helps FCPXML MCP Development |
+| Capability | How It Helps fcp-mcp-server Development |
 |------------|-------------------------------------|
 | **Knowledge graph indexing** | Maps all 47 tool handlers, their dependencies on parser/writer/models, and cross-module call chains — useful for onboarding contributors |
 | **Architecture visualization** | Web UI renders the `server.py → fcpxml/*.py` dispatch tree visually, showing which handlers touch which modules |
 | **Impact analysis** | Before changing `TimeValue` arithmetic in `models.py`, query the graph to see every downstream consumer — prevents regressions |
-| **MCP tool exposure** | Runs as a sibling MCP server alongside FCPXML MCP — Claude can query the codebase graph *and* manipulate timelines in the same session |
+| **MCP tool exposure** | Runs as a sibling MCP server alongside fcp-mcp-server — Claude can query the codebase graph *and* manipulate timelines in the same session |
 | **CLI for CI** | Index the repo in CI, query for orphan functions or circular imports as part of the lint pipeline |
 
 **Example workflow — using both servers together:**
@@ -43,12 +43,12 @@ User: "I want to add a new export format. Show me how the existing
 Claude:
   1. [GitNexus] Query knowledge graph for export.py call chain
   2. [GitNexus] Show all functions that call writer.write_fcpxml()
-  3. [FCPXML MCP] Generate a sample timeline via auto_rough_cut
-  4. [FCPXML MCP] Export it via export_resolve_xml to see the pattern
+  3. [fcp-mcp-server] Generate a sample timeline via auto_rough_cut
+  4. [fcp-mcp-server] Export it via export_resolve_xml to see the pattern
   → Claude synthesizes the architecture + a working example
 ```
 
-**Setup (alongside FCPXML MCP):**
+**Setup (alongside fcp-mcp-server):**
 
 ```json
 {
@@ -81,7 +81,7 @@ Claude:
 
 ## Building Your Own MCP Server
 
-If GitNexus and FCPXML MCP inspire you to build a domain-specific server, the pattern is straightforward:
+If GitNexus and fcp-mcp-server inspire you to build a domain-specific server, the pattern is straightforward:
 
 1. **Pick a domain** — one data format, one API, one workflow
 2. **Define tools** — each tool is a function with typed inputs and text outputs

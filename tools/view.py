@@ -82,6 +82,36 @@ def _timeline_or_message(filepath):
     return validated, timeline, None
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _marker_phrase(payload: dict) -> str:
+    """Every marker the app draws: on the sequence AND on clips.
+
+    Until 0.31 this counted sequence markers only, so a cut whose chapter
+    markers sit on their clips (how Final Cut and ``mark`` write them) read
+    "0 timeline markers" under a ruler showing three flags.
+    """
+    on_clips = sum(len(c["markers"]) for c in payload["clips"])
+    total = len(payload["markers"]) + on_clips
+    return f"{_plural(total, 'marker')} ({on_clips} on clips)" if on_clips else _plural(total, "marker")
+
+
+def _gap_phrase(timeline) -> str:
+    """Gaps counted exactly as ``diagnose`` counts them: one definition.
+
+    The payload's ``gaps`` list is what the app HATCHES (leading and trailing
+    space, and on a gap-based storyline the whole spine), which is right to
+    draw and wrong to count: ``view`` said "1 gaps" where
+    ``validate_timeline`` said 0 on the same music video. The count is the
+    server's ``_detect_gaps``, the function ``diagnose`` reports.
+    """
+    count = len(tools.server_module()._detect_gaps(timeline))
+    phrase = _plural(count, "gap")
+    return phrase + " (gap-based storyline)" if timeline.is_gap_based else phrase
+
+
 async def handle_view_timeline(args: dict):
     validated, timeline, message = _timeline_or_message(args.get("filepath"))
     if timeline is None:
@@ -99,9 +129,9 @@ async def handle_view_timeline(args: dict):
     thumbs = sum(1 for c in payload["clips"] if c["thumb"])
     words = sum(len(c["words"]) for c in payload["clips"])
     summary = (
-        f"**{timeline.name}** — {len(payload['clips'])} clips across "
-        f"{len(payload['lanes'])} lanes, {float(Fraction(payload['duration'])):.2f}s, "
-        f"{len(payload['markers'])} timeline markers, {len(payload['gaps'])} gaps; "
+        f"**{timeline.name}** — {_plural(len(payload['clips']), 'clip')} across "
+        f"{_plural(len(payload['lanes']), 'lane')}, {float(Fraction(payload['duration'])):.2f}s, "
+        f"{_marker_phrase(payload)}, {_gap_phrase(timeline)}; "
         f"{thumbs} thumbnails, {words} transcript words.\n"
         f"sha256: {sha}\n"
         "A host with MCP Apps renders this inline (`ui://fcp/timeline`); "

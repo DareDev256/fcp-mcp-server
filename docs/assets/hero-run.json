@@ -1,0 +1,185 @@
+{
+ "run": {
+  "calls": [
+   [
+    "view \u00b7 view_timeline",
+    "drawn inline: ui://fcp/timeline"
+   ],
+   [
+    "edit \u00b7 remove_media_silence",
+    "2 rests cut, 2.83s removed"
+   ],
+   [
+    "mark \u00b7 batch_add_markers",
+    "4 lift markers"
+   ],
+   [
+    "gen \u00b7 gen_quote",
+    "priced under the cap, waits for confirm"
+   ],
+   [
+    "gen \u00b7 gen_broll",
+    "lane 1, 10 s, provider mocked"
+   ],
+   [
+    "organize \u00b7 history",
+    "5 outputs journaled, undo ready"
+   ]
+  ],
+  "results": [
+   "683325f97f611c676cbd837e75527e9e6d3c7115b7791aca932e4d414bccbe6d",
+   "f8d0536c2c331b4077bca681270a32a610f04bbb380eb1e63aca7475c6ba9775",
+   "39ca031c83ca4efe2c061c3f59655cc1bf2743ef6e692bcf281400204c20fb6a",
+   "2eef89b232b5c8c1aa450505bce630b40dca057321c773d5d3e74dd5ff2134b0"
+  ],
+  "thumbs": {
+   "Bench @ 0/1": "433cbe6c915d543957e5d5a89210e924e7b2c58a5d18b167007458b6de695325",
+   "Squat @ 11/2": "b1787a05d2c7874fe45ca14fd7719273ce2db548e1fe56742e3709c00c75116f",
+   "Squat @ 253/24": "a7e8b65535c2af0f7cc118e1fb05db039a0ad6e7bf5269300b0afd43d5b74ca3",
+   "Squat @ 125/8": "d29df1e861991846c03fb845bf04b3d8b5fbb1c043a27371b3082cc444fd54cc",
+   "Press @ 62/3": "39c9b90c32a5f3aee083862d0e0f44b7f5f42132e802cbbf32e63c212f9769c9",
+   "Finish @ 77/3": "8bf9d4ef5600a636e818e8960d75a4055d47b03f275da6a5541f51d299f1f311",
+   "B-roll (mocked) @ 13/2": "46dd82c9f7cde575816088764df937eb16ba469e677a63f1a29b0b88a7d2d53f"
+  }
+ },
+ "recordings": {
+  "hero-watch-claude-cut.mp4": {
+   "sha256": "c83f9d5302d3e1011e0e30c99ab6f0bc5954a2478f6ddf4a389957832eb48ab4",
+   "shown": {
+    "calls": [
+     [
+      "view \u00b7 view_timeline",
+      "drawn inline: ui://fcp/timeline"
+     ],
+     [
+      "edit \u00b7 remove_media_silence",
+      "2 rests cut, 2.83s removed"
+     ],
+     [
+      "mark \u00b7 batch_add_markers",
+      "4 lift markers"
+     ],
+     [
+      "gen \u00b7 gen_quote",
+      "priced under the cap, waits for confirm"
+     ],
+     [
+      "gen \u00b7 gen_broll",
+      "lane 1, 10 s, provider mocked"
+     ],
+     [
+      "organize \u00b7 history",
+      "5 outputs journaled, undo ready"
+     ]
+    ],
+    "results": [
+     "683325f97f611c676cbd837e75527e9e6d3c7115b7791aca932e4d414bccbe6d",
+     "f8d0536c2c331b4077bca681270a32a610f04bbb380eb1e63aca7475c6ba9775",
+     "39ca031c83ca4efe2c061c3f59655cc1bf2743ef6e692bcf281400204c20fb6a",
+     "2eef89b232b5c8c1aa450505bce630b40dca057321c773d5d3e74dd5ff2134b0"
+    ],
+    "thumbs": {
+     "Bench @ 0/1": "433cbe6c915d543957e5d5a89210e924e7b2c58a5d18b167007458b6de695325",
+     "Squat @ 11/2": "b1787a05d2c7874fe45ca14fd7719273ce2db548e1fe56742e3709c00c75116f",
+     "Squat @ 253/24": "a7e8b65535c2af0f7cc118e1fb05db039a0ad6e7bf5269300b0afd43d5b74ca3",
+     "Squat @ 125/8": "d29df1e861991846c03fb845bf04b3d8b5fbb1c043a27371b3082cc444fd54cc",
+     "Press @ 62/3": "39c9b90c32a5f3aee083862d0e0f44b7f5f42132e802cbbf32e63c212f9769c9",
+     "Finish @ 77/3": "8bf9d4ef5600a636e818e8960d75a4055d47b03f275da6a5541f51d299f1f311",
+     "B-roll (mocked) @ 13/2": "46dd82c9f7cde575816088764df937eb16ba469e677a63f1a29b0b88a7d2d53f"
+    }
+   }
+  },
+  "hero-unedited-recording.mp4": {
+   "sha256": "69de3ef693b0aaf5f9b2c8f213f4d88ab4cd015b56cb56f02fecc7c0d4236da3",
+   "shown": {
+    "calls": [
+     [
+      "view \u00b7 view_timeline",
+      "drawn inline: ui://fcp/timeline"
+     ],
+     [
+      "edit \u00b7 remove_media_silence",
+      "2 rests cut, 2.83s removed"
+     ],
+     [
+      "mark \u00b7 batch_add_markers",
+      "4 lift markers"
+     ],
+     [
+      "gen \u00b7 gen_quote",
+      "priced under the cap, waits for confirm"
+     ],
+     [
+      "gen \u00b7 gen_broll",
+      "lane 1, 10 s, provider mocked"
+     ],
+     [
+      "organize \u00b7 history",
+      "5 outputs journaled, undo ready"
+     ]
+    ],
+    "results": [
+     "683325f97f611c676cbd837e75527e9e6d3c7115b7791aca932e4d414bccbe6d",
+     "f8d0536c2c331b4077bca681270a32a610f04bbb380eb1e63aca7475c6ba9775",
+     "39ca031c83ca4efe2c061c3f59655cc1bf2743ef6e692bcf281400204c20fb6a",
+     "2eef89b232b5c8c1aa450505bce630b40dca057321c773d5d3e74dd5ff2134b0"
+    ],
+    "thumbs": {
+     "Bench @ 0/1": "433cbe6c915d543957e5d5a89210e924e7b2c58a5d18b167007458b6de695325",
+     "Squat @ 11/2": "b1787a05d2c7874fe45ca14fd7719273ce2db548e1fe56742e3709c00c75116f",
+     "Squat @ 253/24": "a7e8b65535c2af0f7cc118e1fb05db039a0ad6e7bf5269300b0afd43d5b74ca3",
+     "Squat @ 125/8": "d29df1e861991846c03fb845bf04b3d8b5fbb1c043a27371b3082cc444fd54cc",
+     "Press @ 62/3": "39c9b90c32a5f3aee083862d0e0f44b7f5f42132e802cbbf32e63c212f9769c9",
+     "Finish @ 77/3": "8bf9d4ef5600a636e818e8960d75a4055d47b03f275da6a5541f51d299f1f311",
+     "B-roll (mocked) @ 13/2": "46dd82c9f7cde575816088764df937eb16ba469e677a63f1a29b0b88a7d2d53f"
+    }
+   }
+  },
+  "hero-watch-claude-cut.gif": {
+   "sha256": "bded35073713ad161810c0af4e2a54909fe4faa41e8bc5b286d1d636125a9318",
+   "shown": {
+    "calls": [
+     [
+      "view \u00b7 view_timeline",
+      "drawn inline: ui://fcp/timeline"
+     ],
+     [
+      "edit \u00b7 remove_media_silence",
+      "2 rests cut, 2.83s removed"
+     ],
+     [
+      "mark \u00b7 batch_add_markers",
+      "4 lift markers"
+     ],
+     [
+      "gen \u00b7 gen_quote",
+      "priced under the cap, waits for confirm"
+     ],
+     [
+      "gen \u00b7 gen_broll",
+      "lane 1, 10 s, provider mocked"
+     ],
+     [
+      "organize \u00b7 history",
+      "5 outputs journaled, undo ready"
+     ]
+    ],
+    "results": [
+     "683325f97f611c676cbd837e75527e9e6d3c7115b7791aca932e4d414bccbe6d",
+     "f8d0536c2c331b4077bca681270a32a610f04bbb380eb1e63aca7475c6ba9775",
+     "39ca031c83ca4efe2c061c3f59655cc1bf2743ef6e692bcf281400204c20fb6a",
+     "2eef89b232b5c8c1aa450505bce630b40dca057321c773d5d3e74dd5ff2134b0"
+    ],
+    "thumbs": {
+     "Bench @ 0/1": "433cbe6c915d543957e5d5a89210e924e7b2c58a5d18b167007458b6de695325",
+     "Squat @ 11/2": "b1787a05d2c7874fe45ca14fd7719273ce2db548e1fe56742e3709c00c75116f",
+     "Squat @ 253/24": "a7e8b65535c2af0f7cc118e1fb05db039a0ad6e7bf5269300b0afd43d5b74ca3",
+     "Squat @ 125/8": "d29df1e861991846c03fb845bf04b3d8b5fbb1c043a27371b3082cc444fd54cc",
+     "Press @ 62/3": "39c9b90c32a5f3aee083862d0e0f44b7f5f42132e802cbbf32e63c212f9769c9",
+     "Finish @ 77/3": "8bf9d4ef5600a636e818e8960d75a4055d47b03f275da6a5541f51d299f1f311",
+     "B-roll (mocked) @ 13/2": "46dd82c9f7cde575816088764df937eb16ba469e677a63f1a29b0b88a7d2d53f"
+    }
+   }
+  }
+ }
+}
