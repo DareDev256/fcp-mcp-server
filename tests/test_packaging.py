@@ -16,7 +16,12 @@ that would have.
 import ast
 import fnmatch
 import re
+import shutil
+import subprocess
+import zipfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parent.parent
 
@@ -100,3 +105,42 @@ def test_the_published_author_address_is_not_the_one_that_bounced():
     text = (ROOT / "pyproject.toml").read_text()
     assert "dare@jamesdare.com" not in text
     assert re.search(r'email = "[^"]+@[^"]+"', text), "no author email at all"
+
+
+def test_the_bundled_font_is_package_data():
+    """The proof images (0.32) draw text with fcpxml/fonts/*.bdf. A file
+    setuptools is not told about is left out of the wheel, and the server
+    then starts fine and fails on the first contact sheet."""
+    text = (ROOT / "pyproject.toml").read_text()
+    block = re.search(r"\[tool\.setuptools\.package-data\](.*?)(?=\n\[|\Z)", text, re.S)
+    assert block, "no [tool.setuptools.package-data]: the font would not ship"
+    found = re.search(r"^fcpxml = (\[.*?\])", block.group(1), re.M | re.S)
+    assert found, "no fcpxml entry under package-data"
+    patterns = ast.literal_eval(found.group(1))
+    fonts = sorted(p.relative_to(ROOT / "fcpxml").as_posix() for p in (ROOT / "fcpxml" / "fonts").iterdir())
+    assert fonts, "fcpxml/fonts is empty"
+    for name in fonts:
+        assert any(fnmatch.fnmatch(name, pat) for pat in patterns), f"{name} is not package data"
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed")
+def test_a_built_wheel_carries_the_font_and_its_licence(tmp_path):
+    # Built from a copy: setuptools leaves build/ behind in the tree it builds,
+    # and a stale build/lib can carry a module this tree has since deleted.
+    src = tmp_path / "src"
+    skip = shutil.ignore_patterns("__pycache__", "*.pyc", ".work")
+    for name in ("pyproject.toml", "README.md", "server.py"):
+        src.mkdir(exist_ok=True)
+        shutil.copy2(ROOT / name, src / name)
+    for name in ("fcpxml", "tools"):
+        shutil.copytree(ROOT / name, src / name, ignore=skip)
+    out = subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path), str(src)],
+                         capture_output=True, text=True, timeout=300)
+    if out.returncode != 0 and ("network" in out.stderr.lower() or "connect" in out.stderr.lower()):
+        pytest.skip("no network for the build backend")
+    assert out.returncode == 0, out.stderr[-2000:]
+    (wheel,) = tmp_path.glob("*.whl")
+    names = set(zipfile.ZipFile(wheel).namelist())
+    for name in ("fcpxml/fonts/spleen-12x24.bdf", "fcpxml/fonts/spleen-16x32.bdf",
+                 "fcpxml/fonts/LICENSE-spleen.txt", "fcpxml/raster.py", "fcpxml/proofs.py"):
+        assert name in names, f"{name} missing from {wheel.name}"

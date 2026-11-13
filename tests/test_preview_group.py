@@ -128,9 +128,17 @@ def test_a_verified_render_is_not_labelled_unverified(monkeypatch, tmp_path):
 
 
 def test_preview_timeline_draws_the_sample_project():
+    """0.32: a time row, a ruler, a marker row, the spine; then every clip
+    and marker in time order with its timecode."""
     text = _call("preview_timeline", {"filepath": SAMPLE})[0].text
-    assert "#" in text
-    assert "s" in text
+    rows = text.splitlines()
+    assert rows[1].startswith("time") and "0.0s" in rows[1]
+    assert set(rows[2].strip()) == {"|", " "} or set(rows[2].strip()) == {"|"}
+    assert rows[3].startswith("markers") and "^" in rows[3]
+    assert rows[4].startswith("spine") and "[" in rows[4]
+    listed = [r for r in rows if r[:2] == "00"]
+    assert listed == sorted(listed), "the event list is not in time order"
+    assert "00:00:00:00  marker   Intro" in listed
 
 
 def test_preview_timeline_flags_missing_media():

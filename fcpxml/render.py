@@ -45,6 +45,9 @@ MAX_LANE_CHECKS = 12
 # picture measures in the tens.
 LANE_MATCH_THRESHOLD = 16
 _THUMB = 24
+# The proxy's default height since 0.32 (1280x720 at 16:9): a frame of it is
+# what a model or a person reads names and timecodes off.
+DEFAULT_HEIGHT = 720
 
 # ffprobe format names for single images.
 _IMAGE_FORMATS = ("image2", "png_pipe", "jpeg_pipe", "tiff_pipe", "webp_pipe",
@@ -254,7 +257,8 @@ def _failure(graph, skipped: list, error: str) -> dict:
 
 
 def render_proxy(
-    timeline: Any, out_path: Optional[str] = None, height: int = 480
+    timeline: Any, out_path: Optional[str] = None, height: int = DEFAULT_HEIGHT,
+    burn_in: bool = False,
 ) -> dict:
     """Render a low-resolution proxy of *timeline* and verify it.
 
@@ -271,6 +275,13 @@ def render_proxy(
     ``verified`` is True only when the artifact's own duration is within one
     proxy frame of the timeline and every lane clip that could be checked was
     seen in it.
+
+    ``burn_in`` writes a SECOND file beside it with the timeline timecode,
+    the clip's name and a badge on each lane clip drawn over the picture
+    (fcpxml/proofs.py). It is composited AFTER verify_lanes() has read the
+    clean render, so the instrument measures the timeline's pixels, never
+    our labels; burning first makes it fail (tests/test_proofs.py). A poster
+    frame (the middle of the timeline) is written either way.
     """
     probes = _probes(timeline) if shutil.which("ffprobe") else {}
     graph = compile_timeline(timeline, probes)
@@ -343,6 +354,17 @@ def render_proxy(
             )
     if errors:
         substitutions.insert(0, f"ffmpeg refused the full graph ({errors[0]}); rendered the fallback below")
+    burned = burn_error = None
+    if burn_in:
+        from fcpxml import proofs
+
+        burned = str(Path(out_path).with_name(Path(out_path).stem + "_burnin.mp4"))
+        burn_error = proofs.burn_in(graph, out_path, burned, height, getattr(timeline, "frame_rate", 24) or 24)
+        if burn_error:
+            burned = None
+    poster = str(Path(out_path).with_name(Path(out_path).stem + "_poster.png"))
+    poster = render_frame(burned or out_path, graph.total / 2, poster)
+    canvas = canvas_size(graph, height)
     return {
         "path": out_path,
         "duration": duration,
@@ -354,6 +376,10 @@ def render_proxy(
         "error": None,
         "verified": abs(drift) <= DURATION_TOLERANCE and heard and all(v is not False for _, v, _ in lanes),
         "lanes": lanes,
+        "burned": burned,
+        "burn_error": burn_error,
+        "poster": poster,
+        "size": f"{canvas[0]}x{canvas[1]}",
     }
 
 

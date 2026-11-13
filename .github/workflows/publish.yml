@@ -108,6 +108,15 @@ jobs:
           [ "$whl_extra" -gt 0 ] || { echo "::error::tools/ registered nothing"; exit 1; }
           [ "$whl_groups" = "$src_groups" ] && [ "$whl_handlers" = "$src_handlers" ] && [ "$whl_extra" = "$src_extra" ] \
             || { echo "::error::the installed wheel does not expose what the source tree does"; exit 1; }
+          # The proof images draw text with a bundled font (package data, not
+          # Python): a wheel without it starts fine and fails on the first sheet.
+          cat > /tmp/font.py <<'PY'
+          from fcpxml import raster
+          f = raster.face(24)
+          assert f.cap >= 14 and ord("0") in f.glyphs, "the bundled font did not load"
+          print("font:", f.name, f.cell_w, "x", f.cell_h, raster.FONTS)
+          PY
+          /tmp/smoke/bin/python - < /tmp/font.py
 
       - uses: pypa/gh-action-pypi-publish@release/v1
 

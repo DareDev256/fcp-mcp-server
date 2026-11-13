@@ -124,7 +124,7 @@ async def handle_detect_scenes(args: dict):
     found, skipped = await _cuts_per_clip(tl, args)
     srv = _common.tools.server_module()
     out = _report_header("Scene Detection", found, skipped)
-    rows = []
+    rows, strip = [], []
     for clip, cuts, backend in found:
         for c in cuts:
             # Shown on the asset's clock, as Final Cut shows source timecode;
@@ -132,14 +132,31 @@ async def handle_detect_scenes(args: dict):
             asset_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
             shown = Fraction(c).limit_denominator(1_000_000) + (asset_start - file_in_point(clip))
             rows.append([clip.name, f"{float(shown):.3f}s", _fmt(_timeline_seconds(clip, c))])
+            # the strip's timecode is the timeline's from its first frame, as
+            # the contact sheet and the app show it (an 01:00:00:00 start removed)
+            origin = Fraction(str(getattr(tl, "origin_seconds", 0) or 0)).limit_denominator(1_000_000)
+            strip.append((clip.name, media_src_to_path(clip.media_path or ""),
+                          Fraction(c).limit_denominator(1_000_000), _timeline_seconds(clip, c) - origin))
+    pictures = []
     if rows:
         out += "\n## Cuts\n" + srv._markdown_table(["Clip", "Source time", "Timeline time"], rows) + "\n"
+        # 0.32: the frame before and the frame after every cut, labelled, so
+        # a cut can be judged from a picture, not only from its time.
+        from fcpxml import proofs, render
+        from tools.preview import IMAGE_BLOCKS_MAX, _with_images
+
+        sheet = proofs.scene_strip(strip, render.cache_dir(), getattr(tl, "frame_rate", 24) or 24)
+        if sheet["pages"]:
+            out += "\n## Before and after each cut\n" + "\n".join(f"- {p}" for p in sheet["pages"]) + "\n"
+            pictures = sheet["rasters"][:IMAGE_BLOCKS_MAX]
         out += "\n*Next: `scenes_to_markers` to mark them, or `scenes_split` to cut the clips there.*"
     if not found and not skipped:
         avail = backends_available()
         out += "\nNo clips with reachable media. Backends: " + ", ".join(
             f"{k}={'yes' if v else 'no'}" for k, v in avail.items()
         )
+    if pictures:
+        return _with_images(out, pictures)
     return text_result(out)
 
 

@@ -69,7 +69,7 @@ async def test_preview_render_records_proxy(project, monkeypatch):
 
     out = project.parent / "sample_proxy.mp4"
 
-    def fake_render(tl, out_path=None, height=480):
+    def fake_render(tl, out_path=None, height=720, burn_in=False):
         out.write_bytes(b"mp4")
         return {"path": str(out), "expected": 1, "duration": 1, "drift": 0}
 

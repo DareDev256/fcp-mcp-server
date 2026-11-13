@@ -160,17 +160,18 @@ class TestSpineUnchanged:
 
 class TestPreviewPositions:
     def test_connected_blocks_use_their_timeline_position(self, gap_project):
-        """The preview placed connected clips by raw offset, so a clip whose
-        parent gap starts at 3600s rendered against a 3600s origin and landed
-        4s early. It must use timeline_start."""
-        from fcpxml.preview import render_timeline_html
+        """The legacy preview placed connected clips by raw offset, so a clip
+        whose parent gap starts at 3600s landed 4s early. preview:// now
+        inlines the view payload (0.32), which places them by timeline_start."""
+        from fractions import Fraction
+
+        from fcpxml import timeline_app
 
         tl = FCPXMLParser().parse_file(gap_project).primary_timeline
-        html = render_timeline_html(tl)
-        assert "interview" in html
-        # 16s timeline: interview at 4s -> left 25%, interview-2 at 12s -> 75%.
-        assert "left:25" in html.replace(" ", "")
-        assert "left:75" in html.replace(" ", "")
+        payload = timeline_app.build_payload(tl)
+        starts = sorted(Fraction(c["start"]) for c in payload["clips"] if "interview" in c["name"])
+        # 16s timeline: interview at 4s, interview-2 at 12s
+        assert starts == [Fraction(4), Fraction(12)]
 
 
 class TestSilenceSliver:

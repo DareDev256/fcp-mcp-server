@@ -310,46 +310,24 @@ def test_the_thumbnail_check_goes_red_at_the_old_size(browser):
 
 
 # ---------------------------------------------------------------------------
-# The legacy preview:// page has no script: its rule is CSS (fcpxml/preview.py)
+# preview:// is the app with the payload inlined (0.32): it draws on its own
 # ---------------------------------------------------------------------------
-
-LEGACY_OFFENDERS = """() => {
-  const out = [];
-  document.querySelectorAll('.fit').forEach((row) => {
-    const r = row.getBoundingClientRect(), name = row.querySelector('span'), b = name.getBoundingClientRect();
-    const visible = b.top < r.bottom - 1 && b.bottom > r.top + 1;   // on the row's one visible line
-    if (visible && b.right > r.right + 0.5) out.push('cut "' + name.textContent + '"');
-  });
-  return out;
-}"""
-
-
-def _legacy(width: int, html: str, browser) -> list[str]:
-    page = browser.new_page(viewport={"width": width, "height": 700})
-    try:
-        page.set_content(html)
-        return page.evaluate(LEGACY_OFFENDERS)
-    finally:
-        page.close()
-
 
 @pytest.mark.parametrize("width", [1440, 390])
 @pytest.mark.parametrize("fixture", ["music-video.fcpxml", "sample.fcpxml"])
-def test_the_legacy_preview_never_shows_a_cut_name(browser, fixture, width):
-    from fcpxml.preview import render_timeline_html
+def test_the_preview_page_draws_itself_with_no_host(browser, fixture, width):
     tl = FCPXMLParser().parse_file(str(EXAMPLES / fixture)).timelines[0]
-    assert _legacy(width, render_timeline_html(tl), browser) == []
-
-
-def test_the_legacy_check_goes_red_without_the_wrapping_row(browser):
-    """Mutation check: with the row allowed to stay on one line, the names
-    of narrow blocks are cut at 390 and the measurement sees it."""
-    from fcpxml.preview import render_timeline_html
-    tl = FCPXMLParser().parse_file(str(EXAMPLES / "music-video.fcpxml")).timelines[0]
-    html = render_timeline_html(tl)
-    broken = html.replace("flex-wrap: wrap;", "flex-wrap: nowrap;")
-    assert broken != html
-    assert _legacy(390, broken, browser)
+    payload = timeline_app.build_payload(tl)
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    try:
+        page.set_content(timeline_app.render_page_html(payload))
+        page.wait_for_timeout(50)
+        drawn = page.evaluate("() => document.querySelectorAll('#canvas .clip').length")
+        offenders = page.evaluate(OFFENDERS)
+    finally:
+        page.close()
+    assert drawn == len(payload["clips"])
+    assert offenders == []
 
 
 HEAD_GAP = """() => {

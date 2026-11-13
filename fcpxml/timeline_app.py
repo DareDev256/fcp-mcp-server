@@ -1,9 +1,10 @@
 """The timeline app — an MCP Apps view of the cut, rendered by the host.
 
-``fcpxml/preview.py`` draws a static HTML snapshot and serves it as
-``preview://``. This module is the interactive successor: one ``ui://``
-resource (the app shell, served once as ``text/html;profile=mcp-app``) and a
-JSON payload the ``view`` tool returns on every call. The host renders the
+One ``ui://`` resource (the app shell, served once as
+``text/html;profile=mcp-app``) and a JSON payload the ``view`` tool returns on
+every call. Since 0.32 ``preview://`` serves the same shell with the payload
+inlined (:func:`render_page_html`); the static renderer it used to serve
+(``fcpxml/preview.py``) is gone, so there is one timeline picture. The host renders the
 shell in a sandboxed iframe, posts each tool result into it, and the app
 draws lanes, clips, markers, gaps, transcript words and thumbnails from the
 payload alone. The app calls back into the server through the host
@@ -341,6 +342,19 @@ def data_uri_jpeg(path: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # The shell
 # ---------------------------------------------------------------------------
+
+def render_page_html(payload: dict) -> str:
+    """The ``preview://`` page (0.32): the same shell with ``payload`` inlined
+    as a JSON script block, so a browser or a host that only shows HTML draws
+    the timeline at once. It replaces the legacy static renderer
+    (fcpxml/preview.py, deleted). ``<`` is escaped inside the JSON, so a clip
+    named ``</script>`` stays data."""
+    data = json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    block = f'<script type="application/json" id="fcp-inline-payload">{data}</script>\n'
+    marker = "<script>"
+    i = _APP_HTML.rindex(marker)
+    return _APP_HTML[:i] + block + _APP_HTML[i:]
+
 
 def render_app_html() -> str:
     """The ``ui://fcp/timeline`` resource. Self-contained; takes no payload.
@@ -975,12 +989,23 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
 
   // ---- boot --------------------------------------------------------------
   state.inHost = window.parent && window.parent !== window;
+  // preview:// serves this same shell with the timeline inlined (0.32): drawn
+  // at once, with no host and no fetch.
+  var inline = document.getElementById("fcp-inline-payload");
   if (state.inHost) {
     request("ui/initialize", { appInfo: { name: "fcp-mcp-server timeline", version: "1" }, appCapabilities: {}, protocolVersion: "2025-11-21" })
       .then(function (res) { applyHostContext((res && res.hostContext) || null); notify("ui/notifications/initialized"); log("host initialized"); },
             function (err) { log("ui/initialize failed: " + err.message); });
-  } else {
+  } else if (!inline) {
     log("not inside an MCP Apps host; waiting for a payload via window.__fcpApp.setPayload()");
+  }
+  if (inline) {
+    try {
+      setPayload(JSON.parse(inline.textContent));
+      log(state.inHost ? "timeline inlined by preview://"
+                       : "timeline inlined by preview://; read only here (edits run inside an MCP Apps host)");
+    }
+    catch (err) { log("inlined timeline could not be read: " + err.message); }
   }
 })();
 </script>

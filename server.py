@@ -58,13 +58,12 @@ from fcpxml.models import (
     Timecode,
 )
 from fcpxml.parser import FCPXMLParser
-from fcpxml.preview import render_timeline_html
 from fcpxml.rational import fcp_frame_rate_name
 from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.31.0"
+__version__ = "0.32.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -870,7 +869,7 @@ async def list_resources() -> list[Resource]:
         resources.append(Resource(
             uri=f"preview://{encoded}",
             name=f"{p.stem} (visual preview)",
-            description=f"HTML timeline preview: {p.name}",
+            description=f"Timeline (the app, drawn from this file): {p.name}",
             mimeType="text/html",
         ))
     return resources
@@ -915,7 +914,10 @@ async def read_resource(uri: str) -> str | list[ReadResourceContents]:
         _project, tl = _parse_project(filepath)
         if not tl:
             return f"No timelines found in {filepath}"
-        return [ReadResourceContents(content=render_timeline_html(tl), mime_type="text/html")]
+        # 0.32: the app shell with the timeline inlined, the same picture the
+        # view tool draws; the legacy static renderer is gone.
+        payload = _timeline_app.build_payload(tl, filepath=filepath, sha256=_journal.file_hash(filepath))
+        return [ReadResourceContents(content=_timeline_app.render_page_html(payload), mime_type="text/html")]
 
     filepath = _uri_to_path(raw, "file://")
     try:
@@ -2774,64 +2776,83 @@ async def handle_fill_gaps(arguments: dict) -> Sequence[TextContent]:
     return _text_result(result)
 
 
+# The verdict glyphs a diagnose report reads by (0.32): a column the eye runs
+# down in three seconds, the word beside the glyph for screen readers and for
+# a terminal without the glyph.
+VERDICT = {"FAIL": "✗ FAIL", "WARN": "⚠ WARN", "INFO": "· INFO", "PASS": "✓ PASS"}
+
+
 async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
     project, tl = _require_timeline(arguments["filepath"])
     checks = arguments.get("checks", ["all"])
     run_all = "all" in checks
 
-    issues: list[str] = []
+    # (verdict, where, what): where is the timecode it happens at, or "—"
+    issues: list[tuple[str, str, str]] = []
     flash_count = 0
     gap_count = 0
     duplicate_count = 0
+    flash_where: list[str] = []
+    gap_where: list[str] = []
+    duplicate_where: list[str] = []
 
     if run_all or "flash_frames" in checks:
         flashes = _detect_flash_frames(tl)
         flash_count = len(flashes)
         for f in flashes:
-            severity = "error" if f.severity == FlashFrameSeverity.CRITICAL else "warning"
-            issues.append(
-                f"- [{severity.upper()}] Flash frame: {f.clip_name} "
-                f"({f.duration_frames}f) at {format_timecode(f.start)}"
-            )
+            verdict = "FAIL" if f.severity == FlashFrameSeverity.CRITICAL else "WARN"
+            where = format_timecode(f.start)
+            flash_where.append(where)
+            issues.append((verdict, where, f"Flash frame: {f.clip_name} ({f.duration_frames}f)"))
 
     if run_all or "gaps" in checks:
         detected_gaps = _detect_gaps(tl)
         gap_count = len(detected_gaps)
         for g in detected_gaps:
-            issues.append(f"- [WARNING] Gap: {g.duration_frames}f at {g.timecode}")
+            gap_where.append(str(g.timecode))
+            issues.append(("WARN", str(g.timecode), f"Gap: {g.duration_frames}f"))
 
     if run_all or "duplicates" in checks:
         dup_groups = _detect_duplicate_groups(tl)
         for group in dup_groups:
             duplicate_count += group.count
-            issues.append(
-                f"- [INFO] Duplicate source: {group.source_name} ({group.count} uses)"
-            )
+            uses = [c.get("timecode") for c in group.clips if c.get("timecode")]
+            duplicate_where.append(uses[0] if uses else "—")
+            issues.append(("INFO", ", ".join(uses[:3]) + (" …" if len(uses) > 3 else "") if uses else "—",
+                           f"Duplicate source: {group.source_name} ({group.count} uses)"))
 
     error_weight = 10
     warning_weight = 3
     info_weight = 1
-    errors = len([i for i in issues if "[ERROR]" in i])
-    warnings = len([i for i in issues if "[WARNING]" in i])
-    infos = len([i for i in issues if "[INFO]" in i])
+    errors = sum(1 for v, _, _ in issues if v == "FAIL")
+    warnings = sum(1 for v, _, _ in issues if v == "WARN")
+    infos = sum(1 for v, _, _ in issues if v == "INFO")
     penalty = (errors * error_weight) + (warnings * warning_weight) + (infos * info_weight)
     health_score = max(0, 100 - penalty)
 
+    def where(times: list) -> str:
+        return "—" if not times else ", ".join(times[:3]) + (f" (+{len(times) - 3})" if len(times) > 3 else "")
+
+    flash_verdict = "PASS" if flash_count == 0 else ("FAIL" if errors else "WARN")
+    rows = [
+        (flash_verdict, "Flash Frames", flash_count, where(flash_where)),
+        ("PASS" if gap_count == 0 else "WARN", "Gaps", gap_count, where(gap_where)),
+        ("PASS" if duplicate_count == 0 else "INFO", "Duplicate Sources", duplicate_count, where(duplicate_where)),
+    ]
     result = f"""# Timeline Validation: {tl.name}
 
 ## Health Score: {health_score}%
 
 ## Summary
-| Check | Count | Status |
-|-------|-------|--------|
-| Flash Frames | {flash_count} | {'PASS' if flash_count == 0 else 'FAIL'} |
-| Gaps | {gap_count} | {'PASS' if gap_count == 0 else 'WARN'} |
-| Duplicate Sources | {duplicate_count} | {'PASS' if duplicate_count == 0 else 'INFO'} |
+| Result | Check | Count | Where |
+|--------|-------|-------|-------|
+""" + "\n".join(f"| {VERDICT[v]} | {name} | {count} | {at} |" for v, name, count, at in rows) + f"""
 
 ## Issues ({len(issues)})
 """
     if issues:
-        result += "\n".join(issues[:20])
+        result += "| Result | Where | Issue |\n|--------|-------|-------|\n"
+        result += "\n".join(f"| {VERDICT[v]} | {at} | {what} |" for v, at, what in issues[:20])
         if len(issues) > 20:
             result += f"\n... and {len(issues) - 20} more issues"
     else:
@@ -4276,7 +4297,7 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
     # pass it back as expected_sha256 on the next call without a round trip.
     hashes = _written_hashes(written)
     if hashes:
-        result = _text_result(_with_hashes(result[0].text, hashes))
+        result = _with_text(result, _with_hashes(result[0].text, hashes))
     # Autopush lives HERE, on the same seam, so every write handler gets it
     # without knowing: whatever this request wrote as FCPXML is pushed.
     # push_to_fcp is the push; it is not pushed again.
@@ -4285,10 +4306,17 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
             _maybe_autopush(p) for p in written if p.endswith((".fcpxml", ".fcpxmld"))
         )
         if pushed:
-            result = _text_result(result[0].text + pushed)
+            result = _with_text(result, result[0].text + pushed)
     if action in GATED_ACTIONS and arguments.get("confirm_unreviewed") is True:
-        result = _text_result(result[0].text + _UNREVIEWED_NOTE)
+        result = _with_text(result, result[0].text + _UNREVIEWED_NOTE)
     return result
+
+
+def _with_text(result, text: str) -> list:
+    """The result with its leading text replaced and everything after it kept:
+    the proof tools answer with image blocks and resource links after the
+    text, and a write's hash footer must not drop them (0.32)."""
+    return _text_result(text) + list(result[1:])
 
 
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:

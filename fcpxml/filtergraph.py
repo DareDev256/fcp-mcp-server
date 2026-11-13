@@ -833,8 +833,19 @@ def graph_to_args(graph: FilterGraph, out_path: str, height: int = 480) -> list[
             if transition is None:
                 chains.append(f"{accumulated}[p{number}]concat=n=2:v=1:a=0{label}")
             else:
+                # concat hands on its output in a 1/1000000 timebase and xfade
+                # refuses two inputs in different timebases ("First input link
+                # main timebase (1/1000000) do not match ... (1/24)"), so a
+                # crossfade after any hard cut failed the whole graph and the
+                # proxy fell back to hard cuts and silence (0.32: the gym
+                # fixture's Press-to-Finish dissolve). Put the accumulated
+                # stream back on the pieces' own clock first.
+                into = accumulated
+                if number > 1:
+                    into = f"[q{number}]"
+                    chains.append(f"{accumulated}settb=1/{FPS}{into}")
                 chains.append(
-                    f"{accumulated}[p{number}]xfade=transition={transition.kind}"
+                    f"{into}[p{number}]xfade=transition={transition.kind}"
                     f":duration={float(Fraction(transition.end - transition.start, FPS)):.6f}"
                     f":offset={float(Fraction(transition.start, FPS)):.6f}{label}"
                 )
