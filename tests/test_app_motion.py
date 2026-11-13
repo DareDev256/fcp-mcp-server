@@ -306,50 +306,59 @@ TILE = """() => {
 }"""
 
 
-def first_dark_run(png: bytes) -> int:
-    """Pixels from the left edge of a clip's middle row to its first light pixel."""
+def runs(png: bytes) -> list[int]:
+    """Lengths of the dark and light runs along a clip's middle row, without
+    the two at the edges (they are cut by the clip, wherever the tiles start)."""
     from io import BytesIO
 
     from PIL import Image
     im = Image.open(BytesIO(png)).convert("L")
-    row = [im.getpixel((x, im.height // 2)) for x in range(im.width)]
-    return next((i for i, v in enumerate(row) if v > 128), len(row))
+    row = [im.getpixel((x, im.height // 2)) > 128 for x in range(im.width)]
+    out, n = [], 1
+    for a, b in zip(row, row[1:]):
+        if a == b:
+            n += 1
+        else:
+            out.append(n)
+            n = 1
+    out.append(n)
+    return out[1:-1]
 
 
-def test_a_long_clip_tiles_its_thumbnail_at_its_own_aspect(browser):
-    """A clip 3x wider than its thumbnail repeats it, 16:9 at the clip's height:
-    the black half is height x 16/9 / 2 wide. Stretched (or a cover crop of one
-    frame) it would be half the clip."""
-    pytest.importorskip("PIL")
-    p = _thumbed(_base())
-    page = _page(browser, width=1440)
-    try:
-        page.evaluate("p => window.__fcpApp.setPayload(p)", p)
-        page.add_style_tag(content=".clip .label, .playhead, .mk { visibility: hidden !important; } .clip .thumbs { opacity: 1 !important; }")
-        box = page.evaluate(TILE)
-        shot = page.screenshot(clip={"x": box["x"] + 2, "y": box["y"] + 2, "width": box["w"] - 4, "height": box["h"] - 4})
-    finally:
-        page.close()
-    assert box["w"] > 3 * box["h"] * 16 / 9, box
-    expected = (box["h"] - 2) * 16 / 9 / 2 - 2  # inside the 1px border, less the 2px inset
-    assert abs(first_dark_run(shot) - expected) < 4, (first_dark_run(shot), expected)
-
-
-def test_the_tile_check_sees_a_stretched_thumbnail(browser):
-    """Mutation check: one frame stretched over the clip fails it."""
-    pytest.importorskip("PIL")
+def _tile_shot(browser, extra_css: str = ""):
     p = _thumbed(_base())
     page = _page(browser, width=1440)
     try:
         page.evaluate("p => window.__fcpApp.setPayload(p)", p)
         page.add_style_tag(content=".clip .label, .playhead, .mk { visibility: hidden !important; } "
-                           ".clip .thumbs { opacity: 1 !important; background-size: 100% 100% !important; }")
+                           ".clip .thumbs { opacity: 1 !important; }" + extra_css)
         box = page.evaluate(TILE)
         shot = page.screenshot(clip={"x": box["x"] + 2, "y": box["y"] + 2, "width": box["w"] - 4, "height": box["h"] - 4})
     finally:
         page.close()
-    expected = (box["h"] - 2) * 16 / 9 / 2 - 2
-    assert abs(first_dark_run(shot) - expected) > 20
+    return box, shot
+
+
+def test_a_long_clip_tiles_its_thumbnail_at_its_own_aspect(browser):
+    """A clip 3x wider than its thumbnail repeats it, 16:9 at the clip's height:
+    every whole dark or light run is height x 16/9 / 2 wide. Stretched, or one
+    frame blown up to cover the clip, there is no whole run at all."""
+    pytest.importorskip("PIL")
+    box, shot = _tile_shot(browser)
+    assert box["w"] > 3 * box["h"] * 16 / 9, box
+    half = (box["h"] - 2) * 16 / 9 / 2  # inside the clip's 1px borders
+    inner = runs(shot)
+    assert len(inner) >= 4 and all(abs(r - half) < 3 for r in inner), (inner, half)
+
+
+def test_the_tile_check_sees_a_stretched_thumbnail(browser):
+    """Mutation check: one frame stretched over the clip fails it (one dark
+    half, one light half: no whole run of the right length)."""
+    pytest.importorskip("PIL")
+    box, shot = _tile_shot(browser, " .clip .thumbs { background-size: 100% 100% !important; }")
+    half = (box["h"] - 2) * 16 / 9 / 2
+    inner = runs(shot)
+    assert not (len(inner) >= 4 and all(abs(r - half) < 3 for r in inner)), inner
 
 
 CUTS_A_TIME = """() => {

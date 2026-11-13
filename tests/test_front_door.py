@@ -133,6 +133,52 @@ def test_the_requirements_check_can_go_red():
     assert first_screen_problems(readme.replace("Python 3.10+ · Final Cut", "Final Cut", 1), pyproject)
 
 
+# FROZEN since 0.31 round 6 (the coordinator's call): the social card and the
+# logo. A hero re-render must not regenerate them (build.py writes the card's
+# picture only with --card); changing one is a deliberate act that updates
+# this pin in the same commit.
+FROZEN = {
+    "docs/assets/social-card.png": "8a3e9a93b88d075752b2012fbb06b550f1dd2fefd22b4ee809c63ff567f85943",
+    "docs/assets/card-frame.png": "da40537231a852c12a6922960de1ab9b3e461b5baac0f171b072beacf9085826",
+    "docs/assets/logo.svg": "fa7c7916d339e37bbcef2abfc80ca4334d7a3d82cfe1b9365213b3054d6bcaa9",
+    "docs/assets/logo-small.svg": "15cfe199da6a7e1d1996e79befe75725f5da3e0cc3f13852046a15ccdcfd99cb",
+    "docs/assets/logo-400.png": "4302206c442cee1153a97d1a0225dd746e45e84a56ec335c33b61fce616563a6",
+    "docs/assets/logo-small-400.png": "bce6db1124c1f8e197d6c798aba1c7ce3f7df737f01d2b20267decf253402cb3",
+}
+
+
+def frozen_problems(root: Path, pins: dict) -> list:
+    import hashlib
+    out = []
+    for rel, want in pins.items():
+        f = root / rel
+        got = hashlib.sha256(f.read_bytes()).hexdigest() if f.is_file() else "missing"
+        if got != want:
+            out.append(f"{rel} changed ({got[:12]}, pinned {want[:12]})")
+    return out
+
+
+def test_the_card_and_the_logo_are_frozen():
+    assert frozen_problems(REPO, FROZEN) == []
+
+
+def test_the_freeze_sees_a_changed_byte(tmp_path):
+    for rel in FROZEN:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes((REPO / rel).read_bytes())
+    card = tmp_path / "docs/assets/social-card.png"
+    card.write_bytes(card.read_bytes() + b"\0")
+    problems = frozen_problems(tmp_path, FROZEN)
+    assert len(problems) == 1 and "social-card" in problems[0]
+
+
+def test_an_ordinary_hero_build_leaves_the_card_alone():
+    build = (REPO / "demo" / "hero" / "build.py").read_text(encoding="utf-8")
+    record = (REPO / "demo" / "hero" / "record.js").read_text(encoding="utf-8")
+    assert 'card = ["--card"] if "--card" in sys.argv else []' in build
+    assert "if (WITH_CARD) await writeCardFrame(browser);" in record
+
+
 def recorded_calls(build_source: str) -> list[str]:
     """The calls demo/hero/build.py puts in the hero's chat, in its order."""
     return re.findall(r'\{"at": [\d.]+, "call": "([^"]+)"', build_source)

@@ -39,19 +39,24 @@ What it does, in order:
    and journal, and the on-screen note says so. With no copy on file and
    no ``--generate``, the provider is mocked and the note says THAT plainly.
 4. Writes ``.work/states.json`` (the prompt, the tool lines, the four
-   payload-bearing results, the palette and the patterns no image may
-   carry, ``scripts/image_text.py``) plus the ``ui://fcp/timeline`` resource
-   as served, then runs ``record.js`` (Playwright), which sends the four
-   results IN ORDER to one app instance, so every change is the app's own
-   motion (a split clip's pieces slide together, new markers drop in, the
-   B-roll is laid in), never a dissolve between two renders. It encodes
-   ``docs/assets/hero-watch-claude-cut.mp4`` (the chat beside the app; each
-   tool call lands as its edit starts to move) and ``.gif`` (the README's own
-   cut: the ruler and lanes alone, laid out at phone width and drawn at 3x so
-   the app's type is 30 px or more, ~9 s with a hold per step). Both open on
-   the finished cut, and the MP4 also carries that frame as its attached
-   poster. A mocked B-roll is relabelled in the file ("B-roll (mocked)",
-   "mock b-roll: ...") and gets a solid MOCK pill.
+   payload-bearing results, the story's timing, the palette and the patterns
+   no image may carry, ``scripts/image_text.py``) plus the
+   ``ui://fcp/timeline`` resource as served, then runs ``record.js``
+   (Playwright). That composes the hero on a stage: the REAL timeline view
+   (the app as served, fed the four results in order, so every change is the
+   app's own motion) drawn 2.25x on true black, a caption with the prompt and
+   then one chip per call, and a virtual camera that pushes onto each edit.
+   The framing, captions and timing are composed; the view and the edits are
+   real, and the README says which is which. It encodes
+   ``docs/assets/hero-watch-claude-cut.mp4`` (1280x736, 30 fps, the finished
+   cut as frame 0 and as its attached poster) and ``.gif`` (the same frames,
+   960 wide, 15 fps), crossfading only the last 0.3 s into frame 0. It
+   refuses a hold over 1.5 s and a loop whose last frame is not frame 0.
+   ``--card`` also writes ``card-frame.png`` for the social card (frozen
+   since 0.31 round 6, so an ordinary build leaves it alone). A mocked
+   B-roll is relabelled in the file ("B-roll (mocked)", "mock b-roll: ...")
+   and gets a solid MOCK badge. The chat-client recording of round 5 is kept,
+   unedited, as ``docs/assets/hero-unedited-recording.mp4``.
 
 Requires ffmpeg/ffprobe on PATH, Pillow (for the GIF: it merges identical
 frames, which ffmpeg's gif muxer does not), and Node with the ``playwright``
@@ -88,11 +93,9 @@ ASSETS = REPO / "docs" / "assets"
 FPS = 24
 GIF_MAX_BYTES = 5_000_000
 PROMPT = "Cut the rest between sets, mark every lift, and put B-roll over the long set."
-LOOP_START = 15.0  # seconds into the story where the finished cut is on screen and every line is in
-DURATION = 16.5
-# The README GIF's own cut: (state, seconds on screen, moves into it). Frame 0
-# is the finished cut, then the story from the imported cut, one step each.
-GIF_STORY = [(3, 3.0, False), (0, 1.5, False), (1, 2.0, True), (2, 2.0, True), (3, 0.6, True)]
+HOLD_MAX = 1.5      # seconds: no stretch of identical frames may last longer
+SEAM = 0.3          # seconds: the last frames crossfade into frame 0, the one crossfade
+GIF_WIDTH, GIF_EVERY = 960, 2  # the GIF: the same frames, 960 wide, every 2nd (15 fps)
 MOCK_CLIP, MOCK_MARKER = "B-roll (mocked)", "mock b-roll: Toronto skyline at dusk"
 LONG_SET = "Squat"
 
@@ -110,15 +113,6 @@ BROLL_PROVIDER, BROLL_MODEL = "gemini", "omni-1.2-flash"
 BROLL_CAP_USD = Decimal("0.70")
 BROLL_COPY = FOOTAGE / "broll.mp4"
 BROLL_RECORD = FOOTAGE / "broll.json"
-
-FOOTAGE_NOTE = "Footage: the author's own gym session; its audio is a test tone, so the rests are real silence."
-NOTES = {
-    "replay": ("B-roll: one real Gemini Omni Flash generation from the prompt alone, replayed here from the "
-               "copy kept in demo/hero/footage through the same quote gate, probe, insert and journal."),
-    "real": "B-roll: one real Gemini Omni Flash generation from the prompt alone.",
-    "mock": ("B-roll provider MOCKED: no real generation was available for this recording, so the quote "
-             "gate, probe, insert, DTD check and journal ran on a stand-in clip."),
-}
 
 
 def ffmpeg(*args: str) -> None:
@@ -315,24 +309,32 @@ def main() -> None:
     # the chat lists the six calls Claude makes in answer. Each line lands as
     # its re-render starts to move (record.js starts the motion 0.1 s after
     # "at"); the timeline first appears WITH the view call, a second in.
+    # The story (seconds): frame 0 is the finished cut; at 0.4 the app rewinds
+    # to the imported cut (its own undo motion) while the prompt types, then
+    # each call's chip lands just before its edit moves and the camera pushes
+    # onto what changed. Every hold has typing in it; none lasts 1.5 s.
     lines = [
-        {"at": 1.0, "call": "view · view_timeline", "note": "rendered inline (ui://fcp/timeline)", "state": 0},
-        {"at": 3.8, "call": "edit · remove_media_silence",
-         "note": f"{rests} rests cut · {removed} removed", "state": 1},
-        {"at": 6.6, "call": "mark · batch_add_markers", "note": f"{len(lifts)} lift markers", "state": 2},
-        {"at": 9.2, "call": "gen · gen_quote", "note": "quoted under the cap, refused until confirm=true"},
-        {"at": 11.4, "call": "gen · gen_broll",
-         "note": f"lane {placed.group(1)} · {float(placed.group(3)):.0f}s over the long set · {made}", "state": 3},
-        {"at": 14.0, "call": "organize · history", "note": f"{journaled} outputs journaled · undo ready"},
+        {"at": 1.9, "call": "view · view_timeline", "note_at": 2.2, "note": "drawn inline: ui://fcp/timeline"},
+        {"at": 2.75, "call": "edit · remove_media_silence", "note_at": 3.6,
+         "note": f"{rests} rests cut, {removed} removed", "state": 1},
+        {"at": 4.45, "call": "mark · batch_add_markers", "note_at": 5.25, "note": f"{len(lifts)} lift markers", "state": 2},
+        {"at": 6.0, "call": "gen · gen_quote", "note_at": 6.3, "note": "priced under the cap, waits for confirm"},
+        {"at": 7.15, "call": "gen · gen_broll", "note_at": 7.9,
+         "note": f"lane {placed.group(1)}, {float(placed.group(3)):.0f} s, {made}", "state": 3},
+        {"at": 8.8, "call": "organize · history", "note_at": 9.1, "note": f"{journaled} outputs journaled, undo ready"},
     ]
+    story = {
+        "duration": 10.2, "seam": SEAM, "prompt": [0.4, 1.5],
+        "deliveries": [{"at": 0.4, "state": 0}, {"at": 3.0, "state": 1}, {"at": 4.7, "state": 2}, {"at": 7.4, "state": 3}],
+        "calls": lines,
+        "pushes": [{"on": "squat", "in": 2.95, "out": 3.75}, {"on": "markers", "in": 4.65, "out": 5.45},
+                   {"on": "broll", "in": 7.35, "out": 8.15}],
+    }
     app_html = asyncio.run(server.read_resource(timeline_app.APP_URI))[0].content
     (WORK / "app.html").write_text(app_html, encoding="utf-8")
     (WORK / "states.json").write_text(json.dumps({
-        "prompt": PROMPT, "lines": lines, "states": states, "duration": DURATION,
-        "loop_start": LOOP_START, "palette": palette.as_json()["dark"],
-        "gif_story": [{"state": st, "hold": hold, "moves": moves} for st, hold, moves in GIF_STORY],
-        "mock_clip": MOCK_CLIP if mode == "mock" else None,
-        "footer": f"{FOOTAGE_NOTE} {NOTES[mode]}",
+        "prompt": PROMPT, "lines": lines, "states": states, "story": story, "long_set": LONG_SET,
+        "palette": palette.as_json()["dark"], "mock_clip": MOCK_CLIP if mode == "mock" else None,
         "stale": {"host": image_text.patterns("host"), "app": image_text.patterns("app")},
     }), encoding="utf-8")
     for name, text in [("import", r_import), ("silence", r_silence), ("mark", r_mark), ("quote", r_quote),
@@ -392,58 +394,59 @@ def record(work: Path, home: str) -> None:
     frames = work / "frames"
     frames.mkdir()
     env = {**os.environ, "HOME": home}  # Playwright finds its browsers under the real HOME
-    subprocess.run(["node", str(HERE / "record.js"), str(work), str(frames), str(ASSETS)],
-                   check=True, timeout=900, env=env)
+    card = ["--card"] if "--card" in sys.argv else []  # the card is frozen: only on request
+    subprocess.run(["node", str(HERE / "record.js"), str(work), str(frames), str(ASSETS), *card],
+                   check=True, timeout=1800, env=env)
 
 
 def encode(work: Path) -> None:
-    ASSETS.mkdir(parents=True, exist_ok=True)
-    frames = str(work / "frames" / "%05d.png")
+    """The MP4 and the GIF from the same frames, after two gates on them."""
+    try:
+        from PIL import Image, ImageChops, ImageStat
+    except ImportError:
+        sys.exit("Pillow is needed: uv run --with pillow demo/hero/build.py")
+    states = json.loads((work / "states.json").read_text())
+    fps, seam = 30, states["story"]["seam"]
+    frames = sorted((work / "frames").glob("*.png"))
+    first = Image.open(frames[0]).convert("RGB")
+    # The loop's seam, the one crossfade: the last SEAM seconds blend into frame 0.
+    n = round(seam * fps)
+    for i, f in enumerate(frames[-n:], 1):
+        Image.blend(Image.open(f).convert("RGB"), first, i / n).save(f)
+    grey = [Image.open(f).convert("L").resize((160, 96)) for f in frames]
+    diff = lambda a, b: ImageStat.Stat(ImageChops.difference(a, b)).mean[0]  # noqa: E731
+    # Gate: the loop is seamless (the last frame is frame 0, near enough).
+    if diff(grey[-1], grey[0]) > 1.0:
+        sys.exit(f"REFUSED: the last frame differs from frame 0 by {diff(grey[-1], grey[0]):.2f}; the loop would jump")
+    # Gate: no hold over HOLD_MAX (a run of unchanging frames, round the loop).
+    still = [diff(grey[i], grey[(i + 1) % len(grey)]) < 0.05 for i in range(len(grey))]
+    if all(still):
+        sys.exit("REFUSED: nothing moves")
+    k = still.index(False) + 1
+    run = longest = 0
+    for j in range(len(still)):
+        run = run + 1 if still[(k + j) % len(still)] else 0
+        longest = max(longest, run)
+    if (longest + 1) / fps > HOLD_MAX:
+        sys.exit(f"REFUSED: a hold of {(longest + 1) / fps:.2f} s (at most {HOLD_MAX} s)")
+    print(f"longest hold {(longest + 1) / fps:.2f} s")
     mp4 = ASSETS / "hero-watch-claude-cut.mp4"
     gif = ASSETS / "hero-watch-claude-cut.gif"
     poster = ASSETS / "hero-still.png"
-    flatten(ASSETS / "card-frame.png")
-    # The frames already open on the finished cut (record.js captures from
-    # LOOP_START round to it), so the MP4's first decoded frame is the
-    # finished cut too; it also carries that frame as an attached poster.
-    ffmpeg("-framerate", "30", "-i", frames, "-i", str(poster), "-map", "0:v", "-map", "1:v",
-           "-c:v:0", "libx264", "-pix_fmt:v:0", "yuv420p", "-crf", "22", "-preset", "slow",
+    first.save(poster)
+    ffmpeg("-framerate", str(fps), "-i", str(work / "frames" / "%05d.png"), "-i", str(poster), "-map", "0:v", "-map", "1:v",
+           "-c:v:0", "libx264", "-pix_fmt:v:0", "yuv420p", "-crf", "20", "-preset", "slow",
            "-c:v:1", "mjpeg", "-disposition:v:1", "attached_pic", "-movflags", "+faststart", str(mp4))
-    # Pillow writes the GIF: one global palette drawn from sample frames,
-    # every frame quantised to it, identical consecutive frames merged and
-    # each frame cropped to the pixels that changed. ffmpeg 9.0's gif muxer
-    # wrote every frame whole (20 MB for 28 s) and its paletteuse pass
-    # duplicated frames, so it is used for the mp4 only.
-    try:
-        from PIL import Image
-    except ImportError:
-        sys.exit("Pillow is needed to write the GIF: uv run --with pillow demo/hero/build.py")
-    # The README GIF is its own cut (record.js's gif-frames: the ruler and lanes
-    # alone, laid out at phone width and drawn at 3x), one PNG per distinct
-    # picture with how long it stays (durations.json): a hold is one frame.
-    gif_dir = work / "gif-frames"
-    holds = json.loads((gif_dir / "durations.json").read_text())
-    sources = [gif_dir / name for name, _ in holds]
-    Image.open(sources[0]).convert("RGB").save(ASSETS / "hero-timeline-still.png")  # frame 0: the finished cut
-    width = Image.open(sources[0]).width
-    # Always the full width: a narrower GIF would shrink the type the cut
-    # exists to keep, so over the cap is a refusal, not a resize.
-    write_gif(gif, sources, width, Image, [ms for _, ms in holds])
+    # The GIF: the same composition, scaled, every GIF_EVERY-th frame. Pillow
+    # merges identical frames and crops each to what changed.
+    picks = frames[::GIF_EVERY]
+    each = 1000 / fps * GIF_EVERY
+    durations = [round((i + 1) * each, -1) - round(i * each, -1) for i in range(len(picks))]
+    write_gif(gif, picks, GIF_WIDTH, Image, [int(d) for d in durations])
     if gif.stat().st_size > GIF_MAX_BYTES:
-        sys.exit(f"the GIF is {gif.stat().st_size / 1e6:.2f} MB at {width} px, over the "
-                 f"{GIF_MAX_BYTES / 1e6:.1f} MB cap: shorten the story")
+        sys.exit(f"REFUSED: the GIF is {gif.stat().st_size / 1e6:.2f} MB, over {GIF_MAX_BYTES / 1e6:.0f} MB")
     for p in (mp4, gif):
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
-
-
-def flatten(path: Path) -> None:
-    """A PNG with no transparency: corners composited onto the ground."""
-    from PIL import Image
-    im = Image.open(path)
-    if im.mode in ("RGBA", "LA", "P"):
-        ground = Image.new("RGBA", im.size, palette.dark("ground"))
-        ground.alpha_composite(im.convert("RGBA"))
-        ground.convert("RGB").save(path)
 
 
 def write_gif(gif: Path, picks: list[Path], width: int, image_module, durations: list[int]) -> None:
@@ -458,7 +461,7 @@ def write_gif(gif: Path, picks: list[Path], width: int, image_module, durations:
     for i, im in enumerate(samples):
         sheet.paste(im, (0, i * im.height))
     quant = sheet.quantize(colors=128, method=Image.Quantize.MEDIANCUT)
-    frames_q = [small(p).quantize(palette=quant, dither=Image.Dither.FLOYDSTEINBERG) for p in picks]
+    frames_q = [small(p).quantize(palette=quant, dither=Image.Dither.NONE) for p in picks]
     frames_q[0].save(gif, save_all=True, append_images=frames_q[1:], duration=durations, loop=0, disposal=1)
     with Image.open(gif) as g:
         total_ms = 0

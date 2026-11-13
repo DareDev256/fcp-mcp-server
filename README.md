@@ -12,7 +12,7 @@ reads and writes FCPXML, no&nbsp;plugin,&nbsp;no&nbsp;patch
 
 Python 3.10+ · Final Cut Pro for Mac 10.4 to 12.4 ([compatibility](#compatibility))
 
-[![The ui://fcp/timeline app re-rendering after each of Claude's edits to a gym session: the long squat set splits and its pieces slide together as the rests are cut, a marker lands on the ruler for each lift, and a B-roll clip marked MOCK is laid in on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
+[![A staged clip of the real ui://fcp/timeline view, drawn large on black, with a caption naming each of Claude's tool calls: the finished cut rewinds to the imported one, then the long squat set splits and its pieces slide together as the rests are cut, a marker lands on the ruler for each lift, and a B-roll clip marked MOCK is laid in on lane 1 over the long set](docs/assets/hero-watch-claude-cut.gif)](docs/assets/hero-watch-claude-cut.mp4)
 
 **You:** Cut the rest between sets, mark every lift, and put B-roll over the
 long set.
@@ -29,15 +29,17 @@ long set.
 6. `organize · history` lists every journaled output, each one undoable
 <!-- /hero-calls -->
 
-*The GIF opens on the finished cut, then replays the three edits: the rests
-close, the markers land, the B-roll is laid in
-([MP4 with the chat beside the app](docs/assets/hero-watch-claude-cut.mp4),
-[full-size still](docs/assets/hero-still.png)). Every frame is the real
-`ui://fcp/timeline` app drawing a real `view_timeline` result, and every
-move is the app's own animation between two results, cut from the author's
-own gym session (its audio is a test tone, so the rests are real silence).
-The B-roll provider is mocked for this recording: the clip is named "B-roll
-(mocked)" and carries a MOCK badge. Re-recorded with
+*What is real: the timeline is the `ui://fcp/timeline` app as the server
+serves it, drawing the real `view_timeline` results of the real calls above,
+and every change is the app's own animation from one result to the next. What
+is composed: the stage (only the view's ruler and lanes, drawn large on
+black), the captions, the timing and the camera's push onto each edit. The
+footage is the author's own gym session (its audio is a test tone, so the
+rests are real silence), and the B-roll provider is mocked: the clip is named
+"B-roll (mocked)" and carries a MOCK badge. The
+[unedited recording](docs/assets/hero-unedited-recording.mp4) shows the same
+calls with the app inside a chat client. [MP4](docs/assets/hero-watch-claude-cut.mp4),
+[poster](docs/assets/hero-still.png), recorded with
 [`demo/hero/build.py`](demo/hero/build.py).*
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a

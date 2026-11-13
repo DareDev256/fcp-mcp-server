@@ -407,9 +407,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .lane.audio .clip { background: var(--panel); }
   .clip.title { background: var(--raised-2); border-style: dashed; }
   /* Thumbnails tile along the clip at their own aspect, like Final Cut's filmstrip:
-     never stretched, never one frame blown up to fill a long clip. */
+     never stretched, never one frame blown up to fill a long clip; centred, so a
+     clip narrower than one frame shows the frame's middle. */
   .clip .thumbs { position: absolute; inset: 0; opacity: .85; background-repeat: repeat-x;
-    background-size: auto 100%; background-position: left center; }
+    background-size: auto 100%; background-position: center; }
   .clip.ghost { pointer-events: none; }
   .clip .label { position: relative; z-index: 1; padding: 2px 6px; font-size: 11px; white-space: nowrap;
     overflow: hidden; color: var(--ink); }
