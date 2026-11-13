@@ -90,8 +90,10 @@ been captured in Claude Desktop for this release
   carries a solid MOCK pill (accent ink on the accent fill, measured onto the
   tile and never over its label) and the footer says so. The README GIF is
   the timeline alone, 1000 px wide so the app's 10 to 11 px type is 20 to 22
-  px in it, and under 5 MB; the prompt and the six calls are README text
-  under it, and the MP4 keeps the chat beside the app. The first decoded
+  px in it, and under 5 MB; each state is clipped at its own timeline's foot
+  in a separate capture pass, so the panel under an earlier, shorter
+  timeline is never sliced by the GIF's edge. The prompt and the six calls
+  are README text under it, and the MP4 keeps the chat beside the app. The first decoded
   frame of both is the finished cut (the MP4 also carries it as its attached
   poster). No price, model id, frame size or version is printed in the hero
   or the card: `scripts/image_text.py` makes both builders refuse.
@@ -166,8 +168,9 @@ been captured in Claude Desktop for this release
 - `test_hero_assets.py`: the MP4's first DECODED frame (not its poster)
   matches the finished still and the GIF's first frame the same crop of it; a
   story frame is seen as different in each; the GIF is the timeline crop (at
-  least 1000 wide, not the whole frame) and under 5 MB; the card frame has no
-  transparency.
+  least 1000 wide, not the whole frame) and under 5 MB; nothing is drawn in
+  any GIF frame's bottom 8 px (the first round-4 GIF, with the panel sliced,
+  fails it); the card frame has no transparency.
 - `test_front_door.py`: the README's call list under the hero is the calls
   `demo/hero/build.py` records, in its order.
 - `test_app_labels.py`: the playhead's head touching any visible label, its

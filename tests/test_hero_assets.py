@@ -95,6 +95,38 @@ def test_the_gif_is_the_timeline_crop_and_under_5_mb():
     assert GIF.stat().st_size <= 5_000_000
 
 
+def edge_problems(gif_bytes: bytes, rows: int = 8, inset: int = 4, ground_max: int = 12) -> list[int]:
+    """GIF frames with anything drawn in the bottom *rows* pixels (inside the
+    frame's side borders). The crop ends 6 CSS px under the finished
+    timeline; an earlier, shorter state must show nothing there either, or
+    the panel under it is sliced by the edge (the round-4 first push did)."""
+    bad = []
+    with Image.open(io.BytesIO(gif_bytes)) as g:
+        for i in range(g.n_frames):
+            g.seek(i)
+            f = g.convert("RGB")
+            if max(f.crop((inset, f.height - rows, f.width - inset, f.height)).tobytes()) > ground_max:
+                bad.append(i)
+    return bad
+
+
+def test_nothing_touches_the_gifs_bottom_edge():
+    assert edge_problems(GIF.read_bytes()) == []
+
+
+def test_the_edge_check_sees_a_sliced_panel():
+    """Mutation check: the first round-4 GIF, whose early states showed the
+    SELECTION panel cut by the crop, fails it."""
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git not on PATH")
+    old = subprocess.run([git, "show", "adf2879:docs/assets/hero-watch-claude-cut.gif"], capture_output=True,
+                         cwd=ASSETS.parent.parent, timeout=60)
+    if old.returncode != 0:
+        pytest.skip("adf2879 is not in this clone (shallow checkout)")
+    assert edge_problems(old.stdout) != []
+
+
 def test_the_card_frame_has_no_transparency():
     """Flattened onto the ground, so no host draws its own colour into the corners."""
     with Image.open(CARD_FRAME) as im:

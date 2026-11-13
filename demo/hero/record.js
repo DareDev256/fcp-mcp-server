@@ -17,9 +17,10 @@
 // Every colour is a palette token handed over in states.json
 // (fcpxml/palette.py); none is typed here. Frames are captured from
 // states.loop_start round to it, so frame 0 of the MP4 and the GIF is the
-// finished cut. Written beside the frames: crop.json, the device-pixel box
-// of the timeline (header, ruler, lanes) that build.py cuts the README GIF
-// to. The assets dir gets hero-still.png (the finished frame) and
+// finished cut. Written beside the frames: gif-frames/, the same frames
+// cut to the timeline (header, ruler, lanes) with every state clipped at its
+// own timeline's foot, for the README GIF. The assets dir gets
+// hero-still.png (the finished frame) and
 // card-frame.png (four calls beside the ruler and lanes at 1.75x).
 //
 // A mocked B-roll tile (states.mock_clip) carries a solid MOCK pill at its
@@ -99,6 +100,7 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   #stage { position:absolute; left:332px; top:48px; right:28px; bottom:28px; }
   #frame { position:absolute; inset:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--ground); }
   .app { position:absolute; inset:0; width:100%; height:100%; border:0; opacity:0; background:var(--ground); }
+  body.gif .app { clip-path: inset(0 0 var(--below, 0px) 0); -webkit-mask-image: var(--fade-mask, none); mask-image: var(--fade-mask, none); }
   #cap { position:absolute; font: 600 11px/1 ui-monospace, Menlo, monospace; color:var(--accent); white-space:nowrap;
     background:var(--panel); padding:5px 8px; border-radius:6px; border:1px solid var(--line-strong); opacity:0; z-index:5; }
 </style></head><body>
@@ -118,6 +120,7 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   const START = ${JSON.stringify(states.start_state)}, LAST = ${last};
   window.__capAt = [];   // per state: where the SERVER panel sits inside #frame (measured by the recorder)
   window.__pillAt = null; // where the MOCK pill sits on the mocked tile, in the last state
+  window.__footRel = null; // per state: its timeline's foot from the iframe's top (the GIF pass)
   const frames = STATES.map((s, i) => document.getElementById("app" + i));
   const clamp = (v) => Math.max(0, Math.min(1, v));
   const ease = (v) => { v = clamp(v); return v < .5 ? 2 * v * v : 1 - Math.pow(-2 * v + 2, 2) / 2; };
@@ -146,6 +149,17 @@ const host = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       if (i === shown && prevShown === shown) o = 1;
       f.style.opacity = o;
       f.style.zIndex = i === shown ? 2 : (i === prevShown ? 1 : 0);
+      // GIF pass only (body.gif): going to a SHORTER timeline, the outgoing
+      // one fades out below the incoming one's foot instead of staying whole
+      // under it, so its lower lanes never show as a second row. A mask reads
+      // only alpha: the ground token is just an opaque stop.
+      const fr = window.__footRel;
+      let mask = "none";
+      if (fr && i === prevShown && prevShown !== shown && prog < 1 && fr[shown] < fr[prevShown]) {
+        const keep = "color-mix(in srgb, var(--ground) " + ((1 - prog) * 100).toFixed(1) + "%, transparent)";
+        mask = "linear-gradient(to bottom, var(--ground) 0, var(--ground) " + fr[shown] + "px, " + keep + " " + fr[shown] + "px)";
+      }
+      f.style.setProperty("--fade-mask", mask);
     });
     // The caption sits inside the app's SERVER panel, top right, where the
     // server's own log speaks: it says which call's output is on screen.
@@ -295,18 +309,40 @@ function overlaps(a, b, pad) {
   if (hit) await refuse("the caption pill covers the SERVER panel's own text: " + JSON.stringify(hit));
 
   // The README GIF is the timeline alone: header, ruler and lanes of the
-  // finished state, in device pixels.
-  const scroller = await page.frameLocator("#app" + last).locator("#scroller").boundingBox();
-  const crop = { x: Math.round(frameBox.x * SCALE), y: Math.round(frameBox.y * SCALE),
-                 w: Math.round(frameBox.width * SCALE), h: Math.round((scroller.y + scroller.height + 14 - frameBox.y) * SCALE) };
-  fs.writeFileSync(path.join(work, "crop.json"), JSON.stringify(crop));
+  // finished state, down to 6px under its timeline (half the gap to the
+  // SELECTION panel, so not a sliver of that panel shows). Earlier states
+  // have shorter timelines, so in the GIF pass each state's iframe is
+  // clipped at its OWN foot: a cross-fade then blends two clean timelines,
+  // and no panel is ever sliced by the crop's bottom edge.
+  const foot = [];
+  for (let i = 0; i < states.states.length; i++) {
+    const sb = await page.frameLocator("#app" + i).locator("#scroller").boundingBox();
+    foot.push(sb.y + sb.height + 6);
+  }
+  const taller = foot.findIndex((f) => f > foot[last] + 0.5);
+  if (taller >= 0) await refuse(`state ${taller}'s timeline is taller than the finished one: the GIF crop would cut it`);
+  await page.evaluate((f) => {
+    document.querySelectorAll("iframe.app").forEach((el) => {
+      el.style.setProperty("--below", (el.getBoundingClientRect().bottom - f[Number(el.dataset.state)]) + "px");
+    });
+    const top = document.querySelector("iframe.app").getBoundingClientRect().top;
+    window.__footRel = f.map((y) => y - top);
+  }, foot);
+  const gifClip = { x: frameBox.x, y: frameBox.y, width: frameBox.width, height: foot[last] - frameBox.y };
+  const gifDir = path.join(work, "gif-frames");
+  fs.rmSync(gifDir, { recursive: true, force: true });
+  fs.mkdirSync(gifDir);
 
   await page.waitForTimeout(500);  // fonts and thumbnails settle before the first frame
   const total = Math.round(states.duration * FPS);
   const offset = Math.round(states.loop_start * FPS) % total;  // frame 0 = the finished cut
   for (let k = 0; k < total; k++) {
     await page.evaluate((ms) => window.__seek(ms), (((k + offset) % total) / FPS) * 1000);
-    await page.screenshot({ path: path.join(framesDir, String(k).padStart(5, "0") + ".png"), animations: "disabled" });
+    const name = String(k).padStart(5, "0") + ".png";
+    await page.screenshot({ path: path.join(framesDir, name), animations: "disabled" });
+    await page.evaluate(() => document.body.classList.add("gif"));
+    await page.screenshot({ path: path.join(gifDir, name), clip: gifClip, animations: "disabled" });
+    await page.evaluate(() => document.body.classList.remove("gif"));
     if (k % 150 === 0) console.log("frame", k, "/", total);
   }
   if (assetsDir) {

@@ -409,19 +409,19 @@ def encode(work: Path) -> None:
         from PIL import Image
     except ImportError:
         sys.exit("Pillow is needed to write the GIF: uv run --with pillow demo/hero/build.py")
-    sources = sorted((work / "frames").glob("*.png"))
+    # The README GIF is the timeline alone (record.js's gif-frames: the frames
+    # cut to the app's header, ruler and lanes, each state clipped at its own
+    # timeline): the chat moves into the README as text, and the app's own
+    # 10-11 px type is 20-22 px in a 1000 px GIF instead of a few px on a phone.
+    sources = sorted((work / "gif-frames").glob("*.png"))
     picks = [sources[min(len(sources) - 1, round(i * 30 / GIF_FPS))] for i in range(round(len(sources) * GIF_FPS / 30))]
-    # The README GIF is the timeline alone (crop.json from record.js): the chat
-    # moves into the README as text, and the app's own 10-11 px type is 20-22
-    # px in a 1000 px GIF instead of shrinking to a few pixels on a phone.
-    box = json.loads((work / "crop.json").read_text())
-    crop = (box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"])
-    Image.open(poster).convert("RGB").crop(crop).save(ASSETS / "hero-timeline-still.png")
-    # Always the full crop width: a narrower GIF would shrink the type the
-    # crop exists to keep, so over the cap is a refusal, not a resize.
-    write_gif(gif, picks, box["w"], Image, crop)
+    Image.open(sources[0]).convert("RGB").save(ASSETS / "hero-timeline-still.png")  # frame 0: the finished cut
+    width = Image.open(sources[0]).width
+    # Always the full width: a narrower GIF would shrink the type the crop
+    # exists to keep, so over the cap is a refusal, not a resize.
+    write_gif(gif, picks, width, Image)
     if gif.stat().st_size > GIF_MAX_BYTES:
-        sys.exit(f"the GIF is {gif.stat().st_size / 1e6:.2f} MB at {box['w']} px, over the "
+        sys.exit(f"the GIF is {gif.stat().st_size / 1e6:.2f} MB at {width} px, over the "
                  f"{GIF_MAX_BYTES / 1e6:.1f} MB cap: shorten the story or lower GIF_FPS")
     for p in (mp4, gif):
         print(f"{p.relative_to(REPO)}  {p.stat().st_size / 1e6:.2f} MB")
@@ -437,12 +437,11 @@ def flatten(path: Path) -> None:
         ground.convert("RGB").save(path)
 
 
-def write_gif(gif: Path, picks: list[Path], width: int, image_module, crop=None) -> None:
+def write_gif(gif: Path, picks: list[Path], width: int, image_module) -> None:
     Image = image_module  # noqa: N806
+
     def small(path: Path):
         im = Image.open(path).convert("RGB")
-        if crop:
-            im = im.crop(crop)
         return im if im.width == width else im.resize((width, round(im.height * width / im.width)), Image.Resampling.LANCZOS)
 
     samples = [small(picks[int(len(picks) * f)]) for f in (0.02, 0.12, 0.25, 0.4, 0.55, 0.75, 0.97)]
