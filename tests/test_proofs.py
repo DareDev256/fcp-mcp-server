@@ -142,6 +142,9 @@ def synth(tmp_path_factory):
     _ff("-f", "lavfi", "-i", "testsrc=size=320x240:rate=24:duration=4",
         "-f", "lavfi", "-i", "aevalsrc='0.5*sin(2*PI*440*t)':s=48000:d=4",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", "-shortest", str(d / "tone.mov"))
+    _ff("-f", "lavfi", "-i", "testsrc=size=320x240:rate=24:duration=4",
+        "-f", "lavfi", "-i", "aevalsrc='if(between(t,1.5,2.5),0,0.5*sin(2*PI*440*t))':s=48000:d=4",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", "-shortest", str(d / "gap.mov"))
     return d
 
 
@@ -243,12 +246,13 @@ def test_three_takes_of_one_clip_are_told_apart_by_their_source_range(gym, tmp_p
     sheet = _sheet(tl, tmp_path, "desktop", str(gym["edited"]))
     png, raster = rs.load(sheet["pages"][0]), sheet["rasters"][0]
     src = [_read(png, run) for run in _runs(raster, r"src \d\d:\d\d:\d\d:\d\d")]
-    out = [_read(png, run) for run in _runs(raster, r"to  \d\d:\d\d:\d\d:\d\d")]
     truth = _record_truth(tl)
     assert src == [f"src {tcf(r[4])}" for r in truth]
-    assert out == [f"to  {tcf(r[4] + r[3])}" for r in truth]
     squats = [s for s, r in zip(src, truth) if r[0] == "Squat"]
     assert len(squats) == 3 and len(set(squats)) == 3
+    # an in-point and a length make a range: no out-point is printed, so no
+    # "to" is left to be read as inclusive or exclusive
+    assert not [r.text for r in raster.runs if r.text.startswith("to ")]
 
 
 @needs_ffmpeg
@@ -292,11 +296,58 @@ def test_the_dissolve_shows_its_glyph_and_length(gym, tmp_path):
     (g,) = sheet["glyphs"]
     truth = _record_truth(tl)
     assert truth[g["into"] - 1][0] == "Finish"
-    assert g["label"] == f"{frames_of(tl.transitions[0].duration)}f"
     png = rs.load(sheet["pages"][0])
-    run = next(r for r in sheet["rasters"][0].runs if r.text == g["label"] and abs(r.x + r.width // 2 - g["x"]) < 4)
-    assert _read(png, run) == g["label"]
+    want = f"dissolve {frames_of(tl.transitions[0].duration)}f in"
+    run = next(r for r in sheet["rasters"][0].runs if r.text == want)
+    assert _read(png, run) == want
     assert png.get(g["x"] - g["size"] // 2 + 1, g["y"])[:3] == pytest.approx(proofs.ACCENT, abs=24)
+    # the bowtie sits in the gutter, centred, and covers neither picture
+    lay, geo = sheet["layout"], sheet["geometry"]
+    lefts = [lay.margin + c * (geo["cell_w"] + lay.gutter) for c in range(lay.columns)]
+    gutters = [(a + geo["cell_w"], b) for a, b in zip(lefts, lefts[1:])]
+    gutter = next((a, b) for a, b in gutters if a <= g["x"] < b)
+    assert abs(g["x"] - (gutter[0] + gutter[1]) / 2) <= 1
+    assert gutter[0] <= g["x"] - g["size"] // 2 and g["x"] + g["size"] // 2 < gutter[1]
+
+
+@needs_ffmpeg
+def test_a_connected_card_says_what_it_plays_over(gym, tmp_path):
+    tl = gym["timeline"]
+    truth = _record_truth(tl)
+    lane = next(i for i, r in enumerate(truth, 1) if r[1])
+    host = next(i for i, r in enumerate(truth, 1) if r[1] == 0 and r[2] <= truth[lane - 1][2] < r[2] + r[3])
+    sheet = _sheet(tl, tmp_path, "desktop", str(gym["edited"]))
+    png = rs.load(sheet["pages"][0])
+    overs = [_read(png, r) for r in _runs(sheet["rasters"][0], r"over #\d+")]
+    assert overs == [f"over #{host}"] and (lane, host) == (5, 4)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("layout", ["desktop", "phone"])
+def test_the_picture_flash_is_on_the_cards_it_involves(gym, tmp_path, layout):
+    """Squat #4 flashes for one frame after Bench (L1) ends: both cards carry
+    a red "flash 1f 00:00:20:03" chip, read back off the PNG."""
+    tl = gym["timeline"]
+    lane = tl.connected_clips[0]
+    at = frames_of(lane.timeline_start) + frames_of(lane.duration)
+    sheet = _sheet(tl, tmp_path, layout, str(gym["edited"]))
+    reds = []
+    for path, raster in zip(sheet["pages"], sheet["rasters"]):
+        png = rs.load(path)
+        for r in raster.runs:
+            if any(png.get(x, r.y + r.height // 2)[:3] == pytest.approx(proofs.DANGER, abs=40)
+                   for x in range(r.x, r.x + r.width)):
+                reds.append(rs.read_text(png, r.face, r.x, r.y, len(r.text), threshold=60))  # red is dark in luma
+    assert " ".join(reds) == f"flash 1f {tcf(at)} flash 1f {tcf(at)}", reds
+
+
+@needs_ffmpeg
+def test_a_page_that_does_not_hold_every_clip_says_where_the_rest_are(gym, tmp_path):
+    sheet = _sheet(gym["timeline"], tmp_path, "phone", str(gym["edited"]))
+    assert len(sheet["pages"]) == 2
+    png, raster = rs.load(sheet["pages"][0]), sheet["rasters"][0]
+    foot = max(raster.runs, key=lambda r: r.y)
+    assert _read(png, foot) == "#7 and the dissolve on page 2"
 
 
 # ---- 2. legibility: glyphs >= 14 px delivered, long edge and patches in budget ------
@@ -429,11 +480,10 @@ def _ruler_map(png, raster, band, x0, x1):
     cols = [x for x in range(x0, x1) if png.get(x, y)[:3] == pytest.approx(proofs.ACCENT, abs=40)]
     labels = [r for r in raster.runs if r.y == band["y_ruler"] + 10]
     pairs = []
-    for run in labels:
+    for run in labels:  # a label hangs from the tick at its left
         text = _read(png, run, alphabet=DIGITS)
-        centre = run.x + run.width / 2
-        x = min(cols, key=lambda c: abs(c - centre))
-        if abs(x - centre) <= 2:
+        x = min(cols, key=lambda c: abs(c - (run.x - proofs.RULER_LABEL_PAD)))
+        if abs(x - (run.x - proofs.RULER_LABEL_PAD)) <= 1:
             pairs.append((x, seconds_of(text)))
     assert len(pairs) >= 2, pairs
     (xa, ta), (xb, tb) = pairs[0], pairs[-1]
@@ -453,7 +503,7 @@ def test_every_thumbnail_sits_at_its_own_time_on_its_bands_ruler(gym, tmp_path):
         to_t = _ruler_map(png, raster, band, g["x0"], g["x1"])
         labels = [r for r in raster.runs if r.y == band["y_label"]]
         boxes = [f for f in result["frames"] if f["band"] == b]
-        assert len(labels) == len(boxes) == 5
+        assert len(labels) == len(boxes) == proofs.CHECK_PER_BAND
         for box, run in zip(boxes, sorted(labels, key=lambda r: r.x)):
             printed = seconds_of(_read(png, run, alphabet=DIGITS))
             centre = box["x"] + box["w"] / 2
@@ -485,12 +535,123 @@ def test_every_ruler_tick_is_within_a_pixel_of_its_time(synth, tmp_path, start, 
 
 
 @needs_ffmpeg
+@pytest.mark.parametrize("start, end", [(Fraction(3), Fraction(9)), (Fraction(0), Fraction(29)), (Fraction(3), Fraction(7, 2))])
+def test_every_ruler_label_hangs_from_its_tick_at_one_step(synth, tmp_path, start, end):
+    """Left-anchored at the tick, as Final Cut anchors them, so none is
+    pulled in at an edge; labels at one fixed step (every k-th tick), so a
+    tick is unlabelled only because the step skips it."""
+    result = proofs.visual_check(str(synth / "bars.mp4"), start, end, str(tmp_path / "r.png"), fps=24)
+    png = rs.load(result["path"])
+    for band in result["bands"]:
+        labels = sorted((r for r in result["raster"].runs if r.y == band["y_ruler"] + 10), key=lambda r: r.x)
+        tick_x = [x for _t, x in band["ticks"]]
+        anchored = [tick_x.index(r.x - proofs.RULER_LABEL_PAD) for r in labels]
+        step = band["label_step"]
+        assert anchored == [n for n in range(0, len(tick_x), step)][:len(anchored)], (anchored, step)
+        assert len(anchored) >= len(range(0, len(tick_x), step)) - 1
+        for a, b in zip(labels, labels[1:]):  # never two labels within 8 px
+            assert b.x >= a.x + a.width + 8, (a.text, b.text)
+        for r, n in zip(labels, anchored):
+            assert _read(png, r, alphabet=DIGITS) == tc(band["ticks"][n][0])
+
+
+@needs_ffmpeg
+def test_the_join_is_marked_where_it_is_on_both_bands(gym, tmp_path):
+    """Band 1 marks the out-point (05:01, the first frame not played); band 2
+    marks the in-point (06:11, the first frame played after the cut), each
+    read through the ruler drawn on its own band. No thumbnail is lit (round
+    2 lit 06:22, which read as a join near 06:15)."""
+    tl = gym["timeline"]
+    pieces = sorted((frames_of(c.source_start), frames_of(c.source_start) + frames_of(c.duration))
+                    for c in tl.clips if c.name == "Squat")
+    out_f, in_f = pieces[0][1], pieces[1][0]
+    result = _gym_check(gym, tmp_path)
+    png, raster, g = rs.load(result["path"]), result["raster"], result["geometry"]
+    found = {}
+    for b, band in enumerate(result["bands"]):
+        for x in sorted(_cut_columns(png, band, g["x0"], g["x1"])):
+            found.setdefault(b, []).append(x)
+    # each line is 3 px wide: its centre is the join's x
+    centres = {b: xs[len(xs) // 2] for b, xs in found.items()}
+    assert set(centres) == {0, 1}
+    t_out = _ruler_map(png, raster, result["bands"][0], g["x0"], g["x1"])(centres[0])
+    t_in = _ruler_map(png, raster, result["bands"][1], g["x0"], g["x1"])(centres[1])
+    assert abs(t_out - Fraction(out_f, 24)) <= Fraction(1, 24), float(t_out)
+    assert abs(t_in - Fraction(in_f, 24)) <= Fraction(1, 24), float(t_in)
+    for box in result["frames"]:
+        assert png.get(box["x"] + 1, box["y"] + 60)[:3] != pytest.approx(proofs.ACCENT, abs=40), tc(box["t"])
+    accent_labels = [r.text for r in raster.runs if r.y in {bd["y_label"] for bd in result["bands"]}
+                     and png.get(r.x + 2, r.y + 12)[:3] == pytest.approx(proofs.ACCENT, abs=40)]
+    assert accent_labels == []
+
+
+@needs_ffmpeg
+def test_the_join_sits_off_the_band_grid_under_a_rule_and_a_heading(gym, tmp_path):
+    """Nothing below a band's ruler that is not on its axis, unless it sits
+    under a heading and a rule: the join's frames are at least 32 px below
+    the last band, under a full-width rule and the heading."""
+    result = _gym_check(gym, tmp_path)
+    png, raster = rs.load(result["path"]), result["raster"]
+    last = result["bands"][-1]
+    rule = result["pair"]["rule"]
+    assert rule - last["bottom"] >= 32 - 12
+    assert all(png.get(x, rule)[:3] == pytest.approx(proofs.LINE_STRONG, abs=10)
+               for x in range(16, png.width - 16))
+    heading = next(r for r in raster.runs if r.text.startswith("the join, as played"))
+    assert rule < heading.y < result["pair"]["y"]
+    for r in raster.runs:  # every run under the last band is part of the join section
+        if r.y > last["bottom"]:
+            assert r.y > rule, r.text
+
+
+@needs_ffmpeg
+def test_the_level_scale_is_labelled_at_the_band_edge(gym, tmp_path):
+    """0, -20 and -40 dB, each label hanging from its tick at that level's
+    height above the baseline (60 dB over the band's level height)."""
+    result = _gym_check(gym, tmp_path)
+    png, raster, g = rs.load(result["path"]), result["raster"], result["geometry"]
+    for band in result["bands"]:
+        runs = sorted((r for r in raster.runs if r.x > g["x1"] and band["y_wave"] - 40 <= r.y < band["bottom"]),
+                      key=lambda r: r.y)
+        assert [_read(png, r, alphabet="0123456789-") for r in runs] == ["0", "-20", "-40"]
+        for value, run in zip((0, -20, -40), runs):
+            y = band["base"] - round((value + 60) / 60 * band["level"])
+            assert png.get(g["x1"] + 2, y)[:3] == pytest.approx(proofs.INK, abs=30), value
+            assert run.y >= y and run.y - y <= 2, (value, run.y, y)
+
+
+@needs_ffmpeg
+def test_every_range_is_in_to_exclusive_out_with_its_length(gym, tmp_path):
+    """One convention: the out-point is the first frame NOT in the range
+    (Final Cut's), written in-out with the length, so out - in = length."""
+    tl = gym["timeline"]
+    pieces = sorted((frames_of(c.source_start), frames_of(c.source_start) + frames_of(c.duration))
+                    for c in tl.clips if c.name == "Squat")
+    result = _gym_check(gym, tmp_path)
+    png, raster = rs.load(result["path"]), result["raster"]
+    # the drawn text (the font has no reader for "·"); every timecode in it
+    # is also read back off the PNG below
+    texts = [r.text for r in raster.runs]
+    for r in raster.runs:
+        for m in re.finditer(r"\d\d:\d\d:\d\d:\d\d", r.text):
+            at = r.x + m.start() * r.face.advance
+            assert rs.read_text(png, r.face, at, r.y, 11, alphabet=DIGITS) == m.group(0), r.text
+    head = next(t for t in texts if t.startswith("Squat.mov"))
+    m = re.search(r"src (\S+)-(\S+) · (\d+)f", head)
+    assert m and (seconds_of(m.group(2)) - seconds_of(m.group(1))) * 24 == int(m.group(3)) == 144
+    removed = next(t for t in texts if t.startswith("removed "))
+    m = re.search(r"removed (\S+)-(\S+) · (\d+)f", removed)
+    assert m and (seconds_of(m.group(2)) - seconds_of(m.group(1))) * 24 == int(m.group(3))
+    assert (m.group(1), m.group(2), int(m.group(3))) == (tcf(pieces[0][1]), tcf(pieces[1][0]), pieces[1][0] - pieces[0][1])
+    assert not [t for t in texts if " to " in t]
+
+
+@needs_ffmpeg
 def test_removed_frames_are_dimmed_and_the_cut_shows_both_kept_frames(gym, tmp_path):
     """Truth from the parsed clips of Squat.mov: the edit keeps
     [in, in + length) of each; between two kept pieces the frames are
-    removed. Frames inside are dimmed and tagged; the first kept frame after
-    the cut is highlighted; the pair names the last and first kept frames and
-    the record time of the cut."""
+    removed. Frames inside are dimmed and tagged; the join names the last
+    and first kept frames and the record time of the cut."""
     tl = gym["timeline"]
     pieces = sorted((frames_of(c.source_start), frames_of(c.source_start) + frames_of(c.duration), frames_of(c.start))
                     for c in tl.clips if c.name == "Squat")
@@ -503,11 +664,8 @@ def test_removed_frames_are_dimmed_and_the_cut_shows_both_kept_frames(gym, tmp_p
         gone = a_out <= k < b_in
         tagged = any(t.x == box["x"] + 4 and t.y == box["y"] + 1 for t in tags)
         assert tagged == gone, (tc(box["t"]), gone)
-    after = [box for box in result["frames"] if int(box["t"] * 24 + Fraction(1, 2)) >= b_in]
-    lit = [box for box in result["frames"] if png.get(box["x"] + 1, box["y"] + 60)[:3] == pytest.approx(proofs.ACCENT, abs=40)]
-    assert lit == after[:1]
-    lines = [_read(png, r) for r in raster.runs if r.y >= result["pair"]["y"] and r.x > 500]
-    assert f"cut at rec {tcf(b_rec)}" in lines
+    lines = [_read(png, r) for r in raster.runs if r.y >= result["pair"]["rule"]]
+    assert f"the join, as played: cut at rec {tcf(b_rec)}" in lines
     assert f"last kept  src {tcf(a_out - 1)}" in lines
     assert f"first kept src {tcf(b_in)}" in lines
     pair = [_read(png, r, alphabet=DIGITS) for r in raster.runs if r.y == result["pair"]["y"] + proofs.CHECK_FRAME_H + 4]
@@ -516,29 +674,141 @@ def test_removed_frames_are_dimmed_and_the_cut_shows_both_kept_frames(gym, tmp_p
 
 @needs_ffmpeg
 def test_the_waveform_is_drawn_in_decibels_with_the_threshold(synth, tmp_path):
-    """A 0.5-amplitude sine: RMS -9.03 dBFS, peak -6.02. On a -60..0 dB
-    scale over ``half`` pixels each side of the baseline the RMS bar is
-    round(51/60 * half) tall in the accent with the peak above it in grey,
-    and the -40 dB threshold is a dashed line, on every column."""
+    """A 0.5-amplitude sine: RMS -9.03 dBFS, peak -6.02. Rectified, on a
+    -60..0 dB scale over the band's level height above the baseline, the RMS
+    bar is round(51/60 * level) tall in the accent with the peak above it in
+    grey, and the -40 dB threshold is a dashed line, on every column."""
     result = proofs.visual_check(str(synth / "tone.mov"), Fraction(0), Fraction(4), str(tmp_path / "t.png"), fps=24)
     png, g = rs.load(result["path"]), result["geometry"]
-    half = proofs.WAVE_H // 2 - 2
-    rms_h = round((60 - 9.0309) / 60 * half)
-    thr_h = round((60 - 40) / 60 * half)
     for band in result["bands"]:
-        mid = band["wave_mid"]
+        base, level = band["base"], band["level"]
+        rms_h = round((60 - 9.0309) / 60 * level)
+        thr_h = round((60 - 40) / 60 * level)
         for x in range(g["x0"], g["x1"]):
-            assert png.get(x, mid - rms_h + 1)[:3] == pytest.approx(proofs.ACCENT, abs=40), x
-            assert png.get(x, mid - rms_h - 3)[:3] != pytest.approx(proofs.ACCENT, abs=40), x
-        dashes = [x for x in range(g["x0"], g["x1"]) if png.get(x, mid - thr_h)[:3] == pytest.approx(proofs.INK, abs=30)]
+            # 14 samples a column, under one period of 440 Hz at 8 kHz: a
+            # column's RMS sits within a couple of dB of the sine's
+            assert png.get(x, base - rms_h + 5)[:3] == pytest.approx(proofs.ACCENT, abs=40), x
+            assert png.get(x, base - rms_h - 5)[:3] != pytest.approx(proofs.ACCENT, abs=40), x
+        dashes = [x for x in range(g["x0"], g["x1"]) if png.get(x, base - thr_h)[:3] == pytest.approx(proofs.INK, abs=30)]
         assert len(dashes) >= (g["x1"] - g["x0"]) // 2 - 4
+
+
+def _cut_columns(png, band, x0, x1) -> set:
+    """The columns the cut line covers: accent on EVERY row of the waveform
+    band (the waveform itself leaves its baseline and dashes uncovered)."""
+    rows = range(band["y_wave"], band["y_wave"] + proofs.WAVE_H)
+    return {x for x in range(x0, x1)
+            if all(png.get(x, y)[:3] == pytest.approx(proofs.ACCENT, abs=40) for y in rows)}
+
+
+@needs_ffmpeg
+def test_no_label_sits_on_a_line_or_mark(gym, tmp_path):
+    """Round 2 put "silence 1.5s" under the cut line. Every label in a band's
+    waveform keeps 8 px from the cut line read off the PNG, and the check's
+    own record of its lines and marks meets no label."""
+    result = _gym_check(gym, tmp_path)
+    png, g = rs.load(result["path"]), result["geometry"]
+    cut_seen = False
+    for band in result["bands"]:
+        cols = _cut_columns(png, band, g["x0"], g["x1"])
+        cut_seen |= bool(cols)
+        for run in result["raster"].runs:
+            if band["y_wave"] <= run.y < band["y_wave"] + proofs.WAVE_H:
+                near = set(range(run.x - proofs.MARK_CLEAR, run.x + run.width + proofs.MARK_CLEAR))
+                assert not (near & cols), (run.text, sorted(near & cols)[:3])
+    assert cut_seen
+    assert proofs.mark_problems(result["raster"].runs, result["marks"]) == []
+    assert result["problems"] == []
+
+
+def test_a_label_on_a_line_is_seen():
+    """The rule sees what it guards: a label on a line, or within 8 px of
+    it, is reported; one 8 px clear is not."""
+    r = rs.Raster.filled(240, 80, (0, 0, 0))
+    f = rs.face(32)
+    run = r.text("silence", f, 50, 4, (255, 255, 255))
+    right = run.x + run.width
+    assert proofs.mark_problems(r.runs, [(60, 0, 3, 60, "cut line")])
+    assert proofs.mark_problems(r.runs, [(right + proofs.MARK_CLEAR - 1, 0, 3, 60, "cut line")])
+    assert proofs.mark_problems(r.runs, [(right + proofs.MARK_CLEAR, 0, 3, 60, "cut line")]) == []
+    assert proofs.mark_problems(r.runs, [(60, 4 + run.height, 3, 8, "tick")]) == []  # the row under it
+
+
+@needs_ffmpeg
+def test_the_check_reply_writes_every_range_one_way(gym):
+    """The text beside the picture: every range in-out with an en dash, the
+    out-point exclusive, its length after it; no "to", no "[3s - 9s]"."""
+    reply = _call("preview", "preview_check", {"source": str(gym["media"]["Squat"]), "start": 3, "end": 9,
+                                               "filepath": str(gym["edited"])})
+    text = reply[0].text
+    assert " to " not in text and "s - " not in text, text
+    ranges = re.findall(r"(\d\d:\d\d:\d\d:\d\d)([–-])(\d\d:\d\d:\d\d:\d\d) · (\d+)f", text)
+    assert len(ranges) >= 4, text  # the source range, the silence, the removed span (twice)
+    for a, dash, b, n in ranges:
+        assert dash == "–", text
+        assert (seconds_of(b) - seconds_of(a)) * 24 == int(n), (a, b, n)
+    assert "src 00:00:03:00–00:00:09:00 · 144f" in text
+
+
+@needs_ffmpeg
+def test_the_removed_span_is_not_red(gym, tmp_path):
+    """A removed silence is the edit working, not a failure: nothing outside
+    the pictures is danger red."""
+    result = _gym_check(gym, tmp_path)
+    png = rs.load(result["path"])
+    boxes = [(f["x"], f["y"], f["w"], f["h"]) for f in result["frames"]]
+    pair = result["pair"]["rule"]
+    red = palette.rgb(palette.dark("danger"))
+    hits = []
+    for y in range(png.height):
+        for x in range(0, png.width, 2):
+            if y >= pair and x < 520:
+                continue  # the pair's pictures
+            if any(bx <= x < bx + bw and by <= y < by + bh for bx, by, bw, bh in boxes):
+                continue
+            if png.get(x, y)[:3] == pytest.approx(red, abs=40):
+                hits.append((x, y))
+    assert hits == [], hits[:5]
+
+
+@needs_ffmpeg
+def test_the_removed_count_and_the_silence_agree(gym, tmp_path):
+    """The waveform says the silence's length, the footer what the edit
+    removed: 1.5s is 36f and 34f were removed, so the footer says the
+    difference (1f kept each side), read from the parsed edit."""
+    tl = gym["timeline"]
+    pieces = sorted((frames_of(c.source_start), frames_of(c.source_start) + frames_of(c.duration))
+                    for c in tl.clips if c.name == "Squat")
+    removed = pieces[1][0] - pieces[0][1]
+    result = _gym_check(gym, tmp_path)
+    raster = result["raster"]
+    texts = {r.text for r in raster.runs}
+    label = next(t for t in texts if t.startswith("silence ") and "(" in t)
+    silence = int(re.search(r"\((\d+)f\)", label).group(1))
+    assert f"removed {tcf(pieces[0][1])}-{tcf(pieces[1][0])} · {removed}f" in texts
+    sides = next(t for t in texts if t.startswith(f"silence {silence}f, "))
+    before, after = (1, 1) if "each side" in sides else tuple(int(n) for n in re.findall(r"(\d+)f kept", sides))
+    if "each side" in sides:
+        before = after = int(re.search(r", (\d+)f kept each side", sides).group(1))
+    assert before + removed + after == silence, (sides, removed, silence)
+
+
+@needs_ffmpeg
+def test_the_padding_is_read_from_the_edit_not_assumed(synth, tmp_path):
+    """A silence from 1.5 s to 2.5 s (24f) cut out from 2f after its start to
+    1f before its end: the footer says 2f kept before, 1f after."""
+    gap = str(synth / "gap.mov")
+    kept = [(Fraction(0), Fraction(38, 24), Fraction(0)), (Fraction(59, 24), Fraction(4), Fraction(38, 24))]
+    result = proofs.visual_check(gap, Fraction(0), Fraction(4), str(tmp_path / "g.png"), fps=24, kept=kept)
+    assert result["pair"]["lines"][3] == f"removed {tcf(38)}-{tcf(59)} · 21f"
+    assert result["pair"]["lines"][4] == "silence 24f, 2f kept before, 1f kept after"
 
 
 @needs_ffmpeg
 def test_a_silence_is_named_once_and_its_box_is_neutral_grey(gym, tmp_path):
     result = _gym_check(gym, tmp_path)
-    names = [r.text for r in result["raster"].runs if r.text.startswith("silence")]
-    assert names == ["silence 1.5s"]
+    names = [r.text for r in result["raster"].runs if r.text.startswith("silence") and "(" in r.text]
+    assert names == ["silence 1.5s (36f)"]
     png = rs.load(result["path"])
     band = result["bands"][0]
     x = result["geometry"]["x0"] + result["geometry"]["span"] - 40
@@ -826,7 +1096,12 @@ def test_red_appears_only_for_a_failure(synth, tmp_path):
 
 # ---- 9. the text timeline ---------------------------------------------------------
 
-ROW = re.compile(r"^(\d+)\s+(V|L\d+)\s+(\S+)\s+(\S+)\s+(\d+)f\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$")
+ROW = re.compile(r"^(\d+)\s+(V|L\d+)\s+(\S+)\s+(\S+)\s+(\d+)f\s+(D \d+f)?\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$")
+
+
+def _columns(header: str) -> list:
+    """The start column of each heading in the list's header row."""
+    return [m.start() for m in re.finditer(r"\S+(?: \S+)?", header)]
 
 
 @needs_ffmpeg
@@ -837,77 +1112,192 @@ def test_the_text_timeline_is_an_edl_whose_numbers_add_up(gym):
     rows = text.splitlines()
     names = [r[:10].strip() for r in rows]
     assert names[1:6] == ["time", "", "markers", "lane 1", "spine"]
-    # the last tick labelled, ending on its own tick (not past the ruler)
-    assert rows[1].rstrip().endswith("30.0s"), rows[1]
-    assert len(rows[1].rstrip()) == len(rows[2].rstrip()), (rows[1], rows[2])
+    # every time label starts on its own tick, the last one too
+    ticks = [i for i, ch in enumerate(rows[2]) if ch == "|"]
+    starts = [m.start() for m in re.finditer(r"\S+", rows[1][10:])]
+    assert [10 + s0 for s0 in starts] == ticks[:len(starts)] and rows[1].rstrip().endswith("30.0s")
     assert "Substituted" not in text
     assert rows[4].split()[-1] == "Bench" and "[" in rows[4]
     events = [ROW.match(r) for r in rows if ROW.match(r)]
     truth = _record_truth(tl)
-    assert [e.group(6) for e in events] == [r[0] for r in truth]
+    assert [e.group(7) for e in events] == [r[0] for r in truth]
     for e, r in zip(events, truth):
         rec_in, rec_out, length = seconds_of(e.group(3)), seconds_of(e.group(4)), int(e.group(5))
         assert (rec_in, length) == (Fraction(r[2], 24), r[3])
         assert rec_in + Fraction(length, 24) == rec_out
-        assert (e.group(7), e.group(8), e.group(9)) == (r[5], tcf(r[4]), tcf(r[4] + r[3]))
+        assert (e.group(8), e.group(9), e.group(10)) == (r[5], tcf(r[4]), tcf(r[4] + r[3]))
     spine = [e for e in events if e.group(2) == "V"]
     for a, b in zip(spine, spine[1:]):
         assert a.group(4) == b.group(3)
-    dissolve = next(r for r in rows if r.startswith("X"))
     t = tl.transitions[0]
     cut, half = frames_of(t.start), frames_of(t.duration) // 2
-    assert tcf(cut - half) in dissolve and tcf(cut + half) in dissolve and "centred" in dissolve
-    marked = [r for r in rows if re.match(r"^\s+marker ", r)]
-    assert len(marked) == 4
+    # CMX: "D 12f" on the row of the clip the dissolve leads into, and the
+    # dissolve's own row in the same columns
+    finish = next(e for e in events if e.group(7) == "Finish")
+    assert finish.group(6) == f"D {frames_of(t.duration)}f"
+    header = next(r for r in rows if r.startswith("#"))
+    cols = _columns(header)
+    dissolve = next(r for r in rows if r.startswith("D "))
+    assert dissolve[cols[2]:].startswith(tcf(cut - half)) and dissolve[cols[3]:].startswith(tcf(cut + half))
+    assert "centred on the cut" in dissolve
+    for r in rows[rows.index(header) + 1:]:  # every row on the grid: rec in under "rec in"
+        assert re.match(r"\d\d:\d\d:\d\d:\d\d", r[cols[2]:]), r
+    flash = next(r for r in rows if r.startswith("!"))
+    lane = tl.connected_clips[0]
+    at = frames_of(lane.timeline_start) + frames_of(lane.duration)
+    assert flash[cols[2]:].startswith(tcf(at)) and "1f" in flash and "between Bench (L1) and Press" in flash
+    assert [r for r in rows if r.startswith("^")] and len([r for r in rows if r.startswith("^")]) == 4
 
 
-# ---- 10. diagnose: the picture's flash, the fixes, every duplicate -----------------
+# ---- 10. diagnose and inspect --------------------------------------------------------
 
-@needs_ffmpeg
-def test_the_flash_frame_in_the_picture_is_found(gym):
-    """Bench (L1) ends at frame 483 and Press starts at 484: one frame of
-    Squat shows between them. No clip is short, so a clip-length check
-    passes it; the picture check does not."""
+def _validate(gym):
     import server
 
+    return asyncio.run(server.handle_validate_timeline({"filepath": str(gym["edited"])}))[0].text
+
+
+@needs_ffmpeg
+def test_the_flash_frame_in_the_picture_is_found_and_the_fix_fits_the_media(gym):
+    """Bench (L1) ends at frame 483 and Press starts at 484: one frame of
+    Squat shows between them. The fix leads with what the media allows
+    (Bench.mov runs on past Bench (L1)'s out-point; Press has no head), and
+    names what a ripple would move."""
     tl = gym["timeline"]
     lane = tl.connected_clips[0]
     lane_end = frames_of(lane.timeline_start) + frames_of(lane.duration)
-    nxt = next(c for c in tl.clips if frames_of(c.start) > frames_of(lane.timeline_start))
-    gap = frames_of(nxt.start) - lane_end
+    press = next(c for c in tl.clips if c.name == "Press")
+    gap = frames_of(press.start) - lane_end
     assert gap == 1
-    text = asyncio.run(server.handle_validate_timeline({"filepath": str(gym["edited"])}))[0].text
+    text = _validate(gym)
     row = next(r for r in text.splitlines() if "| Flash Frames |" in r)
     assert "FAIL" in row and tcf(lane_end) in row
     assert f"Squat shows for {gap}f between Bench (L1) and Press" in text
-    assert f"Flash at {tcf(lane_end)}: extend Bench (L1) by 1f" in text
+    src_out = frames_of(lane.source_start) + frames_of(lane.duration)
+    media_end = int(lane.media.origin * 24 + lane.media.duration * 24)
+    assert (f"extend Bench (L1) out by 1f, to src {tcf(src_out + 1)} (Bench.mov has media to {tcf(media_end)})"
+            in text)
+    assert f"its src in is {tcf(frames_of(press.source_start))}" in text and "Press.mov has 0f before it" in text
+    after = [c.name for c in tl.clips if frames_of(c.start) >= lane_end + 1]
+    assert f"ripple would close it but moves {', '.join(after)}" in text
 
 
 @needs_ffmpeg
-def test_diagnose_prints_fixes_only_for_what_failed_and_counts_every_duplicate(gym):
-    import server
-
-    text = asyncio.run(server.handle_validate_timeline({"filepath": str(gym["edited"])}))[0].text
+def test_diagnose_splits_duplicate_frames_from_reused_sources(gym):
+    text = _validate(gym)
     assert "fill_gaps" not in text and "Use `fix_flash_frames`" not in text
-    summary = [r for r in text.splitlines() if r.startswith("| ") and "|--" not in r][1:4]
-    glyph = re.compile(r"^\| (✓ PASS|⚠ WARN|✗ FAIL|· INFO) \| ")
+    summary = [r for r in text.splitlines() if r.startswith("| ") and "|--" not in r and "| Result |" not in r]
+    glyph = re.compile("^\\| (✓ PASS|\u26a0\ufe0e WARN|✗ FAIL|· INFO) \\| ")
     for r in summary:
         assert glyph.match(r), r
-    dup = next(r for r in summary if "Duplicate Sources" in r)
-    assert "Bench.mov: 00:00:00:00, 00:00:17:03" in dup
-    assert "Squat.mov: 00:00:05:00, 00:00:10:01, 00:00:15:03" in dup
-    assert "Same frames used twice: Bench.mov" in text
+    rows = {r.split("|")[2].strip(): r for r in summary if r.count("|") == 5}
+    assert "WARN" in rows["Duplicate frames"] and "00:00:00:00, 00:00:17:03" in rows["Duplicate frames"]
+    assert "INFO" in rows["Reused source"] and "00:00:05:00, 00:00:10:01, 00:00:15:03" in rows["Reused source"]
+    assert "Squat" not in rows["Duplicate frames"]
     # FAIL -10, WARN -3, INFO costs nothing
-    assert "## Health Score: 87%" in text
+    assert "## Health Score: 87% from the" in text
 
 
-def test_a_clip_flash_names_the_grouped_tool_that_fixes_it():
+@needs_ffmpeg
+def test_diagnose_checks_handles_offline_media_and_formats_and_says_what_it_does_not(gym):
+    """The real handle sizes for the dissolve (from the parsed asset lengths),
+    offline media, frame rate and size against the sequence, and a "Not
+    checked" line naming what it cannot see."""
+    tl = gym["timeline"]
+    text = _validate(gym)
+    t = tl.transitions[0]
+    press = next(c for c in tl.clips if c.name == "Press")
+    finish = next(c for c in tl.clips if c.name == "Finish")
+    tail = int((press.media.origin + press.media.duration) * 24) - (frames_of(press.source_start) + frames_of(press.duration))
+    head = frames_of(finish.source_start) - int(finish.media.origin * 24)
+    need = frames_of(t.duration) // 2
+    row = next(r for r in text.splitlines() if "| Transition handles |" in r)
+    assert f"Press tail {tail}f of {need}f" in row and f"Finish head {head}f of {need}f" in row and "PASS" in row
+    assert "PASS" in next(r for r in text.splitlines() if "| Offline media |" in r)
+    sizes = next(r for r in text.splitlines() if "| Frame rate and size |" in r)
+    assert "INFO" in sizes
+    assert "640x360 in a 1920x1080 sequence" in text
+    assert "Not checked: loudness, true peak, black or frozen frames" in text
+    assert "from the 7 checks below" in text
+
+
+@needs_ffmpeg
+def test_a_short_handle_fails_and_a_retimed_rate_warns(gym, tmp_path, monkeypatch):
+    """Finish moved to src 0 has no head for the dissolve's 6f: FAIL with the
+    real numbers. Press.mov read as 30 fps in the 24 fps sequence: WARN."""
+    import server
+    from fcpxml import render
+
+    src = Path(gym["edited"]).read_text()
+    old = 'name="Finish" start="6/24s"'
+    assert src.count(old) == 1
+    short = tmp_path / "short-head.fcpxml"
+    short.write_text(src.replace(old, 'name="Finish" start="0s"'))
+    real = render.stream_facts
+
+    def facts(path):
+        out = real(path)
+        if out and Path(path).name == "Press.mov":
+            out = {**out, "fps": Fraction(30)}
+        return out
+
+    monkeypatch.setattr(render, "stream_facts", facts)
+    text = asyncio.run(server.handle_validate_timeline({"filepath": str(short)}))[0].text
+    handles = next(r for r in text.splitlines() if "| Transition handles |" in r)
+    assert "FAIL" in handles and "Finish head 0f of 6f" in handles and "Press tail 6f of 6f" in handles
+    rates = next(r for r in text.splitlines() if "| Frame rate and size |" in r)
+    assert "WARN" in rates
+    assert "Press.mov is 30.000 fps in a 24.000 fps sequence (retimed)" in text
+
+
+def test_an_offline_clip_fails_diagnose(tmp_path):
     import server
 
+    src = (REPO / "examples" / "sample.fcpxml").read_text()
     text = asyncio.run(server.handle_validate_timeline({"filepath": str(REPO / "examples" / "sample.fcpxml")}))[0].text
-    if "Flash frame:" in text:
-        assert "`edit · fix_flash_frames`" in text
-    assert "Use `fix_flash_frames` and `fill_gaps`" not in text
+    row = next(r for r in text.splitlines() if "| Offline media |" in r)
+    assert "FAIL" in row and src  # sample.fcpxml points at media that is not on this machine
+    assert "`deliver · relink_media`" in text
+
+
+@needs_ffmpeg
+def test_inspect_names_the_fail_the_audio_and_both_rates(gym):
+    import server
+
+    tl = gym["timeline"]
+    text = asyncio.run(server.TOOL_HANDLERS["analyze_timeline"]({"filepath": str(gym["edited"])}))[0].text
+    lane = tl.connected_clips[0]
+    at = frames_of(lane.timeline_start) + frames_of(lane.duration)
+    assert f"**1 FAIL** (flash {tcf(at)})" in text
+    minutes = Fraction(frames_of(tl.clips[-1].start) + frames_of(tl.clips[-1].duration), 24 * 60)
+    edits, cuts = len(tl.clips) - 1, len(tl.clips) - 1 - len(tl.transitions)
+    assert f"**Edits/minute**: {float(edits / minutes):.1f} · cuts/minute {float(cuts / minutes):.1f}" in text
+    assert "## Audio" in text and "**Clips with sound**: 7 of 7" in text and "1 ch, 48000 Hz" in text
+
+
+EMOJI_FORM = {"\u26a0"}  # glyphs with an emoji presentation the server prints
+
+
+def _emoji_problems(text: str) -> list:
+    """Each glyph that can render as an emoji, written as itself or as a
+    Python escape in source (server.py spells the warning sign "\\u26a0")."""
+    out = []
+    for i, ch in enumerate(text):
+        if ch in EMOJI_FORM and text[i + 1:i + 2] != "\ufe0e":
+            out.append(f"{ch!r} at {i} without U+FE0E")
+        if ch == "\ufe0f" or ord(ch) >= 0x1F000:
+            out.append(f"{ch!r} at {i} is emoji")
+    forms = "|".join(f"\\\\u{ord(ch):04x}(?!\\\\ufe0e)" for ch in sorted(EMOJI_FORM))
+    for m in re.finditer(forms + r"|\\ufe0f|\\U0001[fF][0-9a-fA-F]{3}", text, flags=re.IGNORECASE):
+        out.append(f"{m.group(0)} at {m.start()} is an escape for an emoji form")
+    return out
+
+
+def test_no_glyph_the_server_prints_can_render_as_an_emoji():
+    for path in [REPO / "server.py", *sorted((REPO / "tools").glob("*.py"))]:
+        assert _emoji_problems(path.read_text(encoding="utf-8")) == [], path.name
+    assert _emoji_problems("⚠ WARN") and _emoji_problems("📚") and not _emoji_problems("\u26a0\ufe0e WARN")
+    assert _emoji_problems('W = "\\u26a0"') and not _emoji_problems('W = "\\u26a0\\ufe0e"')
 
 
 def test_lengths_round_half_up_exactly():

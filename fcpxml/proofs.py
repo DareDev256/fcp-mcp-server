@@ -241,6 +241,8 @@ class Cell:
     missing: bool
     transition_in: str = ""   # the transition INTO this (spine) cell: its length label
     after: int = 0            # the index of the spine cell it comes out of, when it has one
+    over: int = 0             # a connected cell: the spine cell it plays over
+    flash: str = ""           # a flash in the picture this cell is part of: "flash 1f 00:00:20:03"
 
 
 def record_order(graph) -> list:
@@ -263,13 +265,28 @@ def sheet_cells(graph) -> list:
                    key=lambda s: (frame_of(s.tl_in), s.lane != 0, s.lane))
     index = {id(s): i for i, s in enumerate(every, 1)}
     order = record_order(graph)
+    # a flash in the picture marks the clip that flashes and the clip whose
+    # edge left it showing (the top layer of the run before it)
+    flashed = {}
+    runs = picture_runs(graph)
+    nominal = nominal_fps(24)
+    for i, (fa, fb, layers) in enumerate(runs):
+        if fb - fa < 6 and layers and 0 < i < len(runs) - 1:
+            text = f"flash {length_label(fb - fa)} {frames_timecode(fa, nominal)}"
+            for seg in (layers[0], runs[i - 1][2][0] if runs[i - 1][2] else None):
+                if seg is not None:
+                    flashed.setdefault(id(seg), text)
     cells = []
     for s in order:
         n = index[id(s)]
         label, outgoing = into.get(id(s), ("", None))
+        host = 0
+        if s.lane:
+            under = next((h for h in spine if h.kind == "clip" and frame_of(h.tl_in) <= frame_of(s.tl_in) < frame_of(h.tl_out)), None)
+            host = index.get(id(under), 0) if under is not None else 0
         cells.append(Cell(n, s.label, s.lane, frame_of(s.tl_in), frame_of(s.tl_out) - frame_of(s.tl_in),
                           s.source, s.src_in, s.src_out, s.file_time(s.duration / 2), s.missing,
-                          label, index.get(outgoing, 0)))
+                          label, index.get(outgoing, 0), host, flashed.get(id(s), "")))
     return cells
 
 
@@ -284,8 +301,10 @@ def _bowtie(r: rs.Raster, cx: int, cy: int, size: int) -> None:
 
 
 def glyph_size(lay: "SheetLayout") -> int:
-    """The transition glyph's height: at least GLYPH_MIN at the delivered size."""
-    return max(int(round(rs.GLYPH_MIN / lay.delivered)), 20 * lay.scale)
+    """The transition glyph's height (it is as wide): at least GLYPH_MIN at
+    the delivered size, and narrower than the gutter it is centred in, so it
+    covers neither picture."""
+    return max(int(round(rs.GLYPH_MIN / lay.delivered)), min(20 * lay.scale, lay.gutter - 4))
 
 
 def wrap_items(items: list, f: rs.Face, width: int, sep: str = " · ") -> list:
@@ -311,16 +330,21 @@ def wrap_items(items: list, f: rs.Face, width: int, sep: str = " · ") -> list:
 def _cell_text(cell: Cell, f: rs.Face, width: int, nominal: int) -> list:
     """The cell's label lines as (text, colour, right-aligned extra):
     name (wrapped, never cut) with its length at the right of its last line,
-    then "rec <in>", "src <in>", "to  <out>"."""
+    then "rec <in>" and "src <in>" (an in-point and a length make the range:
+    no out-point is printed, so no "to" can be read two ways), then what
+    only some cells have: "over #4" for a connected clip, "dissolve 12f in"
+    for the clip a transition leads into."""
     length = length_label(cell.frames)
     room = width - f.measure(length) - 2 * f.advance
     name_lines = rs.fit(cell.name, f, room)
     lines = [(n, INK, length if i == len(name_lines) - 1 else "") for i, n in enumerate(name_lines)]
     src_in = frames_timecode(int(cell.src_in * nominal + Fraction(1, 2)), nominal)
-    src_out = frames_timecode(int(cell.src_out * nominal + Fraction(1, 2)), nominal)
     lines.append((f"rec {frames_timecode(cell.start, nominal)}", ACCENT, ""))
     lines.append((f"src {src_in}", MUTE, ""))
-    lines.append((f"to  {src_out}", MUTE, ""))
+    if cell.over:
+        lines.append((f"over #{cell.over}", ACCENT, ""))
+    if cell.transition_in:
+        lines.append((f"dissolve {cell.transition_in} in", ACCENT, ""))
     return lines
 
 
@@ -360,7 +384,7 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
         return sum(f.height for _, f, _ in header(tag)) + lay.margin
 
     head_h = head_height("page 9/9" if len(cells) > rs.CELLS_MAX else "")
-    rows_fit = max(1, (lay.max_height - lay.margin * 2 - head_h + lay.gutter) // row_h)
+    rows_fit = max(1, (lay.max_height - lay.margin * 3 - head_h - label.height + lay.gutter) // row_h)
     per_page = min(rs.CELLS_MAX, rows_fit * lay.columns)
     pages = [cells[i:i + per_page] for i in range(0, len(cells), per_page)] or [[]]
     head_h = head_height(f"page {len(pages)}/{len(pages)}" if len(pages) > 1 else "")
@@ -371,8 +395,19 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
                         "glyph": size}}
     for p, page in enumerate(pages):
         rows = max(1, -(-len(page) // lay.columns))
-        height = lay.margin + head_h + rows * row_h - lay.gutter + lay.margin
+        rest = pages[p + 1:]
+        foot = ""
+        if rest:
+            first_rest, last_rest = rest[0][0], rest[-1][-1]
+            span = f"#{first_rest.index}" + (f"-#{last_rest.index}" if last_rest is not first_rest else "")
+            joined = any(c.transition_in for pg in rest for c in pg)
+            foot = f"{span}{' and the dissolve' if joined else ''} on page {p + 2}"
+        foot_lines = rs.fit(foot, label, lay.width - 2 * lay.margin) if foot else []  # wrapped, never cut
+        height = (lay.margin + head_h + rows * row_h - lay.gutter + lay.margin
+                  + (len(foot_lines) * label.height + lay.margin if foot else 0))
         r = rs.Raster.filled(lay.width, height, GROUND)
+        for i, line in enumerate(foot_lines):
+            r.text(line, label, lay.margin, height - lay.margin - (len(foot_lines) - i) * label.height, MUTE)
         tag = f"page {p + 1}/{len(pages)}" if len(pages) > 1 else ""
         y = lay.margin
         for line, f, colour in header(tag):
@@ -394,7 +429,8 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
             else:
                 r.fill(x, cy, cell_w, cell_h, PANEL)
                 note = "media missing"
-                r.text(note, label, x + (cell_w - label.measure(note)) // 2, cy + (cell_h - label.height) // 2, DANGER)
+                r.text(note, label, x + (cell_w - label.measure(note)) // 2, cy + (cell_h - label.height) // 2,
+                       DANGER)  # red: failure (the clip's media is missing)
             chip = f"#{cell.index}" + (f" L{cell.lane}" if cell.lane else "")
             pad = 4 * lay.scale
             r.fill(x, cy, label.measure(chip) + 2 * pad, label.height + pad, GROUND)
@@ -405,21 +441,32 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
                 if right:
                     r.text(right, label, x + cell_w - label.measure(right), ly, MUTE)
                 ly += label.height
-            # the transition INTO this cell sits on its cut: in the gutter
-            # when the cell it comes out of is just before it on the row,
-            # else on the left edge of this picture; its length under it
+            # the transition INTO this cell sits on its cut: the bowtie alone,
+            # centred in the gutter when the cell it comes out of is just
+            # before it on the row (it fits there and covers neither
+            # picture), else on a chip at this picture's left edge; the
+            # card's "dissolve 12f in" line says what it is
             if cell.transition_in:
                 gy = cy + cell_h // 2
                 beside = cell.after in placed and placed[cell.after][1] == row and placed[cell.after][0] == col - 1
-                text = cell.transition_in
-                cw = max(size, label.measure(text)) + 2 * pad
-                ch = size + label.height + 3 * pad
-                cx = (x - lay.gutter // 2) if beside else (x + cw // 2)
-                r.fill(cx - cw // 2, gy - size // 2 - pad, cw, ch, GROUND)
-                _bowtie(r, cx - 1, gy, size)
-                r.text(text, label, cx - label.measure(text) // 2, gy + size // 2 + pad, ACCENT)
-                glyphs.append({"into": cell.index, "x": cx - 1, "y": gy, "size": size, "page": p + 1,
-                               "label": text})
+                if beside:
+                    gx = x - (lay.gutter + 1) // 2
+                else:
+                    r.fill(x, gy - size // 2 - pad, size + 2 * pad, size + 2 * pad, GROUND)
+                    gx = x + pad + size // 2
+                _bowtie(r, gx, gy, size)
+                glyphs.append({"into": cell.index, "x": gx, "y": gy, "size": size, "page": p + 1,
+                               "label": cell.transition_in, "beside": beside})
+            # a flash in the picture, on the cards it involves: red, because
+            # it is a failure (diagnose fails it)
+            if cell.flash:
+                parts = rs.fit(cell.flash, label, cell_w - 4 * pad)
+                fh_ = len(parts) * label.height + pad
+                fy = cy + cell_h - fh_ - pad
+                r.fill(x + pad, fy, max(label.measure(t) for t in parts) + 2 * pad, fh_, GROUND)
+                for i, t in enumerate(parts):
+                    r.text(t, label, x + 2 * pad, fy + pad // 2 + i * label.height,
+                           DANGER)  # red: failure (a flash frame in the picture)
         out["glyphs"] += glyphs
         out["problems"] += [f"page {p + 1}: {x}" for x in
                             rs.legibility_problems(r, lay.delivered, cells=len(page)) + rs.collisions(r)]
@@ -432,14 +479,18 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
 
 # ---- the filmstrip and waveform check -------------------------------------------------
 
-CHECK_WIDTH = 1344          # 48 patches wide: 32 rows (896 px) keep it inside the budget
+CHECK_WIDTH = 1232          # 44 patches wide: 35 rows (980 px) keep it inside the budget
 CHECK_FRAME_W, CHECK_FRAME_H = 240, 135
-CHECK_FRAMES = 10           # default: two bands of five
+CHECK_PER_BAND = 4          # frames in one band, each in a 286 px slot
+CHECK_FRAMES = 8            # default: two bands of four
+DB_COLUMN = 56              # the dB scale's labels, right of each waveform
+RULER_LABEL_PAD = 3         # a ruler label starts this far right of its tick
+JOIN_GAP = 32               # the join sits this far under the last band, under a rule
 SILENCE_DB = -40.0          # a window this quiet or quieter is silence
 SILENCE_MIN = Fraction(3, 10)  # seconds: shorter quiet is a pause, not a span to label
 FLOOR_DB = -60.0            # the waveform's bottom: quieter than this draws nothing
 AUDIO_RATE = 8000
-WAVE_H = 72
+WAVE_H = 96                 # 60 dB over 94 px: 20 dB is 31 px, one label line
 
 
 def nice_step(duration: Fraction, width_px: int, min_px: int = 200) -> Fraction:
@@ -510,9 +561,9 @@ def db(level: float) -> float:
     return max(FLOOR_DB, 20 * math.log10(level / 32768)) if level > 0 else FLOOR_DB
 
 
-def db_height(value_db: float, half: int) -> int:
-    """Pixels above the baseline for a level: 0 at FLOOR_DB, ``half`` at 0 dBFS."""
-    return int(round((max(FLOOR_DB, min(0.0, value_db)) - FLOOR_DB) / -FLOOR_DB * half))
+def db_height(value_db: float, level: int) -> int:
+    """Pixels above the baseline for a level: 0 at FLOOR_DB, ``level`` at 0 dBFS."""
+    return int(round((max(FLOOR_DB, min(0.0, value_db)) - FLOOR_DB) / -FLOOR_DB * level))
 
 
 def kept_ranges(graph, source: str) -> list:
@@ -546,15 +597,71 @@ def check_cut(kept: list, start: Fraction, end: Fraction) -> Optional[dict]:
     return None
 
 
+MARK_CLEAR = 8  # px a label keeps, left and right, from every line or mark it is not the leader of
+
+
+def mark_problems(runs, marks, clear: int = MARK_CLEAR) -> list:
+    """Every text run whose box, widened by ``clear`` px each side, meets a
+    drawn line or mark (a cut line, a tick, a ruler, a removed-span bar, a
+    highlight edge): a label must not sit on a line. A tick's own label sits
+    under it, not beside it, so it never meets it here."""
+    out = []
+    for run in runs:
+        x0, y0, x1, y1 = run.box()
+        for (mx, my, mw, mh, kind) in marks:
+            if mx < x1 + clear and x0 - clear < mx + mw and my < y1 and y0 < my + mh:
+                out.append(f"{run.text!r} meets the {kind} at x={mx}")
+                break
+    return out
+
+
+def clear_x(x: int, width: int, y: int, height: int, marks: list, low: int, high: int,
+            clear: int = MARK_CLEAR) -> Optional[int]:
+    """The x nearest ``x`` (rightward first) where a label ``width`` wide
+    keeps ``clear`` px from every mark on its rows and stays inside [low,
+    high]; None when there is no such place."""
+    rows = [m for m in marks if m[1] < y + height and y < m[1] + m[3]]
+
+    def free(at):
+        return low <= at and at + width <= high and not any(
+            mx < at + width + clear and at - clear < mx + mw for mx, _my, mw, _mh, _k in rows)
+
+    spots = [x] + [mx + mw + clear for mx, _my, mw, _mh, _k in rows] + [mx - clear - width for mx, _my, _mw, _mh, _k in rows]
+    spots = sorted({min(max(at, low), high - width) for at in spots}, key=lambda at: (at < x, abs(at - x)))
+    return next((at for at in spots if free(at)), None)
+
+
+def kept_sides(gap: tuple, spans: list, nominal: int) -> Optional[str]:
+    """How the removed span sits inside the silence it came from, read from
+    the edit and the measured audio: "silence 36f, 1f kept each side"."""
+    a, b = gap
+    fa, fb = int(a * nominal + Fraction(1, 2)), int(b * nominal + Fraction(1, 2))
+    for sa, sb in spans:
+        if sa < b and a < sb:
+            fsa, fsb = int(sa * nominal + Fraction(1, 2)), int(sb * nominal + Fraction(1, 2))
+            before, after = fa - fsa, fsb - fb
+            if before == after and before >= 0:
+                side = f"{length_label(before)} kept each side"
+            else:
+                def word(n, where):
+                    return f"{length_label(n)} kept {where}" if n >= 0 else f"{length_label(-n)} of sound cut {where}"
+                side = f"{word(before, 'before')}, {word(after, 'after')}"
+            return f"silence {length_label(fsb - fsa)}, {side}"
+    return None
+
+
 def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, cut: Optional[Fraction] = None,
                  frames: int = CHECK_FRAMES, fps=None, kept: Optional[list] = None) -> dict:
     """Compose the check: two bands, each = its frames, its own ruler and
-    its own waveform on that band's time axis. ``kept`` (from
-    :func:`kept_ranges`) marks what the edit removed and finds the cut."""
+    its own waveform on that band's time axis, then (when there is a cut)
+    the join as played, off the band grid under a rule and a heading.
+    ``kept`` (from :func:`kept_ranges`) marks what the edit removed and finds
+    the cut; its out-point and in-point are marked on the bands they fall in."""
     if end <= start:
         raise ValueError(f"end must be after start (got {start} -> {end})")
-    if not 2 <= frames <= 10 or frames % 2:
-        raise ValueError(f"frames must be an even number from 2 to 10 (two bands of up to five), got {frames}")
+    if not 2 <= frames <= 2 * CHECK_PER_BAND or frames % 2:
+        raise ValueError(f"frames must be an even number from 2 to {2 * CHECK_PER_BAND} "
+                         f"(two bands of up to {CHECK_PER_BAND}), got {frames}")
     if cut is not None and not start <= cut <= end:
         raise ValueError(f"cut must be inside the range (got {cut} outside {start} -> {end})")
     if shutil.which("ffmpeg") is None or not Path(source).is_file():
@@ -564,7 +671,7 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
     one = Fraction(1, nominal)
     f = rs.face(32)
     margin, fw, fh = 16, CHECK_FRAME_W, CHECK_FRAME_H
-    x0, x1 = margin, CHECK_WIDTH - margin
+    x0, x1 = margin, CHECK_WIDTH - margin - DB_COLUMN
     span = x1 - 1 - x0
     per = frames // 2
     removed = removed_spans(kept, start, end) if kept else []
@@ -574,35 +681,38 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
     samples = _samples(source, start, end)
     spans = silent_spans(samples, start) if samples else []
 
-    title_y = margin
-    legend_y = title_y + f.height + 4
-    band_top = legend_y + f.height + 8
-    label_gap = 4
-    band_h = fh + f.height + label_gap + 8 + f.height + 4 + WAVE_H + 12
-    pair_h = (fh + f.height + 4 + 8) if at_cut else 0
-    height = band_top + 2 * band_h + pair_h + margin - 12
-    r = rs.Raster.filled(CHECK_WIDTH, height, GROUND)
     name = Path(source).name
-    head = f"{name} · src {timecode(start, fps)} to {timecode(end, fps)} · {length_label(int((end - start) * nominal + Fraction(1, 2)))}"
-    r.text(rs.fit(head, f, x1 - x0)[0], f, margin, title_y, INK)
-    legend = f"RMS cyan · peak grey · dashed {SILENCE_DB:.0f} dB = silence"
-    r.text(legend, f, margin, legend_y, MUTE)
+    head_lines = wrap_items([name, f"src {timecode(start, fps)}-{timecode(end, fps)}",
+                             length_label(int(end * nominal + Fraction(1, 2)) - int(start * nominal + Fraction(1, 2))),
+                             "RMS cyan over peak grey"], f, CHECK_WIDTH - 2 * margin)
+    band_top = margin + len(head_lines) * f.height + 8
+    label_gap = 4
+    band_h = fh + label_gap + f.height + 8 + 8 + f.height + 4 + WAVE_H + 12
+    join_top = band_top + 2 * band_h - 12 + JOIN_GAP
+    join_h = (1 + 8 + f.height + 4 + max(fh + 4 + f.height, 4 * f.height)) if at_cut else 0
+    height = (join_top + join_h if at_cut else band_top + 2 * band_h - 12) + margin
+    r = rs.Raster.filled(CHECK_WIDTH, height, GROUND)
+    for i, line in enumerate(head_lines):
+        r.text(line, f, margin, margin + i * f.height, INK if i == 0 else MUTE)
+    marks = []  # (x, y, w, h, kind): every line and mark a label must keep clear of
 
     duration = end - start
     half_d = duration / 2
-    bands, frames_out, ticks_all = [], [], []
-    first_kept = None
+    bands, frames_out, joins = [], [], []
     for b in range(2):
         b0, b1 = start + b * half_d, start + (b + 1) * half_d
         y_f = band_top + b * band_h
         y_label = y_f + fh + label_gap
         y_ruler = y_label + f.height + 8
         y_wave = y_ruler + 8 + f.height + 4
+        base = y_wave + WAVE_H - 1
 
         def to_x(t, b0=b0, b1=b1):
             return x0 + int(round(float((t - b0) / (b1 - b0) * span)))
 
-        # the frames: each centred on its own time on this band's axis
+        # the frames: each centred on its own time on this band's axis; a
+        # frame the edit removed is dimmed and says so. None is lit: the
+        # join is marked on the ruler at its own time, not on a nearby frame
         for i in range(per):
             t = b0 + (b1 - b0) * (2 * i + 1) / (2 * per)
             cx = to_x(t)
@@ -613,129 +723,149 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
             else:
                 r.fill(fx, y_f, fw, fh, PANEL)
             gone = any(a <= t < c for a, c in removed)
-            highlight = (not gone and at_cut is not None and first_kept is None and t >= at_cut["in"])
             if gone:
                 r.blend(fx, y_f, fw, fh, GROUND, 0.65)
                 tag = "removed"
                 r.fill(fx, y_f, f.measure(tag) + 8, f.height + 2, GROUND)
                 r.text(tag, f, fx + 4, y_f + 1, MUTE)
-            if highlight:
-                first_kept = t
-                r.fill(fx, y_f, 4, fh, ACCENT)
             tc = timecode(t, fps)
-            r.text(tc, f, cx - f.measure(tc) // 2, y_label, ACCENT if highlight else MUTE)
-            frames_out.append({"t": t, "x": fx, "y": y_f, "w": fw, "h": fh, "band": b, "removed": gone,
-                               "highlight": highlight})
-        # the ruler: ticks at each time's own pixel, labels centred under them
+            r.text(tc, f, cx - f.measure(tc) // 2, y_label, MUTE)
+            frames_out.append({"t": t, "x": fx, "y": y_f, "w": fw, "h": fh, "band": b, "removed": gone})
+        # the ruler: a tick at each time's own pixel, its label anchored at
+        # the tick's right (as Final Cut anchors them), every k-th tick
+        # labelled at one fixed step so no two labels meet
         r.fill(x0, y_ruler, x1 - x0, 1, LINE_STRONG)
-        for a, c in removed:
+        marks.append((x0, y_ruler, x1 - x0, 1, "ruler"))
+        for a, c in removed:  # the intended edit: grey, not red
             lo, hi = max(a, b0), min(c, b1)
             if hi > lo:
-                r.fill(to_x(lo), y_ruler - 2, max(1, to_x(hi) - to_x(lo)), 5, DANGER)
+                r.fill(to_x(lo), y_ruler - 2, max(1, to_x(hi) - to_x(lo)), 5, MUTE)
+                marks.append((to_x(lo), y_ruler - 2, max(1, to_x(hi) - to_x(lo)), 5, "removed bar"))
         ticks = ruler_ticks(b0, b1, x0, x1 - 1)
-        last_right = x0 - 24
-        for t, x in ticks:
+        label_w = f.measure("00:00:00:00") + RULER_LABEL_PAD
+        gaps = [bx - ax for (_t, ax), (_u, bx) in zip(ticks, ticks[1:])]
+        step = 1
+        while gaps and min(gaps) * step < label_w + 8:
+            step += 1
+        for n, (t, x) in enumerate(ticks):
             r.fill(x, y_ruler + 1, 1, 8, ACCENT)
-            text = timecode(t, fps)
-            tx = min(max(x0, x - f.measure(text) // 2), x1 - f.measure(text))
-            if tx < last_right + 24:
-                continue
-            r.text(text, f, tx, y_ruler + 10, MUTE)
-            last_right = tx + f.measure(text)
-        ticks_all.append(ticks)
-        # the waveform: RMS in the accent over the peak in grey, mirrored on
-        # a baseline, in dB; the silence threshold dashed
-        half = WAVE_H // 2 - 2
-        mid = y_wave + WAVE_H // 2
-        for a, c in removed:
+            marks.append((x, y_ruler + 1, 1, 8, "tick"))
+            if n % step == 0 and x + RULER_LABEL_PAD + f.measure(timecode(t, fps)) <= CHECK_WIDTH - margin:
+                r.text(timecode(t, fps), f, x + RULER_LABEL_PAD, y_ruler + 10, MUTE)
+        # the waveform, rectified as Final Cut draws it: RMS in the accent over
+        # the peak in grey, up from a baseline, in dB from -60 to 0; 0 and
+        # -20 dB ticked at the band's edge, the -40 dB silence line dashed
+        for a, c in removed + spans:
             lo, hi = max(a, b0), min(c, b1)
             if hi > lo:
                 r.fill(to_x(lo), y_wave, max(1, to_x(hi) - to_x(lo)), WAVE_H, PANEL)
-        for a, c in spans:
-            lo, hi = max(a, b0), min(c, b1)
-            if hi > lo:
-                r.fill(to_x(lo), y_wave, max(1, to_x(hi) - to_x(lo)), WAVE_H, PANEL)
+        level = WAVE_H - 2
         if samples:
-            n = len(samples)
-            lo_i = int((b0 - start) / duration * n)
-            hi_i = int((b1 - start) / duration * n)
-            part = samples[lo_i:hi_i] or [0]
-            cols = x1 - x0
-            m = len(part)
+            n_all = len(samples)
+            part = samples[int((b0 - start) / duration * n_all):int((b1 - start) / duration * n_all)] or [0]
+            cols, m = x1 - x0, len(part)
             for col in range(cols):
                 chunk = part[col * m // cols:(col + 1) * m // cols] or [0]
                 peak = max(abs(v) for v in chunk)
                 rms = math.sqrt(sum(v * v for v in chunk) / len(chunk))
-                hp, hr = db_height(db(peak), half), db_height(db(rms), half)
+                hp, hr = db_height(db(peak), level), db_height(db(rms), level)
                 if hp:
-                    r.fill(x0 + col, mid - hp, 1, 2 * hp + 1, MUTE)
+                    r.fill(x0 + col, base - hp, 1, hp, MUTE)
                 if hr:
-                    r.fill(x0 + col, mid - hr, 1, 2 * hr + 1, ACCENT)
-            ht = db_height(SILENCE_DB, half)
+                    r.fill(x0 + col, base - hr, 1, hr, ACCENT)
+            ht = db_height(SILENCE_DB, level)
             for xx in range(x0, x1, 8):
-                r.fill(xx, mid - ht, 4, 1, INK)
-                r.fill(xx, mid + ht, 4, 1, INK)
-        r.fill(x0, mid, x1 - x0, 1, LINE_STRONG)
+                r.fill(xx, base - ht, 4, 1, INK)
+        r.fill(x0, base, x1 - x0, 1, LINE_STRONG)
+        marks.append((x0, base, x1 - x0, 1, "baseline"))
+        scale, below = [], y_wave - f.height
+        for value in (0, -20, -40):
+            y = base - db_height(value, level)
+            r.fill(x1 - 6, y, 6 + 6, 1, INK)  # a tick at the band's edge, into the scale column
+            ly = max(y, below)  # each label hangs from its tick, never on the one above
+            r.text(str(value), f, x1 + 10, ly, MUTE)
+            below = ly + f.height
+            scale.append((value, y))
+        # the cut's two sides on the band each falls in: the out-point
+        # (where the played picture leaves the file) and the in-point (where
+        # it comes back), each a mark on the ruler and a line through the waveform
+        if at_cut is not None:
+            for t, which in ((at_cut["out"], "out"), (at_cut["in"], "in")):
+                if b0 <= t <= b1 and (which == "out" or at_cut["in"] != at_cut["out"]):
+                    cx = to_x(t)
+                    for k in range(7):
+                        r.fill(cx - k, y_ruler - 7 + (6 - k), 2 * k + 1, 1, ACCENT)
+                    marks.append((cx - 6, y_ruler - 7, 13, 7, f"{which} mark"))
+                    r.fill(cx - 1, y_wave, 3, WAVE_H, ACCENT)
+                    marks.append((cx - 1, y_wave, 3, WAVE_H, f"{which} line"))
+                    joins.append({"band": b, "x": cx, "t": t, "which": which})
         if not samples and b == 0:
-            r.text("no audio in this source", f, x0 + 8, y_wave + 4, MUTE)
-        # the silence and the removed span named inside the waveform band
+            note = "no audio in this source"
+            nx = clear_x(x0 + 8, f.measure(note), y_wave + 4, f.height, marks, x0, x1)
+            if nx is not None:
+                r.text(note, f, nx, y_wave + 4, MUTE)
+        # a silence named once, in the band it starts in, clear of every mark
         last_right = x0 - 12
         for a, c in spans:
             lo, hi = max(a, b0), min(c, b1)
-            if hi <= lo or a < b0:  # named in the band it starts in
+            if hi <= lo or a < b0:
                 continue
-            for text in (f"silence {_seconds_label(c - a)}", _seconds_label(c - a)):
-                tx = min(max(x0, to_x(lo) + 4), x1 - f.measure(text))
-                if tx >= last_right + 12:
+            frames_long = int(c * nominal + Fraction(1, 2)) - int(a * nominal + Fraction(1, 2))
+            for text in (f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
+                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a)):
+                want = min(max(x0, to_x(lo) + 4), x1 - f.measure(text))
+                tx = clear_x(want, f.measure(text), y_wave + 2, f.height, marks, max(x0, last_right + 12), x1)
+                if tx is not None:
                     r.fill(tx - 2, y_wave + 2, f.measure(text) + 4, f.height, PANEL)
                     r.text(text, f, tx, y_wave + 2, INK)
                     last_right = tx + f.measure(text)
                     break
-        if at_cut is not None and b0 <= at_cut["out"] <= b1:
-            cx = to_x(at_cut["out"])
-            for k in range(8):
-                r.fill(cx - k, y_ruler - 10 + (7 - k), 2 * k + 1, 1, ACCENT)
-            r.fill(cx - 1, y_wave, 3, WAVE_H, ACCENT)
         bands.append({"start": b0, "end": b1, "y_frames": y_f, "y_label": y_label, "y_ruler": y_ruler,
-                      "y_wave": y_wave, "ticks": ticks, "wave_mid": mid})
-    # the cut: the last kept frame and the first kept frame, side by side,
-    # with the record time of the cut and what was taken out between them
+                      "y_wave": y_wave, "ticks": ticks, "base": base, "level": level, "scale": scale,
+                      "label_step": step, "bottom": y_wave + WAVE_H})
+    # the join as played: off the band grid, under a rule and a heading,
+    # the last kept frame and the first kept frame side by side
     pair = None
     if at_cut is not None:
-        y_p = band_top + 2 * band_h
-        before_t = at_cut["out"] - one
-        after_t = at_cut["in"]
-        for j, (t, word) in enumerate(((before_t, "last"), (after_t, "first"))):
+        y = join_top
+        r.fill(margin, y, CHECK_WIDTH - 2 * margin, 1, LINE_STRONG)
+        y += 1 + 8
+        heading = ("the join, as played: cut at rec " + timecode(at_cut["rec"], fps)) if at_cut["rec"] is not None \
+            else ("the cut at src " + timecode(at_cut["out"], fps))
+        r.text(heading, f, margin, y, ACCENT)
+        y += f.height + 4
+        before_t, after_t = at_cut["out"] - one, at_cut["in"]
+        for j, t in enumerate((before_t, after_t)):
             px = margin + j * (fw + 8)
             pic = exact_frame(source, t, fps, fw, fh)
             if pic is not None:
-                r.paste(pic, px, y_p)
+                r.paste(pic, px, y)
             else:
-                r.fill(px, y_p, fw, fh, PANEL)
-            if j == 1:
-                r.fill(px, y_p, 4, fh, ACCENT)
+                r.fill(px, y, fw, fh, PANEL)
             tc = timecode(t, fps)
-            r.text(tc, f, px + (fw - f.measure(tc)) // 2, y_p + fh + 4, ACCENT if j == 1 else MUTE)
+            r.text(tc, f, px + (fw - f.measure(tc)) // 2, y + fh + 4, ACCENT if j == 1 else MUTE)
         tx = margin + 2 * (fw + 8) + 16
-        lines = []
-        if at_cut["rec"] is not None:
-            lines.append((f"cut at rec {timecode(at_cut['rec'], fps)}", ACCENT))
-        else:
-            lines.append((f"cut at src {timecode(at_cut['out'], fps)}", ACCENT))
-        lines.append((f"last kept  src {timecode(before_t, fps)}", INK))
-        lines.append((f"first kept src {timecode(after_t, fps)}", INK))
+        lines = [(f"last kept  src {timecode(before_t, fps)}", INK), (f"first kept src {timecode(after_t, fps)}", INK)]
         gap = at_cut["in"] - at_cut["out"]
         if gap > 0:
-            lines.append((f"removed {length_label(int(gap * nominal + Fraction(1, 2)))} "
-                          f"({timecode(at_cut['out'], fps)} to {timecode(at_cut['in'] - one, fps)})", MUTE))
-        for i, (text, colour) in enumerate(lines):
-            r.text(rs.fit(text, f, x1 - tx)[0], f, tx, y_p + i * f.height, colour)
-        pair = {"y": y_p, "before": before_t, "after": after_t, "lines": [t for t, _ in lines]}
-    problems = rs.legibility_problems(r) + rs.collisions(r)
+            removed_f = int(at_cut["in"] * nominal + Fraction(1, 2)) - int(at_cut["out"] * nominal + Fraction(1, 2))
+            lines.append((f"removed {timecode(at_cut['out'], fps)}-{timecode(at_cut['in'], fps)} · "
+                          f"{length_label(removed_f)}", MUTE))
+            sides = kept_sides((at_cut["out"], at_cut["in"]), spans, nominal)
+            if sides:
+                lines.append((sides, MUTE))
+        ly = y
+        for text, colour in lines:
+            for line in rs.fit(text, f, CHECK_WIDTH - margin - tx):  # wrapped, never cut
+                r.text(line, f, tx, ly, colour)
+                ly += f.height
+        pair = {"y": y, "rule": join_top, "heading": heading, "before": before_t, "after": after_t,
+                "lines": [heading] + [t for t, _ in lines]}
+    problems = rs.legibility_problems(r) + rs.collisions(r) + mark_problems(r.runs, marks)
     path = r.save(out_path)
     return {"path": path, "raster": r, "bands": bands, "frames": frames_out, "spans": spans,
-            "removed": removed, "cut": at_cut, "pair": pair, "problems": problems,
-            "audio": samples is not None, "first_kept": first_kept,
+            "removed": removed, "cut": at_cut, "pair": pair, "joins": joins, "problems": problems,
+            "audio": samples is not None, "marks": marks,
             "geometry": {"x0": x0, "x1": x1, "span": span, "face": f}}
 
 
@@ -1041,13 +1171,11 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
     while t <= total:
         ticks.append((t, col(t)))
         t += step
-    for i, (t, c) in enumerate(ticks):
+    for t, c in ticks:
         ruler[c] = "|"
         text = _seconds_label(t)
-        last = i == len(ticks) - 1
-        a = c - len(text) + 1 if last and c + len(text) > width else c
-        if all(ch == " " for ch in labels[max(0, a - 1):a + len(text) + 1]):
-            labels[a:a + len(text)] = list(text)
+        if all(ch == " " for ch in labels[max(0, c - 1):c + len(text) + 1]):
+            labels[c:c + len(text)] = list(text)
     lines.append(f"{'time':<{gutter}}" + "".join(labels).rstrip())
     lines.append(f"{'':<{gutter}}" + "".join(ruler).rstrip())
 
@@ -1087,39 +1215,65 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
     for lane in sorted((x for x in lanes if x < 0), reverse=True):
         lines.append(row(f"lane {lane}", [s for s in graph.segments if s.lane == lane], name_after=True))
 
-    # the list, EDL style
+    # the list, EDL style: every row in the same columns. A transition is
+    # "D <length>" in the tr column of the clip it leads into (CMX's
+    # convention) and its own row gives its span; a flash in the picture is a
+    # "!" row at its time
     lines.append("")
     clips = [s for s in graph.segments if s.kind == "clip"]
     order = sorted(clips, key=lambda s: (frame_of(s.tl_in), s.lane != 0, s.lane))
-    name_w = max([len(s.label) for s in order] + [4])
-    file_w = max([len(source_name(s)) for s in order] + [6])
-    lines.append(f"{'#':<4}{'track':<7}{'rec in':<13}{'rec out':<13}{'length':<8}{'clip':<{name_w + 2}}"
-                 f"{'source':<{file_w + 2}}{'src in':<13}src out")
+    into = {}
+    for tr in graph.transitions:
+        if tr.boundary + 1 < len(spine):
+            into[id(spine[tr.boundary + 1])] = tr
+    flashes = []
+    runs = picture_runs(graph)
+    for i, (fa, fb, layers) in enumerate(runs):
+        if fb - fa < 6 and layers and 0 < i < len(runs) - 1:
+            flashes.append((fa, fb, layers, runs[i - 1][2], runs[i + 1][2]))
+    name_w = max([len(s.label) for s in order] + [len("dissolve"), 4] + [len(m.name) for _t, m in markers])
+    file_w = max([len(source_name(s)) for s in order] + [6] +
+                 [len(f"{spine[t.boundary].label}>{spine[t.boundary + 1].label}") for t in graph.transitions
+                  if t.boundary + 1 < len(spine)])
+
+    def tcs(frames):
+        return frames_timecode(frames, nominal)
+
+    def src_tc(seconds):
+        return frames_timecode(int(Fraction(seconds) * nominal + Fraction(1, 2)), nominal)
+
+    def cols(num, track, rin, rout, length, tr, clip, source, sin, sout, note=""):
+        return (f"{num:<4}{track:<7}{rin:<13}{rout:<13}{length:<8}{tr:<7}{clip:<{name_w + 2}}"
+                f"{source:<{file_w + 2}}{sin:<13}{sout:<13}{note}")
+
+    lines.append(cols("#", "track", "rec in", "rec out", "length", "tr", "clip", "source", "src in", "src out", "note"))
     events = []
     for n, s in enumerate(order, 1):
-        a, b = frame_of(s.tl_in), frame_of(s.tl_out)
-        flag = "  [MEDIA MISSING]" if s.missing else ""
-        src_in = frames_timecode(int(s.src_in * nominal + Fraction(1, 2)), nominal)
-        src_out = frames_timecode(int(s.src_out * nominal + Fraction(1, 2)), nominal)
-        track = "V" if s.lane == 0 else f"L{s.lane}"
-        events.append((a, 2, f"{n:<4}{track:<7}{frames_timecode(a, nominal):<13}{frames_timecode(b, nominal):<13}"
-                             f"{length_label(b - a):<8}{s.label:<{name_w + 2}}{source_name(s):<{file_w + 2}}"
-                             f"{src_in:<13}{src_out}{flag}"))
+        fa, fb = frame_of(s.tl_in), frame_of(s.tl_out)
+        tr = into.get(id(s))
+        events.append((fa, 3, cols(str(n), "V" if s.lane == 0 else f"L{s.lane}", tcs(fa), tcs(fb), length_label(fb - fa),
+                                   f"D {length_label(tr.end - tr.start)}" if tr else "", s.label, source_name(s),
+                                   src_tc(s.src_in), src_tc(s.src_out), "MEDIA MISSING" if s.missing else "")))
     for t, m in markers:
         kind = getattr(getattr(m, "marker_type", None), "value", "") or "marker"
-        events.append((frame_of(t), 0, f"{'':<4}{'marker':<7}{frames_timecode(frame_of(t), nominal):<13}"
-                                       f"{'':<13}{'':<8}{m.name} ({kind})"))
+        events.append((frame_of(t), 0, cols("^", "marker", tcs(frame_of(t)), "", "", "", m.name, f"({kind})", "", "")))
     for tr in graph.transitions:
         if tr.boundary + 1 >= len(spine):
             continue
         out_seg, in_seg = spine[tr.boundary], spine[tr.boundary + 1]
         cut = frame_of(in_seg.tl_in)
-        where = ("centred on the cut" if tr.start + tr.end == 2 * cut
-                 else f"starting {cut - tr.start}f before the cut")
-        events.append((tr.start, 1, f"{'X':<4}{'V':<7}{frames_timecode(tr.start, nominal):<13}"
-                                    f"{frames_timecode(tr.end, nominal):<13}{length_label(tr.end - tr.start):<8}"
-                                    f"{tr.name or tr.kind}, {out_seg.label} into {in_seg.label}, {where} "
-                                    f"{frames_timecode(cut, nominal)}"))
+        where = ("centred on the cut " if tr.start + tr.end == 2 * cut
+                 else f"starts {cut - tr.start}f before the cut ") + tcs(cut)
+        events.append((tr.start, 2, cols("D", "V", tcs(tr.start), tcs(tr.end), length_label(tr.end - tr.start), "",
+                                         "dissolve" if tr.kind == "fade" else (tr.name or tr.kind),
+                                         f"{out_seg.label}>{in_seg.label}", "", "", where)))
+    for fa, fb, layers, before, after in flashes:
+        top = layers[0]
+        events.append((fa, 1, cols("!", "flash", tcs(fa), tcs(fb), length_label(fb - fa), "", top.label,
+                                   source_name(top),
+                                   src_tc(top.src_in + Fraction(fa, fg.FPS) - top.tl_in),
+                                   src_tc(top.src_in + Fraction(fb, fg.FPS) - top.tl_in),
+                                   f"between {picture_name(before)} and {picture_name(after)}")))
     for _a, _o, text in sorted(events, key=lambda e: (e[0], e[1])):
         lines.append(text.rstrip())
     return "\n".join(lines)

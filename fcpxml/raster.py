@@ -361,7 +361,7 @@ READABLE = "0123456789:;.,-+_/()[]#@%&*'\"!?=<>|abcdefghijklmnopqrstuvwxyzABCDEF
 
 
 def read_text(r: Raster, f: Face, x: int, y: int, n: int, *, light_on_dark: bool = True,
-              alphabet: str = READABLE) -> str:
+              alphabet: str = READABLE, threshold: int = 128) -> str:
     """Read ``n`` characters drawn in face ``f`` with the top left of the
     first cell at (x, y): each cell is thresholded and matched against every
     glyph of the alphabet, nearest wins. Survives JPEG and H.264 because the
@@ -380,7 +380,7 @@ def read_text(r: Raster, f: Face, x: int, y: int, n: int, *, light_on_dark: bool
                     continue
                 i = (py * r.width + px) * r.channels
                 luma = 0.2126 * r.px[i] + 0.7152 * r.px[i + 1] + 0.0722 * r.px[i + 2]
-                on = luma >= 128 if light_on_dark else luma < 128
+                on = luma >= threshold if light_on_dark else luma < threshold
                 if on:
                     bits |= 1 << (f.cell_w - 1 - cx)
             cell.append(bits)

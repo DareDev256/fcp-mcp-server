@@ -139,7 +139,7 @@ def test_preview_timeline_draws_the_sample_project():
     assert rows[4].startswith("spine") and "[" in rows[4]
     events = [r for r in rows if r[:1].isdigit()]
     assert len(events) == 9 and [r.split()[2] for r in events] == sorted(r.split()[2] for r in events)
-    assert any(r.split()[:3] == ["marker", "00:00:00:00", "Intro"] for r in rows if r.startswith("    marker"))
+    assert any(r.split()[:4] == ["^", "marker", "00:00:00:00", "Intro"] for r in rows if r.startswith("^"))
 
 
 def test_preview_timeline_flags_missing_media():

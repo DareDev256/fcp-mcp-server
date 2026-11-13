@@ -434,9 +434,22 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     background: linear-gradient(to bottom, transparent 0, var(--shade) 10px); }
   .clip .role { font-size: 12px; color: var(--mute); margin-left: 6px; text-transform: uppercase; letter-spacing: .04em; }
   .clip.has-thumb .role { color: var(--on-media); }
-  .clip .num { position: absolute; left: 2px; bottom: 2px; z-index: 1; padding: 0 3px; border-radius: 3px;
+  /* Every clip carries its number: inside, top right, when it fits clear of
+     the name; else just outside the box on a leader, above it (below it for
+     lanes under the spine), in a strip the lane opens for it. */
+  .clip .num { position: absolute; right: 2px; top: 2px; z-index: 1; padding: 0 3px; border-radius: 3px;
     font-size: 11px; font-weight: 600; color: var(--ink); background: var(--ground); visibility: hidden; white-space: nowrap; }
   .clip .num.on { visibility: visible; }
+  .lane.has-out { height: 62px; }
+  .lane.spine.has-out { height: 76px; }
+  .lane.audio.has-out { height: 48px; }
+  .lane.has-out:not(.below) .clip, .lane.has-out:not(.below) .gap { top: 21px; }
+  .lane.has-out.below .clip { bottom: 21px; }
+  .onum { position: absolute; top: 1px; z-index: 3; padding: 0 3px; border-radius: 3px; font-size: 11px; font-weight: 600;
+    line-height: 14px; color: var(--ink); background: var(--ground); border: 1px solid var(--line-strong); white-space: nowrap; }
+  .lane.below .onum { top: auto; bottom: 1px; }
+  .onum .lead { position: absolute; left: 50%; top: 100%; width: 0; height: 5px; border-left: 1px solid var(--line-strong); }
+  .lane.below .onum .lead { top: auto; bottom: 100%; }
   #key { margin-top: 6px; font-size: 12px; color: var(--mute); line-height: 1.6; }
   #key b { color: var(--ink); font-weight: 600; margin-right: 4px; }
   #key span { margin-right: 14px; white-space: nowrap; }
@@ -481,6 +494,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .readonly-note { width: 100%; font-size: 12px; color: var(--mute); }
   input[type=text] { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line-strong);
     background: var(--ground); color: var(--ink); flex: 1 1 120px; min-width: 0; max-width: 100%; }
+  /* The browser's own placeholder grey read 4.07:1 on the panel; the mute token reads 5.6:1. */
+  input::placeholder { color: var(--mute); opacity: 1; }
   #log { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--mute);
     max-height: 180px; overflow: auto; margin: 0; }
   .zoom { display: inline-flex; gap: 4px; align-items: center; color: var(--mute); font-size: 11px; }
@@ -859,7 +874,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     if (lanes.some(function (l) { return l.kind === "spine"; }) && !lanes.some(function (l) { return l.lane > 0; }))
       lanes.unshift({ lane: 1, kind: "video reserved", clips: [] });
     lanes.forEach(function (lane) {
-      var row = el("div", "lane " + lane.kind); row.dataset.lane = String(lane.lane);
+      var row = el("div", "lane " + lane.kind + (lane.lane < 0 ? " below" : "")); row.dataset.lane = String(lane.lane);
       row.appendChild(el("span", "lane-tag", lane.kind === "spine" ? "spine" : "lane " + lane.lane));
       if (lane.kind === "spine") p.gaps.forEach(function (g) {
         var ge = el("div", "gap", "gap " + secOfSeconds(frac(g.duration)));
@@ -910,24 +925,59 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var b = range.getBoundingClientRect(), own = e.scrollWidth > e.clientWidth + 0.5 && !e.classList.contains("tick") && !e.classList.contains("mlabel");
       e.classList.toggle("unfit", own || b.left < left - 0.5 || b.right > right + 0.5);
     });
-    // A clip whose name is hidden shows its number when the number fits
-    // whole inside it and the view; the key under the timeline names it.
-    var keyed = [];
+    placeNumbers(left, right);
+  }
+  // Every clip is numbered (record order: start, spine first, then lanes
+  // from the lowest) and the key under the timeline names every number. The
+  // number sits inside the box, top right, when it fits there clear of the
+  // name; otherwise just outside it on a leader, in a strip its lane opens:
+  // above the box, or below it for a lane under the spine. Outside numbers
+  // never overlap each other. A number outside the visible area is hidden
+  // there (never cut), and is still in the key.
+  function placeNumbers(left, right) {
+    var sc = $("scroller");
+    sc.querySelectorAll(".onum").forEach(function (e) { e.remove(); });
+    var outside = [];
     sc.querySelectorAll(".clip").forEach(function (c) {
       var num = c.querySelector(".num"); if (!num) return;
       var lab = c.querySelector(".label"), named = lab && !lab.classList.contains("unfit");
       var nb = num.getBoundingClientRect(), cb = c.getBoundingClientRect();
-      var on = !named && nb.right <= cb.right - 1 && nb.left >= left - 0.5 && nb.right <= right + 0.5;
-      num.classList.toggle("on", on);
-      if (on && c.__c) keyed.push([Number(num.textContent), c.__c.name]);
+      var inside = nb.left >= cb.left + 1 && nb.right <= cb.right - 1;
+      if (inside && named) {
+        var rg = document.createRange(); rg.selectNodeContents(lab); var tb = rg.getBoundingClientRect();
+        if (tb.right > nb.left - 3 && tb.left < nb.right && tb.bottom > nb.top && tb.top < nb.bottom) inside = false;
+      }
+      num.classList.toggle("on", inside && nb.left >= left - 0.5 && nb.right <= right + 0.5);
+      if (!inside) outside.push(c);
+    });
+    var rows = new Set();
+    outside.forEach(function (c) { rows.add(c.parentNode); });
+    sc.querySelectorAll(".lane").forEach(function (row) { row.classList.toggle("has-out", rows.has(row)); });
+    var lastRight = {};
+    outside.sort(function (a, b) { return a.offsetLeft - b.offsetLeft; }).forEach(function (c) {
+      var row = c.parentNode, n = c.querySelector(".num").textContent;
+      var badge = el("div", "onum", n), lead = el("div", "lead");
+      badge.appendChild(lead); badge.dataset.for = n; row.appendChild(badge);
+      var centre = c.offsetLeft + c.offsetWidth / 2, bw = badge.offsetWidth;
+      // never under the sticky lane tags at the left, never on the previous number
+      var at = Math.max(centre - bw / 2, GUTTER + 2, (lastRight[row.dataset.lane] || -1e9) + 3);
+      badge.style.left = at + "px";
+      lead.style.left = (centre - at) + "px";
+      lastRight[row.dataset.lane] = at + bw;
+      var bb = badge.getBoundingClientRect();
+      badge.style.visibility = bb.left >= left - 0.5 && bb.right <= right + 0.5 ? "visible" : "hidden";
     });
     var key = $("key");
     if (key) {
       key.textContent = "";
-      keyed.sort(function (a, b) { return a[0] - b[0]; }).forEach(function (k) {
+      var all = [];
+      sc.querySelectorAll(".clip").forEach(function (c) {
+        var num = c.querySelector(".num"); if (num && c.__c) all.push([Number(num.textContent), c.__c.name]);
+      });
+      all.sort(function (a, b) { return a[0] - b[0]; }).forEach(function (k) {
         var sp = el("span"); sp.appendChild(el("b", null, String(k[0]))); sp.appendChild(document.createTextNode(k[1])); key.appendChild(sp);
       });
-      key.hidden = keyed.length === 0;
+      key.hidden = all.length === 0;
     }
   }
   function clipEl(c) {

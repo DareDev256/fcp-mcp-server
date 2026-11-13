@@ -81,8 +81,8 @@ def test_reversed_range_is_rejected(tmp_path):
         _check(tmp_path / "x.mov", 2, 1, tmp_path / "o.png")
 
 
-@pytest.mark.parametrize("frames", [1, 3, 12, 500])
-def test_frames_must_fill_two_bands_of_at_most_five(tmp_path, frames):
+@pytest.mark.parametrize("frames", [1, 3, 10, 500])
+def test_frames_must_fill_two_bands_of_at_most_four(tmp_path, frames):
     with pytest.raises(ValueError, match="frames"):
         _check(tmp_path / "x.mov", 0, 1, tmp_path / "o.png", frames=frames)
 
@@ -113,7 +113,8 @@ def test_two_bands_of_frames_at_least_240_wide_inside_the_budget(bars_with_audio
 @needs_ffmpeg
 def test_the_frame_times_are_written_under_each_frame(bars_with_audio, tmp_path):
     """Read every frame's label back off the PNG and compare it with the time
-    the frame was taken at: band b covers [b * 2, (b + 1) * 2) of a 4 s range."""
+    the frame was taken at: band b covers [b * 2, (b + 1) * 2) of a 4 s range,
+    four frames each."""
     result = _check(bars_with_audio, 0, 4, tmp_path / "check.png", fps=24)
     png = rs.load(result["path"])
     f = rs.face(32)
@@ -121,7 +122,7 @@ def test_the_frame_times_are_written_under_each_frame(bars_with_audio, tmp_path)
         k = int(Fraction(t) * 24 + Fraction(1, 2))
         return f"00:00:{k // 24:02d}:{k % 24:02d}"
 
-    want = [tc(Fraction(2) * b + Fraction(2) * (2 * i + 1) / 10) for b in range(2) for i in range(5)]
+    want = [tc(Fraction(2) * b + Fraction(2) * (2 * i + 1) / 8) for b in range(2) for i in range(4)]
     got = []
     for band in result["bands"]:
         runs = sorted((r for r in result["raster"].runs if r.y == band["y_label"]), key=lambda r: r.x)
@@ -150,19 +151,20 @@ def test_the_instrument_distinguishes_different_ranges(bars_with_audio, tmp_path
 @needs_ffmpeg
 def test_the_waveform_is_drawn_in_the_accent_on_black_with_a_baseline(bars_with_audio, bars_quiet, tmp_path):
     """Same picture, different sound: the frames are identical, so every
-    difference is in the waveform bands. The tone fills each band's RMS in
-    the accent on every column; near-silence leaves the baseline."""
+    difference is in the waveform bands. Rectified, as Final Cut draws it:
+    the tone's RMS rises from the baseline in the accent on every column;
+    near-silence leaves the baseline alone."""
     loud = _check(bars_with_audio, 0, 4, tmp_path / "loud.png")
     quiet = _check(bars_quiet, 0, 4, tmp_path / "quiet.png")
     loud_png, quiet_png = rs.load(loud["path"]), rs.load(quiet["path"])
     x0, x1 = loud["geometry"]["x0"], loud["geometry"]["x1"]
     for band in loud["bands"]:
-        mid = band["wave_mid"]
+        base = band["base"]
         for x in range(x0, x1):  # every column
-            assert loud_png.get(x, mid - 6)[:3] == pytest.approx(proofs.ACCENT, abs=12), x
-            assert quiet_png.get(x, mid - 6)[:3] != pytest.approx(proofs.ACCENT, abs=40), x
-            assert quiet_png.get(x, mid)[:3] == pytest.approx(proofs.LINE_STRONG, abs=12), x
-    top, bottom = 16 + 2 * rs.face(32).height + 12, loud["bands"][0]["y_wave"]
+            assert loud_png.get(x, base - 6)[:3] == pytest.approx(proofs.ACCENT, abs=12), x
+            assert quiet_png.get(x, base - 6)[:3] != pytest.approx(proofs.ACCENT, abs=40), x
+            assert quiet_png.get(x, base)[:3] == pytest.approx(proofs.LINE_STRONG, abs=12), x
+    top, bottom = 16 + rs.face(32).height + 8, loud["bands"][0]["y_wave"]
     row = loud_png.width * loud_png.channels
     assert loud_png.px[top * row:bottom * row] == quiet_png.px[top * row:bottom * row]
 
@@ -175,8 +177,8 @@ def test_silence_spans_are_found_and_labelled(tone_gap_tone, tmp_path):
     assert abs(float(a) - 1.5) <= 0.06 and abs(float(b) - 2.5) <= 0.06
     png, f = rs.load(result["path"]), rs.face(32)
     runs = [run for run in result["raster"].runs if run.text.startswith("silence")]
-    assert [run.text for run in runs] == ["silence 1.0s"]
-    assert rs.read_text(png, f, runs[0].x, runs[0].y, len(runs[0].text)) == "silence 1.0s"
+    assert [run.text for run in runs] == ["silence 1.0s (24f)"]
+    assert rs.read_text(png, f, runs[0].x, runs[0].y, len(runs[0].text)) == "silence 1.0s (24f)"
 
 
 @needs_ffmpeg
@@ -188,6 +190,6 @@ def test_the_cut_is_marked_and_the_frames_either_side_are_shown(bars_with_audio,
     for y in range(band["y_wave"], band["y_wave"] + proofs.WAVE_H):  # every row of the line
         assert png.get(cut_x, y)[:3] == pytest.approx(proofs.ACCENT, abs=12), y
     texts = [r.text for r in result["raster"].runs]
-    assert "cut at src 00:00:01:00" in texts
+    assert "the cut at src 00:00:01:00" in texts
     assert "last kept  src 00:00:00:23" in texts and "first kept src 00:00:01:00" in texts
     assert result["problems"] == []

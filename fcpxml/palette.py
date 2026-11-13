@@ -45,7 +45,7 @@ TOKENS: dict[str, tuple[str, str]] = {
     "badge": ("#33EBFF", "#33EBFF"),
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
     "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
-    "danger": ("#FF3B30", "#D70015"),       # FAIL and removed spans, nothing else
+    "danger": ("#FF3B30", "#D70015"),       # FAIL (and missing media) only: never an intended edit
 }
 
 ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash", "badge")

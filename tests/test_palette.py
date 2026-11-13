@@ -122,6 +122,36 @@ def test_tokens_are_grey_or_cyan_or_red():
                 assert palette.is_neutral(value), (name, value)
 
 
+FAILURE_ONLY = ("fcpxml/proofs.py", "fcpxml/raster.py", "tools/preview.py", "tools/scenes.py")
+
+
+def red_uses(text: str) -> list:
+    """Lines that paint with the danger red without saying which failure it
+    marks (``# red: failure (...)`` on the call). The intended edit (a
+    removed silence, a cut) is not a failure and is never red."""
+    lines = text.splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        if "DANGER" not in line or line.lstrip().startswith(("#", "LINE,")) or "rs.colour(" in line:
+            continue
+        window = " ".join(lines[i:i + 2])
+        if "# red: failure" not in window:
+            out.append(f"{i + 1}: {line.strip()}")
+    return out
+
+
+@pytest.mark.parametrize("surface", FAILURE_ONLY)
+def test_red_marks_only_a_failure(surface):
+    """0.32 round 3: the check marked a REMOVED silence (the edit working)
+    in red on its ruler. Every danger-red paint call names its failure."""
+    assert red_uses((REPO / surface).read_text(encoding="utf-8")) == []
+
+
+def test_the_red_rule_can_go_red():
+    assert red_uses("            r.fill(x, y, w, 5, DANGER)\n")
+    assert red_uses("            r.fill(x, y, w, 5, DANGER)  # red: failure (offline media)\n") == []
+
+
 def test_neutral_tokens_are_exact_greys():
     """0.32: the panels were blue-tinted near-black (#121216, #1C1C22) and
     read as off-black beside the true-black ground. A neutral is r == g == b."""

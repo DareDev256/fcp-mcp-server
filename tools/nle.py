@@ -191,14 +191,14 @@ async def handle_relink_media(arguments: dict) -> Sequence[TextContent]:
     ]
     missing = 0
     for change in result["changes"]:
-        mark = "✓" if change["target_exists"] else "⚠ target missing"
+        mark = "✓" if change["target_exists"] else "\u26a0\ufe0e target missing"
         if not change["target_exists"]:
             missing += 1
         lines.append(f"  {change['asset']}: {change['new']}  [{mark}]")
     if missing:
         lines.append("")
         lines.append(
-            f"⚠ {missing} new path(s) do not exist on this machine — "
+            f"\u26a0\ufe0e {missing} new path(s) do not exist on this machine — "
             f"FCP will show those clips as missing until the media is present."
         )
     lines.append("")

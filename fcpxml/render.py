@@ -133,6 +133,48 @@ def probe_source(path: str) -> Optional[SourceInfo]:
     )
 
 
+def stream_facts(path: str) -> Optional[dict]:
+    """A media file's picture and sound as diagnose and inspect report them:
+    {"fps": Fraction or None, "width", "height", "channels", "sample_rate",
+    "duration": Fraction or None}. None when the file or ffprobe is absent."""
+    if shutil.which("ffprobe") is None or not Path(path).is_file():
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:stream=codec_type,width,height,r_frame_rate,sample_rate,channels",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS,
+        )
+        data = json.loads(result.stdout or "{}") if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if not data:
+        return None
+    video = next((st for st in data.get("streams", []) if st.get("codec_type") == "video"), None)
+    audio = next((st for st in data.get("streams", []) if st.get("codec_type") == "audio"), None)
+
+    def rate(text):
+        try:
+            value = Fraction(str(text))
+            return value if value > 0 else None
+        except (ValueError, ZeroDivisionError):
+            return None
+
+    try:
+        duration = Fraction(data.get("format", {})["duration"]).limit_denominator(100000)
+    except (KeyError, ValueError, ZeroDivisionError):
+        duration = None
+    return {
+        "fps": rate(video.get("r_frame_rate")) if video else None,
+        "width": int(video["width"]) if video and video.get("width") else None,
+        "height": int(video["height"]) if video and video.get("height") else None,
+        "channels": int(audio["channels"]) if audio and audio.get("channels") else 0,
+        "sample_rate": int(audio["sample_rate"]) if audio and audio.get("sample_rate") else None,
+        "duration": duration,
+    }
+
+
 def probe_audio_duration(path: str) -> Optional[Fraction]:
     """Length of the first audio stream of *path*, None when it has none."""
     if shutil.which("ffprobe") is None:

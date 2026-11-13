@@ -9,6 +9,7 @@ confirmed from an image rather than from re-parsing our own output.
 """
 
 import base64
+import re
 import subprocess
 from fractions import Fraction
 from pathlib import Path
@@ -279,20 +280,28 @@ async def handle_preview_check(args: dict):
             "that ffmpeg is on PATH."
         )
     _open_beside_terminal([result["path"]])
-    lines = [f"Filmstrip + waveform for {source} [{start}s - {end}s]: {result['path']}",
+    fps = _source_fps(source)
+    nominal = proofs.nominal_fps(fps)
+
+    def span(a, b) -> str:
+        """One range convention everywhere: in–out, the out-point exclusive, with its length."""
+        a, b = Fraction(a), Fraction(b)
+        length = int(b * nominal + Fraction(1, 2)) - int(a * nominal + Fraction(1, 2))
+        return f"{proofs.timecode(a, fps)}–{proofs.timecode(b, fps)} · {proofs.length_label(length)}"
+
+    lines = [f"Filmstrip + waveform for {source}, src {span(_seconds(start, 'start'), _seconds(end, 'end'))} "
+             f"(out-points exclusive): {result['path']}",
              "Read from the media, not from the XML."]
     if not result["audio"]:
         lines.append("No audio in this source: no waveform.")
     elif result["spans"]:
         lines.append("Silence (at or under " f"{proofs.SILENCE_DB:.0f} dBFS, {float(proofs.SILENCE_MIN):.1f}s or longer): "
-                     + ", ".join(f"{float(a):.2f}s to {float(b):.2f}s" for a, b in result["spans"]))
-    fps = _source_fps(source)
+                     + ", ".join(span(a, b) for a, b in result["spans"]))
     if result.get("removed"):
-        lines.append("Removed by the edit: " + ", ".join(
-            f"{proofs.timecode(a, fps)} to {proofs.timecode(b - Fraction(1, proofs.nominal_fps(fps)), fps)}"
-            for a, b in result["removed"]))
+        lines.append("Removed by the edit: " + ", ".join(span(a, b) for a, b in result["removed"]))
     if result.get("pair"):
-        lines += result["pair"]["lines"]
+        # the picture's font has no en dash; the text says its ranges one way
+        lines += [re.sub(r"(\d\d:\d\d:\d\d:\d\d)-(?=\d\d:)", "\\1–", t) for t in result["pair"]["lines"]]
     if result["problems"]:
         lines.append("Legibility: " + "; ".join(result["problems"]))
     return _with_images("\n".join(lines), [result["raster"]])
