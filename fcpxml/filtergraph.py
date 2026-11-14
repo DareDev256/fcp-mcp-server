@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from fcpxml.media_intel import media_src_to_path
+from fcpxml.words import plural
 
 # The proxy's frame rate. Fixed: the proxy exists to be cheap to make and
 # quick to scrub, and every quantisation below is to this grid.
@@ -609,7 +610,7 @@ def compile_timeline(
         hear(segment, _frame(segment.tl_in), _frame(segment.tl_out))
     if sounds:
         notes.append(
-            f"audio mixed from {len(sounds)} clip(s) with their adjust-volume; "
+            f"audio mixed from {plural(len(sounds), 'clip')} with their adjust-volume; "
             f"pan, EQ, audio effects and role levels are not applied"
         )
     if unheard:
@@ -655,7 +656,7 @@ def compile_timeline(
             ))
     elif any(not s.missing for s in lanes):
         notes.append(
-            f"{len(lanes)} connected video clip(s) not drawn (dropped after ffmpeg "
+            f"{plural(len(lanes), 'connected video clip')} not drawn (dropped after ffmpeg "
             f"refused the compositing graph)"
         )
     if undrawn:

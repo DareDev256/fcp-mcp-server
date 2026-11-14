@@ -1605,7 +1605,7 @@ class TestMarkerBatchCap:
         }))[0].text
         assert "Added 3 markers" in text
         assert "TRUNCATED" in text
-        assert "6 marker(s) were NOT written" in text
+        assert "6 markers were NOT written" in text
 
 
 class TestInlineTranscriptCap:
@@ -1647,7 +1647,7 @@ class TestInlineTranscriptCap:
             "transcript": transcript,
         }))[0].text
         assert "TRUNCATED" in text
-        assert "character(s) of transcript text were NOT read" in text
+        assert "characters of transcript text were NOT read" in text
         assert "Delta" not in text
 
 

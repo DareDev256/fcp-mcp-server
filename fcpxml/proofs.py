@@ -242,7 +242,8 @@ class Cell:
     transition_in: str = ""   # the transition INTO this (spine) cell: its length label
     after: int = 0            # the index of the spine cell it comes out of, when it has one
     over: int = 0             # a connected cell: the spine cell it plays over
-    flash: str = ""           # a flash in the picture this cell is part of: "flash 1f 00:00:20:03"
+    flash: tuple = ()         # the flash this cell's picture IS: ("flash 1f 00:00:20:03", "src 00:00:17:23")
+    notes: tuple = ()         # grey lines: "ends 1f before #6", "dup 66f with #5"
 
 
 def record_order(graph) -> list:
@@ -265,17 +266,34 @@ def sheet_cells(graph) -> list:
                    key=lambda s: (frame_of(s.tl_in), s.lane != 0, s.lane))
     index = {id(s): i for i, s in enumerate(every, 1)}
     order = record_order(graph)
-    # a flash in the picture marks the clip that flashes and the clip whose
-    # edge left it showing (the top layer of the run before it)
-    flashed = {}
+    # one flash is one red badge, on the card whose picture flashes (diagnose
+    # counts it once); the clip whose early end left it showing gets a grey
+    # line saying so
+    flashed, notes = {}, {}
     runs = picture_runs(graph)
     nominal = nominal_fps(24)
     for i, (fa, fb, layers) in enumerate(runs):
         if fb - fa < 6 and layers and 0 < i < len(runs) - 1:
-            text = f"flash {length_label(fb - fa)} {frames_timecode(fa, nominal)}"
-            for seg in (layers[0], runs[i - 1][2][0] if runs[i - 1][2] else None):
-                if seg is not None:
-                    flashed.setdefault(id(seg), text)
+            top = layers[0]
+            src = int((top.src_in + Fraction(fa, fg.FPS) - top.tl_in) * nominal + Fraction(1, 2))
+            flashed.setdefault(id(top), (f"flash {length_label(fb - fa)} {frames_timecode(fa, nominal)}",
+                                         f"src {frames_timecode(src, nominal)}"))
+            before = runs[i - 1][2][0] if runs[i - 1][2] else None
+            after = runs[i + 1][2][0] if runs[i + 1][2] else None
+            if before is not None and before is not top and after is not None and id(after) in index:
+                notes.setdefault(id(before), []).append(f"ends {length_label(fb - fa)} before #{index[id(after)]}")
+    # frames shown twice (diagnose's Duplicate frames WARN), on both cards
+    pictures = [s for s in order if s.source and not s.missing]
+    for a_i, a in enumerate(pictures):
+        for b in pictures[a_i + 1:]:
+            if a.source != b.source:
+                continue
+            fa_in, fa_out = (int(v * nominal + Fraction(1, 2)) for v in (a.src_in, a.src_out))
+            fb_in, fb_out = (int(v * nominal + Fraction(1, 2)) for v in (b.src_in, b.src_out))
+            shared = min(fa_out, fb_out) - max(fa_in, fb_in)
+            if shared > 0:
+                notes.setdefault(id(a), []).append(f"dup {length_label(shared)} with #{index[id(b)]}")
+                notes.setdefault(id(b), []).append(f"dup {length_label(shared)} with #{index[id(a)]}")
     cells = []
     for s in order:
         n = index[id(s)]
@@ -286,7 +304,8 @@ def sheet_cells(graph) -> list:
             host = index.get(id(under), 0) if under is not None else 0
         cells.append(Cell(n, s.label, s.lane, frame_of(s.tl_in), frame_of(s.tl_out) - frame_of(s.tl_in),
                           s.source, s.src_in, s.src_out, s.file_time(s.duration / 2), s.missing,
-                          label, index.get(outgoing, 0), host, flashed.get(id(s), "")))
+                          label, index.get(outgoing, 0), host, flashed.get(id(s), ()),
+                          tuple(notes.get(id(s), ()))))
     return cells
 
 
@@ -330,10 +349,12 @@ def wrap_items(items: list, f: rs.Face, width: int, sep: str = " · ") -> list:
 def _cell_text(cell: Cell, f: rs.Face, width: int, nominal: int) -> list:
     """The cell's label lines as (text, colour, right-aligned extra):
     name (wrapped, never cut) with its length at the right of its last line,
-    then "rec <in>" and "src <in>" (an in-point and a length make the range:
-    no out-point is printed, so no "to" can be read two ways), then what
-    only some cells have: "over #4" for a connected clip, "dissolve 12f in"
-    for the clip a transition leads into."""
+    then "rec <in>" (cyan: record time) and "src <in>" (an in-point and a
+    length make the range: no out-point is printed, so no "to" can be read
+    two ways), then, in grey, what only some cells have: "over #4" for a
+    connected clip, "dissolve 12f in" for the clip a transition leads into,
+    "ends 1f before #6", "dup 66f with #5"; and in red the flash this
+    cell's picture is ("flash 1f 00:00:20:03", "· src 00:00:17:23")."""
     length = length_label(cell.frames)
     room = width - f.measure(length) - 2 * f.advance
     name_lines = rs.fit(cell.name, f, room)
@@ -342,9 +363,15 @@ def _cell_text(cell: Cell, f: rs.Face, width: int, nominal: int) -> list:
     lines.append((f"rec {frames_timecode(cell.start, nominal)}", ACCENT, ""))
     lines.append((f"src {src_in}", MUTE, ""))
     if cell.over:
-        lines.append((f"over #{cell.over}", ACCENT, ""))
+        lines.append((f"over #{cell.over}", MUTE, ""))
     if cell.transition_in:
-        lines.append((f"dissolve {cell.transition_in} in", ACCENT, ""))
+        lines.append((f"dissolve {cell.transition_in} in", MUTE, ""))
+    for note in cell.notes:
+        lines += [(t, MUTE, "") for t in rs.fit(note, f, width)]
+    if cell.flash:
+        for i, item in enumerate(cell.flash):
+            text = item if i == 0 else "· " + item  # a continuation, never read as the card's own src
+            lines += [(t, DANGER, "") for t in rs.fit(text, f, width)]  # red: failure (a flash frame)
     return lines
 
 
@@ -390,7 +417,7 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
     head_h = head_height(f"page {len(pages)}/{len(pages)}" if len(pages) > 1 else "")
     size = glyph_size(lay)
     out = {"pages": [], "rasters": [], "cells": cells, "problems": [], "layout": lay, "per_page": per_page,
-           "glyphs": [],
+           "glyphs": [], "boxes": [],
            "geometry": {"cell_w": cell_w, "cell_h": cell_h, "band": band, "row_h": row_h, "head_h": head_h,
                         "glyph": size}}
     for p, page in enumerate(pages):
@@ -401,7 +428,7 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
             first_rest, last_rest = rest[0][0], rest[-1][-1]
             span = f"#{first_rest.index}" + (f"-#{last_rest.index}" if last_rest is not first_rest else "")
             joined = any(c.transition_in for pg in rest for c in pg)
-            foot = f"{span}{' and the dissolve' if joined else ''} on page {p + 2}"
+            foot = f"page {p + 2}: {span}{' and the dissolve' if joined else ''}"
         foot_lines = rs.fit(foot, label, lay.width - 2 * lay.margin) if foot else []  # wrapped, never cut
         height = (lay.margin + head_h + rows * row_h - lay.gutter + lay.margin
                   + (len(foot_lines) * label.height + lay.margin if foot else 0))
@@ -434,7 +461,7 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
             chip = f"#{cell.index}" + (f" L{cell.lane}" if cell.lane else "")
             pad = 4 * lay.scale
             r.fill(x, cy, label.measure(chip) + 2 * pad, label.height + pad, GROUND)
-            r.text(chip, label, x + pad, cy + pad // 2, ACCENT if cell.lane else INK)
+            r.text(chip, label, x + pad, cy + pad // 2, INK)  # cyan is record time only
             ly = cy + cell_h + 4
             for text, colour, right in _cell_text(cell, label, cell_w, nominal):
                 r.text(text, label, x, ly, colour)
@@ -457,16 +484,15 @@ def contact_sheet(timeline, graph, out_dir: Path, *, layout: str = "desktop", fi
                 _bowtie(r, gx, gy, size)
                 glyphs.append({"into": cell.index, "x": gx, "y": gy, "size": size, "page": p + 1,
                                "label": cell.transition_in, "beside": beside})
-            # a flash in the picture, on the cards it involves: red, because
-            # it is a failure (diagnose fails it)
+            # the picture that flashes: a red frame round it, its badge in
+            # red under the card (over the picture it hid half of it)
             if cell.flash:
-                parts = rs.fit(cell.flash, label, cell_w - 4 * pad)
-                fh_ = len(parts) * label.height + pad
-                fy = cy + cell_h - fh_ - pad
-                r.fill(x + pad, fy, max(label.measure(t) for t in parts) + 2 * pad, fh_, GROUND)
-                for i, t in enumerate(parts):
-                    r.text(t, label, x + 2 * pad, fy + pad // 2 + i * label.height,
-                           DANGER)  # red: failure (a flash frame in the picture)
+                edge = 2 * lay.scale
+                for bx, by, bw, bh in ((x, cy, cell_w, edge), (x, cy + cell_h - edge, cell_w, edge),
+                                       (x, cy, edge, cell_h), (x + cell_w - edge, cy, edge, cell_h)):
+                    r.fill(bx, by, bw, bh, DANGER)  # red: failure (a flash frame in the picture)
+            out["boxes"].append({"page": p + 1, "index": cell.index, "x": x, "y": cy, "w": cell_w,
+                                 "h": cell_h + band})
         out["glyphs"] += glyphs
         out["problems"] += [f"page {p + 1}: {x}" for x in
                             rs.legibility_problems(r, lay.delivered, cells=len(page)) + rs.collisions(r)]
@@ -483,14 +509,15 @@ CHECK_WIDTH = 1232          # 44 patches wide: 35 rows (980 px) keep it inside t
 CHECK_FRAME_W, CHECK_FRAME_H = 240, 135
 CHECK_PER_BAND = 4          # frames in one band, each in a 286 px slot
 CHECK_FRAMES = 8            # default: two bands of four
-DB_COLUMN = 56              # the dB scale's labels, right of each waveform
+DB_COLUMN = 192             # the dB scale's labels, right of each waveform ("-40 silence")
+JOIN_W, JOIN_H = 160, 90    # the join's two frames: each centred over its 240 px rec/src caption
 RULER_LABEL_PAD = 3         # a ruler label starts this far right of its tick
 JOIN_GAP = 32               # the join sits this far under the last band, under a rule
 SILENCE_DB = -40.0          # a window this quiet or quieter is silence
 SILENCE_MIN = Fraction(3, 10)  # seconds: shorter quiet is a pause, not a span to label
 FLOOR_DB = -60.0            # the waveform's bottom: quieter than this draws nothing
 AUDIO_RATE = 8000
-WAVE_H = 96                 # 60 dB over 94 px: 20 dB is 31 px, one label line
+WAVE_H = 104                # 60 dB over 102 px: 20 dB is 34 px, so 32 px labels on 0/-20/-40 clear each other
 
 
 def nice_step(duration: Fraction, width_px: int, min_px: int = 200) -> Fraction:
@@ -533,11 +560,11 @@ def _samples(source: str, start: Fraction, end: Fraction) -> Optional[list]:
     return list(a)
 
 
-def silent_spans(samples: list, start: Fraction, rate: int = AUDIO_RATE) -> list:
+def silent_spans(samples: list, start: Fraction, rate: int = AUDIO_RATE, threshold_db: float = SILENCE_DB) -> list:
     """(span start, span end) in source seconds where 50 ms windows stay at or
-    below SILENCE_DB for SILENCE_MIN or longer."""
+    below ``threshold_db`` for SILENCE_MIN or longer."""
     window = rate // 20
-    limit = 32768 * 10 ** (SILENCE_DB / 20)
+    limit = 32768 * 10 ** (threshold_db / 20)
     quiet = []
     for i in range(0, len(samples), window):
         chunk = samples[i:i + window]
@@ -631,6 +658,18 @@ def clear_x(x: int, width: int, y: int, height: int, marks: list, low: int, high
     return next((at for at in spots if free(at)), None)
 
 
+def join_records(kept: list, before_t: Fraction, after_t: Fraction) -> list:
+    """[record time of the last kept frame, record time of the first kept
+    frame], each read through the kept piece (clip) that holds it: its
+    record in plus how far into the piece the frame is. None where no piece
+    holds it (a ``cut`` given without the timeline)."""
+    out = []
+    for t in (before_t, after_t):
+        piece = next(((a, b, rec) for a, b, rec in kept if a <= t < b), None)
+        out.append(piece[2] + (t - piece[0]) if piece else None)
+    return out
+
+
 def kept_sides(gap: tuple, spans: list, nominal: int) -> Optional[str]:
     """How the removed span sits inside the silence it came from, read from
     the edit and the measured audio: "silence 36f, 1f kept each side"."""
@@ -650,8 +689,28 @@ def kept_sides(gap: tuple, spans: list, nominal: int) -> Optional[str]:
     return None
 
 
+def ink_centre(f: rs.Face, text: str) -> float:
+    """Where a run's ink is centred, in pixels below the top of its cell: the
+    middle of its first and last inked rows. A label is centred on a tick by
+    putting this on the tick, not the cell's top."""
+    rows = [r for ch in text for r, bits in enumerate(f.rows(ch)) if bits]
+    if not rows:
+        return f.height / 2
+    return (min(rows) + max(rows) + 1) * f.scale / 2 - 0.5
+
+
+def scale_ticks(threshold_db: float) -> list:
+    """(dB, label) for the level scale: 0 and -20 dB, and the silence
+    detector's own threshold labelled as what it is ("-40 silence"); a
+    round tick within 12 dB of the threshold gives way to it."""
+    ticks = [(v, f"{v:g} dB" if v == 0 else f"{v:g}") for v in (0.0, -20.0, -40.0) if abs(v - threshold_db) >= 12]
+    ticks.append((threshold_db, f"{threshold_db:g} silence"))
+    return sorted(ticks, key=lambda t: -t[0])
+
+
 def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, cut: Optional[Fraction] = None,
-                 frames: int = CHECK_FRAMES, fps=None, kept: Optional[list] = None) -> dict:
+                 frames: int = CHECK_FRAMES, fps=None, kept: Optional[list] = None,
+                 threshold_db: float = SILENCE_DB) -> dict:
     """Compose the check: two bands, each = its frames, its own ruler and
     its own waveform on that band's time axis, then (when there is a cut)
     the join as played, off the band grid under a rule and a heading.
@@ -679,7 +738,7 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
     if at_cut is None and cut is not None:
         at_cut = {"out": cut, "in": cut, "rec": None, "rec_out": None}
     samples = _samples(source, start, end)
-    spans = silent_spans(samples, start) if samples else []
+    spans = silent_spans(samples, start, threshold_db=threshold_db) if samples else []
 
     name = Path(source).name
     head_lines = wrap_items([name, f"src {timecode(start, fps)}-{timecode(end, fps)}",
@@ -689,7 +748,7 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
     label_gap = 4
     band_h = fh + label_gap + f.height + 8 + 8 + f.height + 4 + WAVE_H + 12
     join_top = band_top + 2 * band_h - 12 + JOIN_GAP
-    join_h = (1 + 8 + f.height + 4 + max(fh + 4 + f.height, 4 * f.height)) if at_cut else 0
+    join_h = (1 + 8 + f.height + 4 + max(JOIN_H + 4 + 2 * f.height, 4 * f.height)) if at_cut else 0
     height = (join_top + join_h if at_cut else band_top + 2 * band_h - 12) + margin
     r = rs.Raster.filled(CHECK_WIDTH, height, GROUND)
     for i, line in enumerate(head_lines):
@@ -750,7 +809,9 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
         for n, (t, x) in enumerate(ticks):
             r.fill(x, y_ruler + 1, 1, 8, ACCENT)
             marks.append((x, y_ruler + 1, 1, 8, "tick"))
-            if n % step == 0 and x + RULER_LABEL_PAD + f.measure(timecode(t, fps)) <= CHECK_WIDTH - margin:
+            # a label stays on its band's axis: one that would run past the
+            # band's end (into the level scale) is not drawn
+            if n % step == 0 and x + RULER_LABEL_PAD + f.measure(timecode(t, fps)) <= x1:
                 r.text(timecode(t, fps), f, x + RULER_LABEL_PAD, y_ruler + 10, MUTE)
         # the waveform, rectified as Final Cut draws it: RMS in the accent over
         # the peak in grey, up from a baseline, in dB from -60 to 0; 0 and
@@ -773,18 +834,19 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
                     r.fill(x0 + col, base - hp, 1, hp, MUTE)
                 if hr:
                     r.fill(x0 + col, base - hr, 1, hr, ACCENT)
-            ht = db_height(SILENCE_DB, level)
+            ht = db_height(threshold_db, level)  # the line IS the detector's threshold
             for xx in range(x0, x1, 8):
                 r.fill(xx, base - ht, 4, 1, INK)
         r.fill(x0, base, x1 - x0, 1, LINE_STRONG)
         marks.append((x0, base, x1 - x0, 1, "baseline"))
-        scale, below = [], y_wave - f.height
-        for value in (0, -20, -40):
+        scale = []
+        for value, text in scale_ticks(threshold_db):
             y = base - db_height(value, level)
             r.fill(x1 - 6, y, 6 + 6, 1, INK)  # a tick at the band's edge, into the scale column
-            ly = max(y, below)  # each label hangs from its tick, never on the one above
-            r.text(str(value), f, x1 + 10, ly, MUTE)
-            below = ly + f.height
+            # the label's ink centred on its tick (a cell hung from the tick
+            # read half a division low: the -40 line read as -30)
+            ly = y - int(round(ink_centre(f, text)))
+            r.text(text, f, x1 + 10, ly, MUTE)
             scale.append((value, y))
         # the cut's two sides on the band each falls in: the out-point
         # (where the played picture leaves the file) and the in-point (where
@@ -808,11 +870,15 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
         last_right = x0 - 12
         for a, c in spans:
             lo, hi = max(a, b0), min(c, b1)
-            if hi <= lo or a < b0:
+            if hi <= lo:
                 continue
             frames_long = int(c * nominal + Fraction(1, 2)) - int(a * nominal + Fraction(1, 2))
-            for text in (f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
-                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a)):
+            if a >= b0:  # named once, in the band it starts in
+                texts = (f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
+                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a))
+            else:  # carried over from the band before: where it ends
+                texts = (f"silence to {timecode(c, fps)}", f"to {timecode(c, fps)}")
+            for text in texts:
                 want = min(max(x0, to_x(lo) + 4), x1 - f.measure(text))
                 tx = clear_x(want, f.measure(text), y_wave + 2, f.height, marks, max(x0, last_right + 12), x1)
                 if tx is not None:
@@ -830,21 +896,38 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
         y = join_top
         r.fill(margin, y, CHECK_WIDTH - 2 * margin, 1, LINE_STRONG)
         y += 1 + 8
-        heading = ("the join, as played: cut at rec " + timecode(at_cut["rec"], fps)) if at_cut["rec"] is not None \
-            else ("the cut at src " + timecode(at_cut["out"], fps))
-        r.text(heading, f, margin, y, ACCENT)
+        # cyan is record time only: the words are white, "rec <tc>" cyan
+        if at_cut["rec"] is not None:
+            lead, rec_tc = "the join, as played: cut at ", "rec " + timecode(at_cut["rec"], fps)
+            r.text(lead, f, margin, y, INK)
+            r.text(rec_tc, f, margin + f.measure(lead), y, ACCENT)
+            heading = lead + rec_tc
+        else:
+            heading = "the cut at src " + timecode(at_cut["out"], fps)
+            r.text(heading, f, margin, y, INK)
         y += f.height + 4
         before_t, after_t = at_cut["out"] - one, at_cut["in"]
+        recs = join_records(kept or [], before_t, after_t)
+        cap_w = f.measure("rec 00:00:00:00")
         for j, t in enumerate((before_t, after_t)):
-            px = margin + j * (fw + 8)
-            pic = exact_frame(source, t, fps, fw, fh)
+            px = margin + j * (cap_w + JOIN_GAP)
+            fx = px + (cap_w - JOIN_W) // 2
+            pic = exact_frame(source, t, fps, JOIN_W, JOIN_H)
             if pic is not None:
-                r.paste(pic, px, y)
+                r.paste(pic, fx, y)
             else:
-                r.fill(px, y, fw, fh, PANEL)
-            tc = timecode(t, fps)
-            r.text(tc, f, px + (fw - f.measure(tc)) // 2, y + fh + 4, ACCENT if j == 1 else MUTE)
-        tx = margin + 2 * (fw + 8) + 16
+                r.fill(fx, y, JOIN_W, JOIN_H, PANEL)
+            # each frame says where it plays (rec, read through its clip)
+            # and what it is in the file (src)
+            cy = y + JOIN_H + 4
+            fw_ = cap_w
+            if recs[j] is not None:
+                rec_line = "rec " + timecode(recs[j], fps)
+                r.text(rec_line, f, px + (fw_ - f.measure(rec_line)) // 2, cy, ACCENT)
+                cy += f.height
+            src_line = "src " + timecode(t, fps)
+            r.text(src_line, f, px + (fw_ - f.measure(src_line)) // 2, cy, MUTE)
+        tx = margin + 2 * (cap_w + JOIN_GAP)
         lines = [(f"last kept  src {timecode(before_t, fps)}", INK), (f"first kept src {timecode(after_t, fps)}", INK)]
         gap = at_cut["in"] - at_cut["out"]
         if gap > 0:
@@ -860,10 +943,11 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
                 r.text(line, f, tx, ly, colour)
                 ly += f.height
         pair = {"y": y, "rule": join_top, "heading": heading, "before": before_t, "after": after_t,
+                "records": recs, "frame_w": JOIN_W, "frame_h": JOIN_H, "caption_w": cap_w,
                 "lines": [heading] + [t for t, _ in lines]}
     problems = rs.legibility_problems(r) + rs.collisions(r) + mark_problems(r.runs, marks)
     path = r.save(out_path)
-    return {"path": path, "raster": r, "bands": bands, "frames": frames_out, "spans": spans,
+    return {"path": path, "raster": r, "bands": bands, "frames": frames_out, "spans": spans, "threshold_db": threshold_db,
             "removed": removed, "cut": at_cut, "pair": pair, "joins": joins, "problems": problems,
             "audio": samples is not None, "marks": marks,
             "geometry": {"x0": x0, "x1": x1, "span": span, "face": f}}
@@ -925,7 +1009,7 @@ def scene_strip(rows: list, out_dir: Path, fps=24, *, scenes: Optional[list] = N
                     r.fill(x, y, fw, fh, PANEL)
                 tc = timecode(t, fps)
                 r.fill(x, y + fh - f.height - 4, f.measure(tc) + 12, f.height + 4, GROUND)
-                r.text(tc, f, x + 6, y + fh - f.height - 2, ACCENT if j == 1 else WHITE)
+                r.text(tc, f, x + 6, y + fh - f.height - 2, WHITE)  # a source time: cyan is record time only
             r.fill(margin + fw + gap // 2 - 1, y, 2, fh, ACCENT)
             lines = [(f"cut #{n}", INK), (f"rec {timecode(tl, fps)}", ACCENT)]
             if not same:
@@ -956,8 +1040,14 @@ def scene_strip(rows: list, out_dir: Path, fps=24, *, scenes: Optional[list] = N
 
 # ---- burn-in -----------------------------------------------------------------------------
 
-BURN_MARGIN = 16
 BURN_PAD = 8
+SAFE = Fraction(5, 100)  # action safe: a chip stays this far in from the left and bottom edges
+
+
+def action_safe(width: int, height: int) -> tuple:
+    """(x, bottom margin) of 5% action safe: (64, 36) at 1280x720, (32, 18)
+    at 640x360. A player's control bar covers the edge, not this."""
+    return int(round(width * SAFE)), int(round(height * SAFE))
 
 
 def burn_face(height: int) -> rs.Face:
@@ -967,20 +1057,23 @@ def burn_face(height: int) -> rs.Face:
     return rs.face(32, max(1, round(height / 720)))
 
 
-def _chip(lines: list, f: rs.Face, width: Optional[int] = None) -> rs.Raster:
+def _chip(lines: list, f: rs.Face, width: Optional[int] = None, rows: int = 0) -> rs.Raster:
     """One burn-in chip: opaque true black, each line a list of (text,
     colour) pieces drawn left to right. Transparent outside the box when a
-    fixed ``width`` is wider than the text."""
+    fixed ``width`` or ``rows`` is larger than the text: the box sits at the
+    bottom left of the strip, so a two-line frame and a three-line frame
+    share one strip and one baseline."""
     used = max(sum(f.measure(t) for t, _ in line) for line in lines) + 2 * BURN_PAD
     w = max(width or 0, used)
-    h = len(lines) * f.height + BURN_PAD
+    h = max(rows, len(lines)) * f.height + BURN_PAD
+    box = len(lines) * f.height + BURN_PAD
     r = rs.Raster.filled(w, h, (0, 0, 0), alpha=0)
-    r.fill(0, 0, used, h, GROUND, 255)
+    r.fill(0, h - box, used, box, GROUND, 255)
     for i, line in enumerate(lines):
         x = BURN_PAD
         for text, colour in line:
             if text:
-                r.text(text, f, x, BURN_PAD // 2 + i * f.height, colour, alpha=255)
+                r.text(text, f, x, h - box + BURN_PAD // 2 + i * f.height, colour, alpha=255)
             x += f.measure(text)
     return r
 
@@ -991,7 +1084,8 @@ def burn_chip(picture: rs.Raster, lines: list) -> rs.Raster:
     the 12x24 face (15 px capitals), so the chip stays a label, not a band."""
     f = burn_face(picture.height) if picture.height >= 540 else rs.face(24)
     chip = _chip(lines, f)
-    x, y = BURN_MARGIN, picture.height - BURN_MARGIN - chip.height
+    x, bottom = action_safe(picture.width, picture.height)
+    y = picture.height - bottom - chip.height
     for yy in range(chip.height):
         for xx in range(chip.width):
             i = (yy * chip.width + xx) * 4
@@ -1007,8 +1101,8 @@ def frame_lines(source: str, at: Fraction, fps) -> list:
     """The frame burn-in: "SRC Squat.mov 00:00:07:06 · f174"."""
     nominal = nominal_fps(fps)
     frame = int(Fraction(at) * rational_fps(fps) + Fraction(1, 2))
-    return [[("SRC ", MUTE), (Path(source).name + " ", WHITE), (frames_timecode(frame, nominal), ACCENT),
-             (f" · f{frame}", MUTE)]]
+    return [[("SRC ", MUTE), (Path(source).name + " ", WHITE), (frames_timecode(frame, nominal), WHITE),
+             (f" · f{frame}", MUTE)]]  # a source time: white; cyan is record time only
 
 
 def fit_for_model(picture: Optional[rs.Raster]) -> Optional[rs.Raster]:
@@ -1027,19 +1121,38 @@ def fit_for_model(picture: Optional[rs.Raster]) -> Optional[rs.Raster]:
 
 
 def burn_text(graph, k: int, fps, height: int = 720) -> tuple:
-    """The two lines burned on output frame ``k``: ("REC <tc>  <what is on
-    screen, top first> over <the clip it hides>", "SRC <file> <source tc>"),
-    the top layer's source: "REC 00:00:18:00  Bench (L1) over Squat"."""
+    """The lines burned on output frame ``k``: "REC <tc> · f<k>  <what is on
+    screen, top first>", "SRC <file> <source tc>" of the top layer, and,
+    when it covers a clip, "over <that clip's file> <its source tc>", each
+    read through its own clip: ("REC 00:00:18:00 · f432  Bench (L1)",
+    "SRC Bench.mov 00:00:00:21", "over Squat.mov 00:00:15:20")."""
     nominal = nominal_fps(fps)
     layers = layers_at(graph, k, height)
     stack = stack_at(graph, k)
     hidden = stack[len(layers)] if len(stack) > len(layers) else None
-    rec = f"REC {frames_timecode(k, nominal)}  {picture_name(layers)}" + (f" over {lane_name(hidden)}" if hidden else "")
+    rec = f"REC {frames_timecode(k, nominal)} · f{k}  {picture_name(layers)}"
     if not layers:
-        return rec, "SRC none (black)"
+        return rec, "SRC none (black)", ""
     top = layers[0]
-    into = Fraction(k, fg.FPS) - top.tl_in
-    return rec, f"SRC {source_name(top)} {source_tc(top, max(Fraction(0), into), fps)}"
+    src = f"SRC {source_name(top)} {source_tc(top, max(Fraction(0), Fraction(k, fg.FPS) - top.tl_in), fps)}"
+    over = ""
+    if hidden is not None:
+        over = f"over {source_name(hidden)} {source_tc(hidden, max(Fraction(0), Fraction(k, fg.FPS) - hidden.tl_in), fps)}"
+    return rec, src, over
+
+
+def burn_lines(texts: tuple) -> list:
+    """The chip's lines as (text, colour) pieces: the record timecode cyan
+    (cyan is record time only), everything else white or grey."""
+    rec, src, over = texts
+    head, _, what = rec.partition("  ")
+    label, tc_frame = head[:4], head[4:]
+    tc, _, frame = tc_frame.partition(" · ")
+    # white on opaque black survives H.264 where grey thins out ("f18" read "f13")
+    lines = [[(label, WHITE), (tc, ACCENT), (f" · {frame}  {what}", WHITE)], [(src, WHITE)]]
+    if over:
+        lines.append([(over, WHITE)])
+    return lines
 
 
 def burn_frames(graph, height: int, fps):
@@ -1047,11 +1160,16 @@ def burn_frames(graph, height: int, fps):
     what is on screen at that frame and the top layer's source timecode."""
     f = burn_face(height)
     texts = [burn_text(graph, k, fps, height) for k in range(graph.total_frames)]
-    width = max([max(f.measure(a), f.measure(b)) for a, b in texts] or [0]) + 2 * BURN_PAD
-    for k, (rec, src) in enumerate(texts):
-        head, _, what = rec.partition("  ")
-        lines = [[(head + "  ", WHITE), (what, ACCENT)], [(src, WHITE)]]
-        yield k, _chip(lines, f, width)
+    width = max([max(f.measure(t) for t in three) for three in texts] or [0]) + 2 * BURN_PAD
+    rows = burn_rows(graph)
+    for k, three in enumerate(texts):
+        yield k, _chip(burn_lines(three), f, width, rows)
+
+
+def burn_rows(graph) -> int:
+    """Lines in the burn-in strip: three when a lane can cover a clip (the
+    "over" line), else two."""
+    return 3 if graph.lanes else 2
 
 
 def burn_in(graph, clean_path: str, out_path: str, height: int, fps) -> Optional[str]:
@@ -1062,6 +1180,7 @@ def burn_in(graph, clean_path: str, out_path: str, height: int, fps) -> Optional
     if shutil.which("ffmpeg") is None:
         return "ffmpeg is not on PATH"
     canvas_w, canvas_h = fg.canvas_size(graph, height)
+    safe_x, safe_bottom = action_safe(canvas_w, canvas_h)
     frames = list(burn_frames(graph, canvas_h, fps))
     if not frames:
         return "the timeline is empty"
@@ -1069,7 +1188,7 @@ def burn_in(graph, clean_path: str, out_path: str, height: int, fps) -> Optional
     args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
             "-i", str(clean_path), "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{strip_w}x{strip_h}",
             "-framerate", str(fg.FPS), "-i", "pipe:0",
-            "-filter_complex", f"[0:v][1:v]overlay={BURN_MARGIN}:{canvas_h - BURN_MARGIN - strip_h}:format=auto[v]",
+            "-filter_complex", f"[0:v][1:v]overlay={safe_x}:{canvas_h - safe_bottom - strip_h}:format=auto[v]",
             "-map", "[v]", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
             "-c:a", "copy", "-frames:v", str(len(frames)), str(out_path)]
@@ -1089,19 +1208,20 @@ def burn_in(graph, clean_path: str, out_path: str, height: int, fps) -> Optional
 
 
 def burned_strips(path: str, width: int, height: int, lines: int = 2) -> list:
-    """Every frame's burn-in region (bottom left, the width of the picture
-    less its margins, ``lines`` text lines tall) read back from a burned
-    proxy in ONE decode: the instrument for the burn-in gate, which checks
-    every frame, not a sample."""
+    """Every frame's burn-in region (inside action safe, bottom left, the
+    width of the picture less its margins, ``lines`` text lines tall) read
+    back from a burned proxy in ONE decode: the instrument for the burn-in
+    gate, which checks every frame, not a sample."""
     f = burn_face(height)
+    safe_x, safe_bottom = action_safe(width, height)
     h = lines * f.height + BURN_PAD
-    w = width - 2 * BURN_MARGIN
-    y = height - BURN_MARGIN - h
+    w = width - 2 * safe_x
+    y = height - safe_bottom - h
     if shutil.which("ffmpeg") is None:
         return []
     try:
         out = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
-                              "-vf", f"crop={w}:{h}:{BURN_MARGIN}:{y}", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                              "-vf", f"crop={w}:{h}:{safe_x}:{y}", "-f", "rawvideo", "-pix_fmt", "rgb24",
                               "pipe:1"], capture_output=True, timeout=600).stdout
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -1110,14 +1230,22 @@ def burned_strips(path: str, width: int, height: int, lines: int = 2) -> list:
 
 
 def read_burn(strip: rs.Raster, height: int, line: int, chars: int, alphabet: str = rs.READABLE) -> str:
-    """Read ``chars`` characters of line ``line`` (0 or 1) off a burn-in strip."""
+    """Read ``chars`` characters of line ``line`` (from the strip's top) off a burn-in strip."""
     f = burn_face(height)
     return rs.read_text(strip, f, BURN_PAD, BURN_PAD // 2 + line * f.height, chars, alphabet=alphabet)
 
 
 # ---- the text timeline ---------------------------------------------------------------
 
-def text_timeline(timeline, graph, width: int = 64) -> str:
+def track_kind(segment) -> str:
+    """"AV" for a clip with picture and sound, "V" picture only, "A" sound only."""
+    return ("A" if not segment.has_video else "AV" if segment.has_audio else "V")
+
+
+LEGEND = "^ marker, [=] clip, X dissolve (D in the list), ! flash"
+
+
+def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
     """The inline timeline a Claude Code user reads: a time row and a ruler
     (its last tick labelled), a marker row, the lanes above the spine, the
     spine (a transition is an X on its cut), the lanes below it, each clip a
@@ -1132,7 +1260,7 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
     name = str(getattr(timeline, "name", "timeline") or "timeline")
     rate = f"{float(rational_fps(fps)):.3f}".rstrip("0").rstrip(".")
     head = (f"{name} — {frames_timecode(graph.total_frames, nominal)} · {length_label(graph.total_frames)} · "
-            f"{rate} fps · {counts_label(timeline)}")
+            f"{rate} fps · {counts_label(timeline)}" + (f" · sha256 {short_hash(filepath)}" if filepath else ""))
     if total <= 0:
         return head + "\n(empty timeline)"
     gutter = 10
@@ -1178,6 +1306,7 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
             labels[c:c + len(text)] = list(text)
     lines.append(f"{'time':<{gutter}}" + "".join(labels).rstrip())
     lines.append(f"{'':<{gutter}}" + "".join(ruler).rstrip())
+    lines.append(f"{'legend':<{gutter}}" + LEGEND)
 
     # markers on the timeline and on its clips, at their record time
     origin = Fraction(str(getattr(timeline, "origin_seconds", 0) or 0)).limit_denominator(100000)
@@ -1231,10 +1360,11 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
     for i, (fa, fb, layers) in enumerate(runs):
         if fb - fa < 6 and layers and 0 < i < len(runs) - 1:
             flashes.append((fa, fb, layers, runs[i - 1][2], runs[i + 1][2]))
-    name_w = max([len(s.label) for s in order] + [len("dissolve"), 4] + [len(m.name) for _t, m in markers])
-    file_w = max([len(source_name(s)) for s in order] + [6] +
-                 [len(f"{spine[t.boundary].label}>{spine[t.boundary + 1].label}") for t in graph.transitions
-                  if t.boundary + 1 < len(spine)])
+    def tr_name(tr) -> str:
+        return tr.name or ("Cross Dissolve" if tr.kind == "fade" else tr.kind)
+
+    name_w = max([len(s.label) for s in order] + [4] + [len(tr_name(t)) for t in graph.transitions])
+    file_w = max([len(source_name(s)) for s in order] + [6])
 
     def tcs(frames):
         return frames_timecode(frames, nominal)
@@ -1243,7 +1373,7 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
         return frames_timecode(int(Fraction(seconds) * nominal + Fraction(1, 2)), nominal)
 
     def cols(num, track, rin, rout, length, tr, clip, source, sin, sout, note=""):
-        return (f"{num:<4}{track:<7}{rin:<13}{rout:<13}{length:<8}{tr:<7}{clip:<{name_w + 2}}"
+        return (f"{num:<4}{track:<8}{rin:<13}{rout:<13}{length:<8}{tr:<7}{clip:<{name_w + 2}}"
                 f"{source:<{file_w + 2}}{sin:<13}{sout:<13}{note}")
 
     lines.append(cols("#", "track", "rec in", "rec out", "length", "tr", "clip", "source", "src in", "src out", "note"))
@@ -1251,29 +1381,33 @@ def text_timeline(timeline, graph, width: int = 64) -> str:
     for n, s in enumerate(order, 1):
         fa, fb = frame_of(s.tl_in), frame_of(s.tl_out)
         tr = into.get(id(s))
-        events.append((fa, 3, cols(str(n), "V" if s.lane == 0 else f"L{s.lane}", tcs(fa), tcs(fb), length_label(fb - fa),
+        track = track_kind(s) if s.lane == 0 else f"L{s.lane} {track_kind(s)}"
+        events.append((fa, 3, cols(str(n), track, tcs(fa), tcs(fb), length_label(fb - fa),
                                    f"D {length_label(tr.end - tr.start)}" if tr else "", s.label, source_name(s),
                                    src_tc(s.src_in), src_tc(s.src_out), "MEDIA MISSING" if s.missing else "")))
     for t, m in markers:
         kind = getattr(getattr(m, "marker_type", None), "value", "") or "marker"
-        events.append((frame_of(t), 0, cols("^", "marker", tcs(frame_of(t)), "", "", "", m.name, f"({kind})", "", "")))
+        # a marker has no clip or source: its name and kind are its note
+        events.append((frame_of(t), 0, cols("^", "marker", tcs(frame_of(t)), "", "", "", "", "", "", "",
+                                            f"{m.name} ({kind})")))
     for tr in graph.transitions:
         if tr.boundary + 1 >= len(spine):
             continue
         out_seg, in_seg = spine[tr.boundary], spine[tr.boundary + 1]
         cut = frame_of(in_seg.tl_in)
-        where = ("centred on the cut " if tr.start + tr.end == 2 * cut
+        where = ("centred on " if tr.start + tr.end == 2 * cut
                  else f"starts {cut - tr.start}f before the cut ") + tcs(cut)
-        events.append((tr.start, 2, cols("D", "V", tcs(tr.start), tcs(tr.end), length_label(tr.end - tr.start), "",
-                                         "dissolve" if tr.kind == "fade" else (tr.name or tr.kind),
-                                         f"{out_seg.label}>{in_seg.label}", "", "", where)))
+        kind = "AV" if out_seg.has_audio and in_seg.has_audio else "V"
+        events.append((tr.start, 2, cols("D", kind, tcs(tr.start), tcs(tr.end), length_label(tr.end - tr.start), "",
+                                         tr_name(tr), "", "", "", f"{out_seg.label} > {in_seg.label}, {where}")))
     for fa, fb, layers, before, after in flashes:
         top = layers[0]
-        events.append((fa, 1, cols("!", "flash", tcs(fa), tcs(fb), length_label(fb - fa), "", top.label,
+        events.append((fa, 1, cols("!", track_kind(top) if top.lane == 0 else f"L{top.lane} {track_kind(top)}",
+                                   tcs(fa), tcs(fb), length_label(fb - fa), "", top.label,
                                    source_name(top),
                                    src_tc(top.src_in + Fraction(fa, fg.FPS) - top.tl_in),
                                    src_tc(top.src_in + Fraction(fb, fg.FPS) - top.tl_in),
-                                   f"between {picture_name(before)} and {picture_name(after)}")))
+                                   f"flash between {picture_name(before)} and {picture_name(after)}")))
     for _a, _o, text in sorted(events, key=lambda e: (e[0], e[1])):
         lines.append(text.rstrip())
     return "\n".join(lines)

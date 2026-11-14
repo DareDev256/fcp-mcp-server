@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fcpxml import filtergraph, journal, proofs, render
 from fcpxml import raster as rs
+from fcpxml.words import plural
 from tools._common import parse_project, text_result
 
 CMUX_PREVIEW = Path.home() / ".claude" / "hooks" / "cmux-image-preview.mjs"
@@ -197,7 +198,7 @@ async def handle_preview_sheet(args: dict):
     _open_beside_terminal(sheet["pages"])
     cells = sheet["cells"]
     fps = getattr(timeline, "frame_rate", 24) or 24
-    lines = [f"Contact sheet ({layout}): {proofs.counts_label(timeline)} on {len(sheet['pages'])} page(s), "
+    lines = [f"Contact sheet ({layout}): {proofs.counts_label(timeline)} on {plural(len(sheet['pages']), 'page')}, "
              f"{sheet['per_page']} cells a page."]
     lines += [f"Page {i + 1}: {p}" for i, p in enumerate(sheet["pages"])]
     nominal = proofs.nominal_fps(fps)
@@ -295,7 +296,7 @@ async def handle_preview_check(args: dict):
     if not result["audio"]:
         lines.append("No audio in this source: no waveform.")
     elif result["spans"]:
-        lines.append("Silence (at or under " f"{proofs.SILENCE_DB:.0f} dBFS, {float(proofs.SILENCE_MIN):.1f}s or longer): "
+        lines.append("Silence (at or under " f"{result['threshold_db']:g} dBFS, {float(proofs.SILENCE_MIN):.1f}s or longer): "
                      + ", ".join(span(a, b) for a, b in result["spans"]))
     if result.get("removed"):
         lines.append("Removed by the edit: " + ", ".join(span(a, b) for a, b in result["removed"]))
@@ -312,7 +313,7 @@ async def handle_preview_timeline(args: dict):
     if timeline is None:
         return text_result(message)
     graph = filtergraph.compile_timeline(timeline)
-    return text_result(proofs.text_timeline(timeline, graph, TIMELINE_WIDTH))
+    return text_result(proofs.text_timeline(timeline, graph, TIMELINE_WIDTH, filepath=args.get("filepath") or ""))
 
 
 ACTIONS = {

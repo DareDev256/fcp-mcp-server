@@ -20,6 +20,7 @@ from fcpxml.animation_curves import (
     MAX_SAMPLED_FRAMES,
 )
 from fcpxml.keyframes import KEYFRAME_CURVE_OPTIONS, KeyframeEditor
+from fcpxml.words import noun
 from tools import _common
 
 MAX_OPERATIONS = 100
@@ -205,7 +206,7 @@ def _check_fields(arguments: dict, schema: dict) -> None:
         raise ValueError("Arguments must be an object")
     unknown = set(arguments) - set(schema["properties"])
     if unknown:
-        raise ValueError(f"Unknown argument(s): {', '.join(sorted(unknown))}")
+        raise ValueError(f"Unknown {noun(len(unknown), 'argument')}: {', '.join(sorted(unknown))}")
     for key in schema["required"]:
         if key not in arguments:
             raise KeyError(key)

@@ -56,6 +56,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from fcpxml.words import noun
+
 _OSASCRIPT_TIMEOUT_SECONDS = 120  # FCP cold-launch + import can be slow
 _FCP_BUNDLE_ID = "com.apple.FinalCut"
 
@@ -421,7 +423,7 @@ def push_to_fcp(
     if preexisting:
         result["verified"] = None
         result["verification_note"] = (
-            "project name(s) "
+            f"project {noun(len(preexisting), 'name')} "
             + ", ".join(repr(n) for n in preexisting)
             + f" already existed in {target} before this push, so their "
             "presence afterwards proves nothing; import was not verified"

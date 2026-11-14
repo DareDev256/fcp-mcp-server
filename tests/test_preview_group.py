@@ -135,8 +135,9 @@ def test_preview_timeline_draws_the_sample_project():
     assert "9 clips + 0 connected" in rows[0]
     assert rows[1].startswith("time") and "0.0s" in rows[1]
     assert set(rows[2].strip()) == {"|", " "} or set(rows[2].strip()) == {"|"}
-    assert rows[3].startswith("markers") and "^" in rows[3]
-    assert rows[4].startswith("spine") and "[" in rows[4]
+    assert rows[3].startswith("legend") and "^ marker" in rows[3]
+    assert rows[4].startswith("markers") and "^" in rows[4]
+    assert rows[5].startswith("spine") and "[" in rows[5]
     events = [r for r in rows if r[:1].isdigit()]
     assert len(events) == 9 and [r.split()[2] for r in events] == sorted(r.split()[2] for r in events)
     assert any(r.split()[:4] == ["^", "marker", "00:00:00:00", "Intro"] for r in rows if r.startswith("^"))
