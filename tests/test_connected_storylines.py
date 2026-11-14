@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from fcpxml.export import DaVinciExporter
 from fcpxml.filtergraph import compile_timeline, lane_tracks
 from fcpxml.parser import FCPXMLParser
 from fcpxml.rational import parse_seconds
@@ -245,6 +246,56 @@ def test_a_snap_moves_a_storyline_as_one(project, tmp_path):
     root = ET.parse(out).getroot()
     lane1 = next(s for s in root.iter("spine") if s.get("lane") == "1")
     assert [c.get("offset") for c in lane1] == ["0s", "3/2s", "2s", "4s", "5s"]
+
+
+def test_the_text_timeline_lists_a_storylines_transitions(project):
+    """A D row on the storyline's lane, in the spine's columns: the span,
+    the length, what it joins and where it sits on its cut."""
+    text = _call("preview", "preview_timeline", filepath=str(project))
+    rows = [r for r in text.splitlines() if r.startswith("D ")]
+    assert len(rows) == 2, text
+    between, leading = rows
+    assert between.split()[1:6] == ["L1", "V", "00:00:03:12", "00:00:04:12", "24f"], between
+    assert between.rstrip().endswith("ONE > TWO, centred on 00:00:04:00"), between
+    assert leading.split()[1:6] == ["L2", "V", "00:00:11:00", "00:00:11:12", "12f"], leading
+    assert leading.rstrip().endswith("into FOUR, starts on the cut 00:00:11:00"), leading
+
+
+def test_the_view_payload_carries_a_storylines_transitions(project):
+    payload = extract_payload(_call("view", "view_timeline", filepath=str(project), thumbnails=False))
+    assert [(t["lane"], Fraction(t["start"]), Fraction(t["duration"]), Fraction(t["lead"]))
+            for t in payload["transitions"]] == [
+        (1, Fraction(4), Fraction(1), Fraction(1, 2)),
+        (2, Fraction(11), Fraction(1, 2), Fraction(0)),
+    ]
+
+
+def test_the_xmeml_export_places_connected_clips_where_they_play(project, tmp_path):
+    """BASE starts at 10s on its own clock (offset 0, start 10s), and the
+    second storyline hangs off a gap whose clock starts at 3600s: the raw
+    offset, which the export used until 0.33, is on the parent's clock."""
+    out = tmp_path / "storylines.xml"
+    DaVinciExporter(str(project)).export_xmeml(str(out))
+    root = ET.parse(out).getroot()
+    video = root.find(".//media/video")
+    starts = {}
+    for track_number, track in enumerate(video.findall("track")):
+        for item in track.findall("clipitem"):
+            starts[item.findtext("name")] = (track_number, int(item.findtext("start")))
+    truth = _truth(project)
+    assert {name: starts[name] for name in truth} == {name: (lane, first) for name, (lane, first, _n) in truth.items()}
+    assert starts["BASE"] == (0, 0)
+
+
+def test_the_resolve_export_keeps_every_connected_clip_where_it_plays(project, tmp_path):
+    """The Resolve FCPXML is the document itself at 1.9: no placement is
+    computed, so the storylines and their clocks must come through whole."""
+    out = tmp_path / "resolve.fcpxml"
+    DaVinciExporter(str(project)).export_simplified_fcpxml(str(out))
+    assert ET.parse(out).getroot().get("version") == "1.9"
+    assert _truth(out) == _truth(project)
+    tl = _timeline(out)
+    assert {c.name: (c.lane, c.timeline_start.frames, c.duration.frames) for c in tl.connected_clips} == _truth(project)
 
 
 OLD_SHAPE = """<?xml version="1.0" encoding="UTF-8"?>

@@ -440,6 +440,7 @@ class FCPXMLParser:
             transform=transform,
             effects=effects,
             volume_db=self._volume_of(elem),
+            enabled=elem.get('enabled', '1') != '0',
         )
 
         clip.markers.extend(self._collect_markers(elem, offset, source_start.frames))
@@ -757,6 +758,7 @@ class FCPXMLParser:
             timeline_start=timeline_start, text=text,
             media=self._media_ref_for(elem), conform=conform,
             transform=transform, effects=effects, volume_db=self._volume_of(elem),
+            enabled=elem.get('enabled', '1') != '0',
         )
 
         connected.markers.extend(

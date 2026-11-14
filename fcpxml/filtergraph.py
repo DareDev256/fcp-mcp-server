@@ -18,6 +18,10 @@ below exists to keep that true:
   local time and is only the fallback for a hand-built model.
 * Gaps, and anything on the spine with no picture, render as black for
   their full duration instead of collapsing.
+* A disabled clip (``enabled="0"``) is in neither the picture nor the
+  sound, as Final Cut plays it: on the spine it keeps its time as black and
+  silence; on a lane it is not drawn. Its Segment stays in the graph,
+  marked, so the text timeline and the view can still show it is there.
 * Transitions are drawn the way Final Cut draws them: on the media OUTSIDE
   both clips' used ranges, with no change to the timeline's length. The
   outgoing stream runs on past its out-point into its tail handle, the
@@ -45,6 +49,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from fcpxml.media_intel import media_src_to_path
+from fcpxml.models import timeline_position
 from fcpxml.words import plural
 
 # The proxy's frame rate. Fixed: the proxy exists to be cheap to make and
@@ -100,6 +105,7 @@ class Segment:
     has_video: bool = True
     has_audio: bool = False
     volume_db: Optional[float] = None
+    enabled: bool = True  # enabled="0": not seen, not heard, still listed
 
     @property
     def duration(self) -> Fraction:
@@ -236,14 +242,7 @@ def _segment_from(item: Any, lane: int, probes: Optional[Mapping[str, SourceInfo
     duration = _seconds(item.duration)
     src_in = _seconds(getattr(item, "source_start", None))
     source, missing = _resolve(getattr(item, "media_path", "") or "")
-    resolved = getattr(item, "timeline_start", None)
-    offset = getattr(item, "offset", None)
-    if resolved is not None:
-        tl_in = _seconds(resolved)
-    elif offset is not None:
-        tl_in = _seconds(offset)
-    else:
-        tl_in = _seconds(item.start)
+    tl_in = _seconds(timeline_position(item))
 
     media = getattr(item, "media", None)
     origin = Fraction(media.origin) if media is not None else Fraction(0)
@@ -286,6 +285,7 @@ def _segment_from(item: Any, lane: int, probes: Optional[Mapping[str, SourceInfo
         has_video=has_video,
         has_audio=has_audio and not still,
         volume_db=getattr(item, "volume_db", None),
+        enabled=bool(getattr(item, "enabled", True)),
     )
 
 
@@ -566,13 +566,14 @@ def compile_timeline(
         frames = end - start
         if frames <= 0:
             continue
-        if segment.kind == "clip":
+        if segment.kind == "clip" and segment.enabled:
             hear(
                 segment, start, end,
                 fade_in=(left[index].end - left[index].start) if index in left else 0,
                 fade_out=(right[index].end - right[index].start) if index in right else 0,
             )
-        if segment.kind == "gap":
+        if segment.kind == "gap" or not segment.enabled:
+            # a disabled clip keeps its time on the spine, as black and silence
             pieces.append(Piece(segment=index, lane=0, start=start, frames=frames))
             continue
         if segment.missing or not segment.has_video:
@@ -616,7 +617,15 @@ def compile_timeline(
         ))
 
     for segment in lanes + below:
-        hear(segment, _frame(segment.tl_in), _frame(segment.tl_out))
+        if segment.enabled:
+            hear(segment, _frame(segment.tl_in), _frame(segment.tl_out))
+    off = [s for s in spine + lanes + below if s.kind == "clip" and not s.enabled]
+    if off:
+        notes.append(
+            f"{plural(len(off), 'disabled clip')} left out of the picture and the sound "
+            f"(enabled=\"0\"; on the spine it keeps its time as black): "
+            + ", ".join(repr(s.label) for s in off)
+        )
     if sounds:
         notes.append(
             f"audio mixed from {plural(len(sounds), 'clip')} with their adjust-volume; "
@@ -635,7 +644,7 @@ def compile_timeline(
     if with_lanes:
         for position, segment in enumerate(ordered_lanes):
             start, end = _frame(segment.tl_in), _frame(segment.tl_out)
-            if end - start <= 0:
+            if end - start <= 0 or not segment.enabled:
                 continue
             if segment.missing:
                 notes.append(

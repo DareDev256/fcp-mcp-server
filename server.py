@@ -2137,9 +2137,13 @@ def _detect_flash_frames(
             frame_rate=fps,
         )
 
+    # a disabled clip (enabled="0") is in no picture, so it cannot flash
     for clip in tl.clips:
-        consider(clip.name, clip.duration_seconds, relative(clip.start))
+        if getattr(clip, 'enabled', True):
+            consider(clip.name, clip.duration_seconds, relative(clip.start))
     for connected in getattr(tl, 'connected_clips', []) or []:
+        if not getattr(connected, 'enabled', True):
+            continue
         position = connected.offset or Timecode(frames=0, frame_rate=fps)
         consider(connected.name, connected.duration_seconds, relative(position))
 
@@ -2180,7 +2184,8 @@ def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source", include_conn
     cutaway from the same take shows the same frames twice).
     """
     source_groups: dict[str, list[dict]] = {}
-    for clip in tl.clips:
+    # a disabled clip shows no frames, so it duplicates none
+    for clip in (c for c in tl.clips if getattr(c, 'enabled', True)):
         source_key = clip.media_path or clip.name
         if source_key not in source_groups:
             source_groups[source_key] = []
@@ -2193,7 +2198,7 @@ def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source", include_conn
             'timecode': format_timecode(clip.start),
         })
     for clip in (getattr(tl, 'connected_clips', []) or []) if include_connected else []:
-        if not clip.media_path:
+        if not clip.media_path or not getattr(clip, 'enabled', True):
             continue
         at = clip.timeline_start or clip.offset
         source_groups.setdefault(clip.media_path, []).append({
@@ -2592,8 +2597,10 @@ async def handle_detect_flash_frames(arguments: dict) -> Sequence[TextContent]:
         tl, critical_threshold=critical_threshold, warning_threshold=warning_threshold,
     )
 
+    off = _disabled_note(tl)
     if not flash_frames:
-        return _text_result(f"No flash frames detected (threshold: {plural(warning_threshold, 'frame')})")
+        return _text_result(f"No flash frames detected (threshold: {plural(warning_threshold, 'frame')})"
+                            + (f"\n\n{off}" if off else ""))
 
     critical = [f for f in flash_frames if f.severity == FlashFrameSeverity.CRITICAL]
     warnings = [f for f in flash_frames if f.severity == FlashFrameSeverity.WARNING]
@@ -2626,6 +2633,8 @@ async def handle_detect_flash_frames(arguments: dict) -> Sequence[TextContent]:
         result += "_None_\n"
 
     result += "\n*Use `fix_flash_frames` to automatically resolve these issues.*"
+    if off:
+        result += f"\n\n{off}"
     return _text_result(result)
 
 
@@ -2634,9 +2643,10 @@ async def handle_detect_duplicates(arguments: dict) -> Sequence[TextContent]:
     mode = arguments.get("mode", "same_source")
 
     duplicates = _detect_duplicate_groups(tl, mode=mode)
+    off = _disabled_note(tl)
 
     if not duplicates:
-        return _text_result(f"No duplicate clips found (mode: {mode})")
+        return _text_result(f"No duplicate clips found (mode: {mode})" + (f"\n\n{off}" if off else ""))
 
     result = f"""# Duplicate Clip Detection
 
@@ -2653,6 +2663,8 @@ async def handle_detect_duplicates(arguments: dict) -> Sequence[TextContent]:
         for c in group.clips:
             result += f"| {c['name']} | {c['timecode']} | {format_duration(c['duration'])} |\n"
 
+    if off:
+        result += f"\n{off}\n"
     return _text_result(result)
 
 
@@ -3090,7 +3102,7 @@ def _handle_findings(tl):
 
 def _offline_findings(tl):
     out = []
-    for c in tl.all_clips():
+    for c in (c for c in tl.all_clips() if getattr(c, "enabled", True)):
         path = media_src_to_path(getattr(c, "media_path", "") or "")
         if path and not Path(path).is_file():
             out.append(("FAIL", format_timecode(c.start), f"Offline: {c.name} ({Path(path).name} not found)"))
@@ -3235,6 +3247,17 @@ def _diagnose(tl, checks=("all",)) -> tuple:
     return rows, issues, fixes
 
 
+def _disabled_note(tl) -> str:
+    """One line naming how many clips are disabled, or "" when none are.
+    They are in the cut and out of the picture and the sound, so the flash,
+    duplicate, reused-source and offline checks leave them out."""
+    off = [c for c in tl.all_clips() if not getattr(c, "enabled", True)]
+    if not off:
+        return ""
+    return (f"Disabled: {plural(len(off), 'clip')} (enabled=\"0\": out of the picture and the sound), "
+            f"left out of the flash, duplicate, reused-source and offline checks.")
+
+
 def _tally(issues) -> dict:
     return {v: sum(1 for i in issues if i[0] == v) for v in ("FAIL", "WARN", "INFO")}
 
@@ -3276,7 +3299,7 @@ async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
 """ + "\n".join(f"| {VERDICT[v]} | {name} | {found} | {where(at)} |" for v, name, found, at in rows) + f"""
 
 Not checked: {NOT_CHECKED}.
-
+""" + (f"\n{_disabled_note(tl)}\n" if _disabled_note(tl) else "") + f"""
 ## Issues ({len(issues)})
 """
     if issues:

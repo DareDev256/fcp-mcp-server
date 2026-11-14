@@ -252,6 +252,8 @@ def build_payload(
             ),
             "words": words,
             "thumb": _thumb(media, file_src + dur / 2) if media else None,
+            # enabled="0": shown greyed and marked off, never hidden
+            "enabled": bool(getattr(item, "enabled", True)),
         }
         clips.append(row)
         lanes_seen.setdefault(lane, []).append(row["id"])
@@ -305,8 +307,16 @@ def build_payload(
         "gaps": gaps,
         "markers": _marker_rows(timeline.markers, origin),
         "transitions": [
-            {"name": t.name, "start": rational(_frac(t.start) - origin), "duration": rational(t.duration)}
+            {"name": t.name, "start": rational(_frac(t.start) - origin), "duration": rational(t.duration),
+             "lane": 0}
             for t in timeline.transitions
+        ] + [
+            # inside a connected storyline: already on the sequence clock,
+            # like a connected clip's timeline_start; "start" is the cut and
+            # "lead" how much of it runs before
+            {"name": t.name, "start": rational(_frac(t.start)), "duration": rational(t.duration),
+             "lane": t.lane, "lead": rational(t.lead) if t.lead is not None else None}
+            for s in getattr(timeline, "storylines", None) or [] for t in s.transitions
         ],
     }
 
@@ -420,6 +430,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .lane.spine .clip { background: var(--raised-2); }
   .lane.audio .clip { background: var(--panel); }
   .clip.title { background: var(--raised-2); border-style: dashed; }
+  /* enabled="0": in the cut, not in the picture or the sound. Greyed and
+     marked, never hidden: an editor has to see it is there. */
+  .clip.off { opacity: .45; border-style: dashed; }
+  .clip .off-tag { margin-left: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); }
   /* Thumbnails tile along the clip at their own aspect, like Final Cut's filmstrip:
      never stretched, never one frame blown up to fill a long clip; centred, so a
      clip narrower than one frame shows the frame's middle. */
@@ -982,13 +996,14 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   }
   function clipEl(c) {
     var thumbed = !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
-    var e = el("div", "clip" + (c.kind === "title" ? " title" : "") + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : ""));
+    var off = c.enabled === false;
+    var e = el("div", "clip" + (c.kind === "title" ? " title" : "") + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : "") + (off ? " off" : ""));
     e.style.left = x(frac(c.start)) + "px"; e.style.width = Math.max(3, w(frac(c.duration)) - 1) + "px";
-    e.title = c.name + " · " + secOfSeconds(frac(c.duration)); e.__c = c;
+    e.title = c.name + " · " + secOfSeconds(frac(c.duration)) + (off ? " · off (disabled)" : ""); e.__c = c;
     if (thumbed) { var th = el("div", "thumbs"); th.style.backgroundImage = 'url("' + c.thumb + '")'; e.appendChild(th); }
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; mk.__key = "k:" + (c.media || c.name) + "@" + m.start; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
-    if (wpx >= 20) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
+    if (wpx >= 20) { var lab = el("div", "label", c.name); if (off) lab.appendChild(el("span", "off-tag", "off")); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
     if (state.num && state.num[c.id]) e.appendChild(el("div", "num", String(state.num[c.id])));
     e.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); state.playhead = frac(c.start); placePlayhead(); });
     return e;

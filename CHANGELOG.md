@@ -21,9 +21,11 @@
   `detect_gaps` and `preview_render`'s graph all see them. Its gaps and
   transitions are kept on the new `Timeline.storylines`, so every item is
   accounted for; a transition sits on the cut before it (the storyline's
-  first frame when it comes first).
-  `preview_render` draws those transitions as cuts and says so. The legacy
-  `<storyline>` still reads as before (no offset: the parent's clock).
+  first frame when it comes first). The text timeline lists each as a `D`
+  row on its lane ("ONE > TWO, centred on 00:00:04:00"), `view`'s payload
+  carries it with its lane and lead, and `preview_render` draws it as a cut
+  and says so. The legacy `<storyline>` still reads as before (no offset:
+  the parent's clock).
 - **The writer placed storyline clips on the wrong clock, and snapping could
   break a storyline.** `iter_connected_clips` now yields a storyline's clips
   with the storyline as their host, and `connected_timeline_offset` /
@@ -32,6 +34,35 @@
   they play. `snap_connected_clips` moves a connected storyline as one, by
   its `offset`, and keeps every cut inside it: moving one of its clips alone
   would overlap the next or open a hole Final Cut never wrote.
+- **A disabled clip was drawn, heard and checked.** Final Cut writes
+  `enabled="0"` on a clip switched off: it stays in the cut and is in
+  neither the picture nor the sound. The flag was not read anywhere, so the
+  proxy drew and played it and diagnose could call it a flash, a duplicate,
+  reused source or offline media. It is now `enabled` on `Clip` and
+  `ConnectedClip`, read on spine clips, connected clips and clips in a
+  connected storyline. `preview_render` leaves it out of the picture and the
+  sound: on the spine it keeps its time as black and silence, on a lane or
+  an audio lane it is not there, and the render notes name each one.
+  `preview_sheet`, the burn-in and the picture flash check skip it the same
+  way. `validate_timeline`'s flash, duplicate, reused-source and offline
+  checks leave it out, and `validate_timeline`, `detect_flash_frames` and
+  `detect_duplicates` say how many clips are disabled. An editor still has
+  to see it is there: the text timeline draws it dashed (`[-]`) with "off"
+  in its row and keeps its event number; `view` greys it, marks it "off"
+  and says so in its tooltip. The XMEML export writes
+  `<enabled>FALSE</enabled>` for it. On one real export (not committed),
+  27 clips are disabled: the 22 footage clips are in the render graph,
+  marked, none drawn or heard; the 5 titles were never drawn by the proxy.
+- **The XMEML export put connected clips in the wrong place.** It placed
+  each connected clip at its raw `offset`, which is on the parent's clock:
+  right only when the parent's `offset` equals its `start`. A clip on a
+  trimmed parent, or on a gap whose clock starts at 3600s, landed somewhere
+  it never plays (an hour late on a real gap-based export). It now uses
+  `timeline_position()` (new in `fcpxml/models.py`), the one function the
+  render graph and `as_clip` use too: parent position + (offset - parent
+  start), plus a connected storyline's own clock. The Resolve export copies
+  the document at 1.9 and computes no position; a round trip now proves its
+  storylines and clocks come through whole.
 - **Markers on a gap were written and never read back.** On a gap-based
   edit (the spine is one `<gap>` and every clip hangs off it, as
   `examples/music-video.fcpxml` is), `mark · batch_add_markers` writes each
@@ -62,6 +93,30 @@
   frames") stays plural.
 
 ### Gates, each broken once in the real code and seen red (2026-11-13)
+- `tests/test_disabled_clips.py`: a disabled spine clip, a disabled lane
+  clip over a visible spine clip, a disabled audio-lane clip and a disabled
+  clip in a connected storyline, rendered for real and read back by colour
+  and loudness: the spine picture where the lane clip is off, black and
+  silence for the spine clip's own two seconds, the next clip on time, no
+  tone from any disabled clip and a control that hears the enabled one.
+  Also the graph, the sheet, diagnose (a one-frame disabled clip that would
+  be a flash and a duplicate, an offline disabled lane clip), the text
+  timeline, the view payload, the app drawn in headless Chromium (class,
+  opacity, tooltip, tag) and the XMEML flag. `FCP_MCP_REAL_FCPXML` runs one
+  more against a real file. Mutations, all red: the flag not read (spine;
+  connected); a disabled spine clip drawn; heard; a disabled lane clip
+  drawn; a lane or audio-lane clip heard; the render note removed; the
+  picture readers seeing it; the text timeline dropping "off"; the flash,
+  duplicate and offline checks counting it; the count removed from the
+  report; the payload calling it enabled; the app not greying it; the
+  XMEML flag dropped.
+- `tests/test_connected_storylines.py` (export and transitions): the XMEML
+  export's clip starts and tracks against the same truth, the Resolve round
+  trip, the storyline `D` rows and the payload's storyline transitions.
+  Mutations, all red: XMEML placing by raw offset (the old code); Resolve
+  stripping offsets; `timeline_position` preferring the raw offset (also red
+  in `tests/test_preview_truth.py`); the `D` rows removed; the payload
+  dropping them.
 - `tests/test_connected_storylines.py`: a fixture in the real shape (a
   storyline under a trimmed spine clip with two clips in sequence, a
   transition between them and a gap inside; one under a broadcast gap whose
@@ -105,14 +160,16 @@
   read (in a storyline it is counted in `skipped` and keeps its time).
   Clips anchored to a clip INSIDE a connected storyline are not read
   (neither real export has one).
-- A transition inside a connected storyline is in the model but not drawn
-  by `view` or the text timeline, and the proxy cuts it (named in the
-  render's notes).
-- `enabled="0"` is not read on any connected clip, in a storyline or not:
-  a disabled clip is listed and drawn.
-- The XMEML / Resolve export places every connected clip by its raw
-  `offset`, which is on the parent's clock: right only when the parent's
-  `offset` equals its `start`. Older than this change; not fixed here.
+- The app does not draw a dissolve box for a transition inside a
+  connected storyline. It draws none for the spine's either on this
+  branch: that box is part of the 0.33 directions work, and the payload now
+  carries what it needs (lane, cut, lead). The proxy cuts these transitions
+  and says so.
+- `detect_flash_frames` reports a connected clip's timecode from its raw
+  `offset` minus the timeline origin: wrong on a trimmed parent, the same
+  disease the XMEML export had. Older than this change; not fixed here.
+- An effect switched off (`<filter-video enabled="0">`) is still listed
+  among what the proxy cannot draw.
 - `analysis-marker` and `hidden-clip-marker` are not parsed on any host.
 
 ## [0.32.0] - 2026-11-13

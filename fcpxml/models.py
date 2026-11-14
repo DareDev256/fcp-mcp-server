@@ -698,6 +698,10 @@ class Clip:
     effects: Tuple[str, ...] = ()
     # <adjust-volume amount="-6dB">, in dB; None when the clip has none.
     volume_db: Optional[float] = None
+    # enabled="0": the clip is in the cut but not in the picture or the
+    # sound. On the primary storyline it still takes its time (black,
+    # silent), as Final Cut plays it.
+    enabled: bool = True
 
     @property
     def end(self) -> Timecode:
@@ -764,6 +768,8 @@ class ConnectedClip:
     transform: Optional[Transform] = None
     effects: Tuple[str, ...] = ()
     volume_db: Optional[float] = None
+    # enabled="0": listed, not seen and not heard (see Clip.enabled).
+    enabled: bool = True
 
     @property
     def duration_seconds(self) -> float:
@@ -779,7 +785,7 @@ class ConnectedClip:
         """
         return Clip(
             name=self.name,
-            start=self.timeline_start if self.timeline_start is not None else self.offset,
+            start=timeline_position(self),
             duration=self.duration,
             source_start=self.source_start,
             media_path=self.media_path,
@@ -791,7 +797,29 @@ class ConnectedClip:
             transform=self.transform,
             effects=self.effects,
             volume_db=self.volume_db,
+            enabled=self.enabled,
         )
+
+
+def timeline_position(item: Any) -> Optional[Timecode]:
+    """Where a clip plays on the sequence clock, for any clip the model holds.
+
+    A spine :class:`Clip` carries it on ``start``. A :class:`ConnectedClip`
+    carries it on ``timeline_start``, which the parser resolves as parent
+    position + (offset - parent start), plus a connected storyline's own
+    clock for a clip inside one. Its raw ``offset`` is on the PARENT's clock
+    and is used only for a hand-built connected clip with no
+    ``timeline_start``. Every reader that places a connected clip (the render
+    graph, the exports, ``as_clip``) goes through here.
+    """
+    if hasattr(item, "timeline_start"):
+        resolved = getattr(item, "timeline_start", None)
+        if resolved is not None:
+            return resolved
+        offset = getattr(item, "offset", None)
+        if offset is not None:
+            return offset
+    return getattr(item, "start", None)
 
 
 @dataclass
