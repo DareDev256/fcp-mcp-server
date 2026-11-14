@@ -23,34 +23,42 @@ sheet's "5.0s" was 121 frames, and the next clip started at 10:01). One rule
 for ranges: in-out with the out-point exclusive, as Final Cut's are, and the
 length after it (`00:00:05:01–00:00:06:11 · 34f`, so out minus in is the
 length); no "to", no inclusive out-points. The pictures write the dash as
-`-` because the bundled font has no en dash.
+`-` because the bundled font has no en dash. One colour rule on every
+picture: cyan text is a record time (`rec 00:00:15:03`, `REC 00:00:18:00`)
+and cyan marks are the cut that lives on it; source times are white or grey;
+red is a failure.
 
 ### Changed (existing outputs moved)
 - **`preview_render` is 1280x720 by default** (was 854x480; `height` still
   sets it). The reply ends with a poster frame (the middle of the timeline)
   as an image block and a `resource_link` to the MP4. `burn_in: true` writes a
   second file, `<name>_proxy_burnin.mp4`, with one opaque true-black chip
-  bottom left on every frame: `REC 00:00:18:00  Bench (L1) over Squat` (what
-  is ON SCREEN, top layer first, then the clip it hides) over `SRC Bench.mov
-  00:00:00:21` (the top layer's source file and timecode, as Resolve's data
-  burn-in shows it). It is composited onto the clean proxy AFTER
+  inside 5% action safe (64 px in and 36 px up at 1280x720) on every frame:
+  `REC 00:00:18:00 · f432  Bench (L1)` (the record time and frame, and what
+  is ON SCREEN, top layer first), `SRC Bench.mov 00:00:00:21` (the top
+  layer's source file and timecode, as Resolve's data burn-in shows it) and,
+  while it covers a clip, `over Squat.mov 00:00:15:20` (that clip's file and
+  source timecode, read through it). It is composited onto the clean proxy AFTER
   `verify_lanes()` has read it: the instrument measures the timeline's
   pixels, never our labels.
 - **`preview_sheet` is one composed sheet**, not one loose unlabelled PNG per
   cut with no paths in the reply: every VIDEO clip in record order, connected
   ones included and badged with their lane (`#5 L1`), each with its number,
-  name, length in frames, record timecode (`rec`) and source in-point (`src`:
-  an in-point and a length make the range, so no out-point is printed to be
-  read as inclusive); a connected card says what it plays over (`over #4`);
-  a dissolve is a bowtie centred in the gutter on its cut and a `dissolve
-  12f in` line on the card it leads into; a flash in the picture is a red
-  `flash 1f 00:00:20:03` chip on the two cards it involves (red is a
-  failure: diagnose fails it); a header with the duration as timecode, the
-  frame rate, the clip count ("6 clips + 1 connected") and the file's
-  `sha256` prefix, labelled. At most 12 frames a page, extra pages numbered,
-  and a page that does not hold every clip says where the rest are (`#7 and
-  the dissolve on page 2`); up to 4 pages inline. `layout: "phone"` draws
-  two columns on a 780 px page for a 390 px screen.
+  name, length in frames, record timecode (`rec`, cyan) and source in-point
+  (`src`: an in-point and a length make the range, so no out-point is
+  printed to be read as inclusive); in grey, a connected card says what it
+  plays over (`over #4`) and that it ends early (`ends 1f before #6`), two
+  cards that show the same frames say so (`dup 66f with #5`, diagnose's
+  WARN), and a dissolve is a bowtie centred in the gutter on its cut and a
+  `dissolve 12f in` line on the card it leads into; a flash in the picture
+  is ONE red badge, as diagnose counts it once: a red frame round the card
+  whose picture flashes and `flash 1f 00:00:20:03 · src 00:00:17:23` under
+  it; a header with the duration as timecode, the frame rate, the clip count
+  ("6 clips + 1 connected") and the file's `sha256` prefix, labelled. At
+  most 12 frames a page, extra pages numbered, and a page that does not hold
+  every clip says where the rest are (`page 2: #5-#7 and the dissolve`); up
+  to 4 pages inline. `layout: "phone"` draws two columns on a 780 px page
+  for a 390 px screen.
 - **`preview_check` is redrawn** (was a 1200x168 ffmpeg tile over a
   waveform with no times): 1232 px wide, two BANDS, each a row of four
   frames 240 px wide over its own ruler and its own waveform on that band's
@@ -59,18 +67,23 @@ length); no "to", no inclusive out-points. The pictures write the dash as
   hangs from its tick, left-anchored as Final Cut draws them, at one fixed
   step; the waveform rectified as Final Cut draws it, RMS (cyan) over peak
   (grey) up from a baseline in dB, -60 to 0, with 0, -20 and -40 dB ticked
-  and labelled at the band's edge and the -40 dB silence threshold dashed;
-  every silence of 0.3 s or longer shaded and named once
-  (`silence 1.5s (36f)`), clear of every line. `cut` marks a cut and shows
+  at the band's edge and each label's ink centred on its tick; the dashed
+  line is the silence detector's own threshold and is labelled with it
+  (`-40 silence`, from the value the detection used); every silence of
+  0.3 s or longer shaded and named once (`silence 1.5s (36f)`), and in the
+  next band where it ends (`silence to 00:00:06:12`), clear of every line.
+  `cut` marks a cut and shows
   the frame either side. New `filepath` (the timeline): the frames the edit
   removed are dimmed and tagged, the removed span is a grey bar on the ruler
   (the edit working, not a failure, so never red), the cut's out-point is
   marked on the band it falls in and its in-point on its own (a triangle on
   the ruler and a line through the waveform, each at its own time; no
   thumbnail is lit), and off the band grid, under a rule and a heading, the
-  join as played: the last and first kept frames side by side with the
-  cut's record time and what the edit took, read from the edit (`cut at rec
-  00:00:10:01`, `last kept src 00:00:05:00`, `first kept src 00:00:06:11`,
+  join as played: the last and first kept frames side by side, each
+  captioned with where it plays and what it is in the file, the record time
+  read through its own clip (`rec 00:00:10:00` over `src 00:00:05:00`,
+  `rec 00:00:10:01` over `src 00:00:06:11`), and what the edit took, read
+  from the edit (`cut at rec 00:00:10:01`, `last kept src 00:00:05:00`, `first kept src 00:00:06:11`,
   `removed 00:00:05:01-00:00:06:11 · 34f`, `silence 36f, 1f kept each
   side`). `frames` must be even, 2 to 8 (two bands of up to four); the
   default is still 8. The reply writes every range one way
@@ -79,28 +92,36 @@ length); no "to", no inclusive out-points. The pictures write the dash as
 - **`preview_frame`** returns its frame inline (scaled into the vision budget
   when larger; the file keeps full size) and is the frame its timecode names
   (ffmpeg returns the first frame at or after a seek; it now seeks a quarter
-  frame before). `burn: true` burns `SRC Squat.mov 00:00:07:06 · f174`.
+  frame before a seek). `burn: true` burns `SRC Squat.mov 00:00:07:06 · f174`
+  inside 5% action safe, the source time in white.
 - **`detect_scenes`** adds a picture per page of 3 cuts: the frame before and
   the frame after each cut with their own timecodes (`00:00:02:11` |
   `00:00:02:12`), the record time, the detector's score against its
   threshold (ffmpeg's `lavfi.scene_score`, now recorded and cached with the
-  scene), the clip, and the scenes with their lengths. "source = timeline"
+  scene), the clip, and the scenes with their lengths (the frame timecodes
+  in white, the record time cyan). "source = timeline"
   is said once when every cut's source time is its record time.
-- **`validate_timeline`**: a `✓ PASS` / `⚠︎ WARN` / `✗ FAIL` / `· INFO`
-  column with the word beside the glyph and a `Where` column with every
-  timecode; issues as a table with a timecode each. Duplicates count
-  connected clips and are two rows: `Duplicate frames`, a WARN when two
-  uses of one file show the same frames, naming the overlap (`Bench.mov
-  source 00:00:00:06–00:00:03:00 · 66f`), and `Reused source`, INFO for
-  different ranges of one file. Three new checks: `Transition handles` (the
-  media each side has against what the transition draws on, in frames, from
-  the parsed asset lengths: `Press tail 6f of 6f, Finish head 6f of 6f`),
-  `Offline media` (FAIL when a clip's file is not where the XML points) and
-  `Frame rate and size` (each source's rate and size against the
-  sequence's, read with ffprobe: a rate Final Cut would retime is a WARN, a
-  size it scales is INFO). A `Not checked:` line names what it cannot see
-  (loudness, true peak, black or frozen frames, audio sync). The health
-  score counts only the checks that ran and says how many ("87% from the 7
+- **`validate_timeline`** leads with its verdict (`## Verdict: FAIL · 1
+  FAIL, 2 WARN, 1 INFO`, counted from the issues), then the health score; a
+  `✓ PASS` / `⚠︎ WARN` / `✗ FAIL` / `· INFO` column with the word beside the
+  glyph, a `Found` column (what each check found, so a PASS is 0) and a
+  `Where` column; issues as a table with a timecode each. Duplicates count
+  connected clips and are two rows: `Duplicate frames`, a WARN when two uses
+  of one file show the same frames, naming the overlap (`Bench.mov source
+  00:00:00:06–00:00:03:00 · 66f`) and WHERE those frames play, each record
+  range read through its clip (`00:00:00:00–00:00:02:18,
+  00:00:17:09–00:00:20:03`), and `Reused source`, INFO for different ranges
+  of one file. Three new checks: `Transition handles` (the media each side
+  has against what the transition draws on, in frames, from the parsed asset
+  lengths: `1 checked; Press tail needs 6f, has 6f, Finish head needs 6f,
+  has 6f`), `Offline media` (FAIL when a clip's file is not where the XML
+  points) and `Frame rate and size` (each source's rate and size against
+  the sequence's, read with ffprobe: a rate Final Cut would retime is a WARN;
+  a source the conform scales up more than 1.5x is a WARN, "640x360 in a
+  1920x1080 sequence (scaled up 3x: soft, a post house would not pass it)",
+  and any other size is INFO). A `Not checked:` line names what it cannot
+  see (loudness, true peak, black or frozen frames, audio sync). The health
+  score counts only the checks that ran and says how many ("84% from the 7
   checks below"); INFO costs nothing (it cost a point), FAIL -10, WARN -3.
   The fix line is printed only for a check that failed, as the grouped call
   that runs it (`edit · fix_flash_frames`, `edit · fill_gaps`); it named
@@ -108,22 +129,31 @@ length); no "to", no inclusive out-points. The pictures write the dash as
 - **`analyze_timeline`**: "Clips: 6 clips + 1 connected" (the same words as
   the sheet header and the text timeline, which said "7 clips"), "Edit
   points: 5 (4 cuts, 1 dissolve)" (was "Total Cuts: 5"), the duration as
-  timecode and frames, "Edits/minute: 9.9 · cuts/minute 8.0" (the one
-  "Cuts/minute" counted the dissolve as a cut), an `Audio` section (the
+  timecode and frames; `Pacing (spine clips)` says what its numbers count
+  and adds the shortest picture actually on screen, read from the
+  composited frame ("Shortest on screen: 1f (Squat, flash at
+  00:00:20:03)"); "Edits/minute: 9.9 · cuts/minute 8.0" (the one
+  "Cuts/minute" counted the dissolve as a cut); an `Audio` section (the
   sequence's audio layout and rate, how many clips play sound, each sound
-  file's channels and sample rate, measured) and a `Diagnose` line naming
-  the worst FAIL ("1 FAIL (flash 00:00:20:03)") with the call for the full
-  report, so inspect does not read as a clean bill when diagnose fails.
-- **`preview_timeline`**: a time row (every label starting on its own
-  tick, the last one too: `30.0s`) and a ruler, a marker row, the lanes above
+  file's channels and sample rate, measured); and a `Diagnose` line with
+  every count diagnose prints, from the same checks ("Verdict FAIL: 1 FAIL
+  (flash 00:00:20:03), 2 WARN, 1 INFO"), so inspect never reads lighter
+  than diagnose.
+- **`preview_timeline`**: line 1 ends with the file's `sha256` prefix; a
+  time row (every label starting on its own tick, the last one too: `30.0s`),
+  a ruler and a legend (`^ marker, [=] clip, X dissolve (D in the list), !
+  flash`), a marker row, the lanes above
   the spine (a lane clip named beside its bar), the spine with an `X` on
   each transition's cut, the lanes below; then an EDL in fixed columns,
-  every row on the grid: every clip in record order (number, track, record
-  in and out, length in frames, the transition INTO it in the `tr` column as
-  CMX writes it, `D 12f`, clip, source file, source in and out), each marker
-  as a `^` row at its place, the dissolve as a `D` row with its span in the
-  record columns ("centred on the cut 00:00:24:22"), and a flash in the
-  picture as a `!` row at its time ("between Bench (L1) and Press"). The
+  every value under its own header: every clip in record order (number,
+  track `AV` for picture and sound, `V` or `A` otherwise, `L1 AV` on a lane;
+  record in and out, length in frames, the transition INTO it in the `tr`
+  column as CMX writes it, `D 12f`, clip, source file, source in and out),
+  each marker as a `^` row at its place with its name and kind in the note,
+  the dissolve as a `D` row with its span in the record columns, its name
+  under clip and "Press > Finish, centred on 00:00:24:22" in the note, and a
+  flash in the picture as a `!` row at its time ("flash between Bench (L1)
+  and Press"). The
   render's "Substituted" notes are no longer printed here (preview_render
   reports them). Was one `#` row per clip.
 - **`preview://` serves the `view` app with the timeline inlined** (one
@@ -147,6 +177,9 @@ length); no "to", no inclusive out-points. The pictures write the dash as
   raised `#1C1C1C` and the rest r = g = b; they carried a blue tint (18,18,22
   and 28,28,34). The frozen logo and card keep the 0.31 greys until they are
   regenerated on purpose.
+- **Counted nouns are written out** in every tool's output ("1 transition
+  and 2 markers", "Relinked 2 media references", "Deleted 1 clip"): no
+  "(s)" anywhere (`fcpxml/words.py`).
 
 ### Fixed
 - **A dissolve after a run of hard cuts failed the full render.** `xfade`
@@ -166,10 +199,11 @@ length); no "to", no inclusive out-points. The pictures write the dash as
   `✗ FAIL 00:00:20:03 Flash frame in the picture: Squat shows for 1f between
   Bench (L1) and Press` (one frame is under the two-frame critical line, so
   it is a FAIL, as a one-frame clip always was). The fix is checked
-  against the media: "extend Bench (L1) out by 1f, to src 00:00:03:01
-  (Bench.mov has media to 00:00:05:12)"; Press has no head media, so it says
-  it cannot start earlier as a roll; a ripple is offered last with what it
-  moves (Press, Finish, the dissolve and 2 markers, 1f earlier).
+  against the media and says what it costs: "extend Bench (L1) out by 1f,
+  to src 00:00:03:01 (Bench.mov has media to 00:00:05:12; the duplicate with
+  Bench grows to 67f)"; Press has no head media, so it says it cannot start
+  earlier as a roll; a ripple is offered last with what it moves ("Press,
+  Finish, 1 transition and 2 markers 1f earlier").
 - **The warning sign could render as an emoji.** Every `⚠` the server prints
   carries U+FE0E (text presentation); the tests scan `server.py` and
   `tools/` for any glyph with an emoji form, written or escaped.
@@ -205,17 +239,21 @@ length); no "to", no inclusive out-points. The pictures write the dash as
   clip, plus one take with hard cuts for `detect_scenes`. Not in the wheel.
   Its connected clip ends a frame before the next cut on purpose: it is the
   picture-flash test case.
-- **Tests**: `test_proofs.py` (70), `test_visual.py` rewritten for the banded
+- **`fcpxml/words.py`**: `plural(2, "marker")` -> "2 markers".
+- **Tests**: `test_proofs.py` (77), `test_visual.py` rewritten for the banded
   check (15), `test_preview.py` rewritten for the inlined page (10), the page
   fit, numbers, key and read-only controls in `test_app_labels.py`, the font
   in the built wheel (`test_packaging.py`), exact-grey tokens in
   `test_palette.py`. The suite stubs the cmux preview hook, so a test run
   never paints a picture beside the author's terminal. The publish job draws
-  text with the installed wheel's font.
+  text with the installed wheel's font. The scenes-strip gate names the
+  ffmpeg backend: with the `scenes` extra installed, "auto" picks
+  PySceneDetect, which hands back no per-cut score to read against.
 
 ### Gates, each broken once in the real code and seen red (2026-11-13)
-114 mutations on `mcp` 1.28.1, all red; 20 of them (the image blocks, the
-burn order, the reply text, diagnose and inspect) also on `mcp` 2.3.0, all
+158 mutations on `mcp` 1.28.1, all red; 40 of them (the image blocks,
+the burn order, the reply text, the scenes strip, diagnose and inspect) also
+on `mcp` 2.3.0 with the `intelligence` and `scenes` extras installed, all
 red. One control the other way: the check's ruler with ticks four times
 denser keeps its labels apart by labelling every third tick, and the gate
 accepts it (green). Every gate reads the OUTPUT and compares it
@@ -305,6 +343,43 @@ timecode arithmetic.
   with the inside numbers hidden), a one-second clip under the spine
   numbered below its box (red numbered above), the placeholder at 4.5:1
   (red at the browser default).
+- Round 4, the pictures: each dB label's INK, read off the PNG, centred
+  within 1 px of its tick (red hung from the tick as round 3 drew it, red
+  centred by its cell); the dashed line, read through the scale's own 0 and
+  -20 dB ticks, at the detector's threshold within 1 px at -40 and at -50 dB,
+  labelled with it, and the -48 dB section silence to one and sound to the
+  other (red 10 dB off, red with the label hardcoded, red with the detector
+  ignoring the threshold); each join frame captioned with its rec, read
+  through its clip, and its src (red with the src time as rec, red with the
+  clip's start as rec); band 2's silence named (red without); cyan only on
+  "rec <tc>" in every picture, read pixel by pixel on the sheets, the check,
+  the scenes strip, the frame and a decoded frame of the burned proxy (red
+  for the frame's src time, the join's src caption, the proxy's layer name,
+  the sheet's lane chip, the scenes' frame times, the whole join heading);
+  one red badge on the sheet per FAIL, on the card that flashes (red on two
+  cards as round 3 drew it, red with the badge's src not read through the
+  clip), "ends 1f before #6" and "dup 66f with" both cards (red without
+  each); the proxy chip's record frame, its "over" line read on the hidden
+  clip's own clock, every frame read back at the action-safe place (red a
+  frame off, red without the line, red on the top clip's clock, red at 16 px
+  as round 3 placed it) and the frame chip there too (red at 16 px).
+- Round 4, the reports: where duplicated frames PLAY, each range mapped back
+  through its clip to the shared source range (red with clip starts, red
+  without the offset into the clip); inspect's counts parsed and compared
+  with validate's (red dropping the WARN, red from the flash check only);
+  `Found` 0 on every PASS row (red counting what was checked, red with the
+  column called Count); the verdict line and its counts (red without, red
+  ignoring a FAIL); the 3x upscale a WARN (red as INFO); "needs 6f, has 6f"
+  (red "6f of 6f"); "Pacing (spine clips)" and the shortest picture on
+  screen from the composited frame (red unscoped, red with the longest);
+  the text timeline parsed by its own header columns, a file or nothing
+  under source on every row, nothing under clip or source on a marker row,
+  AV on every clip with sound, the legend and the sha256 (red with V, with
+  the marker under clip, with the dissolve's clips under source, without
+  the legend, without the sha); no "(s)" in any string the server, its
+  tools and the fcpxml modules print, found by parsing them (red with
+  "(s)" back in the fix and in relink) and the extension's cost (red
+  without).
 - Kept from round 1: the image block on the wire and its cap (red dropped,
   poster dropped, journal seam, cap ignored), the 6 px font, the 1,568 px
   edge, 12 cells, collisions, truncation, red only for failure, the font in

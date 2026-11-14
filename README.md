@@ -537,7 +537,9 @@ Claude's vision input: long edge at most 1,568 px and at most 1,568 patches of
 where they are seen, at most 12 frames a page. Lengths are whole frames
 everywhere they add up (`121f`): a start plus a length is the next start.
 Ranges are in-out with the out-point exclusive, as Final Cut's are, and the
-length after them (`00:00:05:01–00:00:06:11 · 34f`).
+length after them (`00:00:05:01–00:00:06:11 · 34f`). One colour rule on
+every picture: cyan text is a record time and cyan marks are the cut;
+source times are white or grey; red is a failure.
 Below, the same calls on the author's own gym session, 0.31.0 above each
 picture and 0.32.0 under it.
 
@@ -545,9 +547,11 @@ picture and 0.32.0 under it.
 (`#5 L1`) and saying what they play over (`over #4`), each with its length,
 record timecode and source in-point (the three takes of one lift told
 apart), the dissolve as a bowtie in the gutter on its cut and a `dissolve
-12f in` line, a red `flash 1f 00:00:20:03` chip on the two cards a flash
-frame comes between, and a header with the duration, frame rate, clip count
-and the file's `sha256` prefix. `layout: "phone"` draws two columns for a
+12f in` line; one red badge per flash, as diagnose counts it, on the card
+whose picture flashes (`flash 1f 00:00:20:03 · src 00:00:17:23`), the clip
+that ends early saying so (`ends 1f before #6`) and two cards that show the
+same frames saying that too (`dup 66f with #5`); and a header with the
+duration, frame rate, clip count and the file's `sha256` prefix. `layout: "phone"` draws two columns for a
 390 px screen (shown here); a page that does not hold every clip says where
 the rest are.
 
@@ -559,19 +563,23 @@ a filmstrip over a waveform; ruler labels hang from their ticks. With
 `filepath`, what the edit removed is dimmed and drawn as a grey bar on the
 ruler, the cut's out-point is marked on its band and its in-point on its
 own, and under a rule, off the band grid, the join as played: the last and
-first kept frames side by side with the cut's record time, the removed
+first kept frames side by side, each captioned with where it plays and what
+it is in the file (`rec 00:00:10:00` over `src 00:00:05:00`), the removed
 range with its length and how much of the silence the edit kept each side,
 read from the edit. The waveform is rectified, RMS over peak in dB, with 0,
--20 and -40 dB labelled at the band's edge and the -40 dB silence threshold
-dashed; silences are named with their length, and no label sits on a line.
+-20 and -40 dB labelled at the band's edge, each label centred on its tick,
+and the dashed line labelled with the threshold the silence detector used
+(`-40 silence`); silences are named with their length (and, in the next
+band, where they end), and no label sits on a line.
 
 ![preview_check before and after: 0.31.0's untimed strip and flat bar above 0.32.0's two bands with rulers, removed frames, the cut pair and dB levels](docs/screenshots/2026-11-13_before-after-check-032.png)
 
 **`preview_render`**: 1280x720 by default, a poster frame inline and a link
 to the MP4. `burn_in: true` writes a second file with one opaque chip on
-every frame naming what is on screen, top layer first (`Bench (L1) over
-Squat`), and the source file and timecode of the top layer, added after the
-lane check has read the clean render. 0.31.0's frame is from a render that
+every frame, inside 5% action safe: the record time and frame (`REC
+00:00:18:00 · f432`), what is on screen, top layer first, its source file and
+timecode, and the source of the clip it covers (`over Squat.mov
+00:00:15:20`), added after the lane check has read the clean render. 0.31.0's frame is from a render that
 had fallen back: a dissolve after hard cuts failed the full graph, so the
 dissolve was dropped and the sound with it (fixed in 0.32.0).
 
@@ -584,23 +592,27 @@ file, the source timecode and the frame number.
 
 ![detect_scenes before and after: 0.31.0's table of times above 0.32.0's before and after frames, scores and scene list](docs/screenshots/2026-11-13_before-after-scenes-032.png)
 
-**`preview_timeline`** prints a ruler, the markers, lanes above and below the
-spine, then an EDL in fixed columns: every clip in record order (record in
-and out, length in frames, the transition into it as CMX writes it, `D 12f`,
-source file, source in and out), with the markers (`^`), the dissolve's span
-(`D`) and any flash in the picture (`!`) as rows at their place.
-**`validate_timeline`** reads by a ✓ PASS / ⚠︎ WARN / ✗ FAIL / · INFO
-column with the timecode where; checks flash frames in the composited
-PICTURE as well as clip lengths (a connected clip ending one frame before
-the next cut leaves a frame of the spine showing) and offers the fix the
-media allows first; splits duplicate frames (WARN) from a reused source
-(INFO); checks transition handles against the real media, offline media,
-and each source's frame rate and size against the sequence; names what it
-does not check (loudness, true peak, black or frozen frames, audio sync);
-counts only the checks that ran; and prints a fix only for what failed, as
-the grouped call that runs it. **`analyze_timeline`** gives edits and cuts
-per minute apart, the audio (channels and rate per file, measured), and the
-worst FAIL diagnose would find.
+**`preview_timeline`** prints the file's `sha256` prefix, a ruler, a legend,
+the markers, lanes above and below the spine, then an EDL whose every value
+sits under its own header: every clip in record order (`AV` for picture and
+sound, record in and out, length in frames, the transition into it as CMX
+writes it, `D 12f`, source file, source in and out), with the markers
+(`^`, name and kind in the note), the dissolve's span (`D`) and any flash in
+the picture (`!`) as rows at their place. **`validate_timeline`** leads
+with its verdict (`FAIL · 1 FAIL, 2 WARN, 1 INFO`), then reads by a ✓ PASS
+/ ⚠︎ WARN / ✗ FAIL / · INFO column, what each check found, and where;
+checks flash frames in the composited PICTURE as well as clip lengths (a
+connected clip ending one frame before the next cut leaves a frame of the
+spine showing) and offers the fix the media allows first, with its cost;
+splits duplicate frames (WARN, with the record ranges where the shared
+frames play) from a reused source (INFO); checks transition handles against
+the real media, offline media, and each source's frame rate and size
+against the sequence (a 3x upscale is a WARN); names what it does not check
+(loudness, true peak, black or frozen frames, audio sync); counts only the
+checks that ran; and prints a fix only for what failed, as the grouped call
+that runs it. **`analyze_timeline`** gives edits and cuts per minute apart,
+the shortest picture actually on screen, the audio (channels and rate per
+file, measured), and every count diagnose prints.
 
 ### See the cut inline — the MCP Apps timeline (v0.26.0)
 
@@ -944,7 +956,7 @@ fcp-mcp-server/           ~15.7k lines Python
 │   ├── dtd.py             Validate output against Apple's official DTDs (located in the FCP app bundle)
 │   └── templates.py       Template system (intro/outro, lower thirds, music video)
 ├── skill/                 final-cut-pro Claude Code skill wrapping this server
-├── tests/                 2701 tests across 97 suites (collected 2026-11-13) — see Testing below
+├── tests/                 2708 tests across 97 suites (collected 2026-11-13) — see Testing below
 │   ├── test_models.py     TimeValue math, Timecode formatting, MarkerType contracts
 │   ├── test_parser.py     FCPXML parsing, connected clips, edge cases
 │   ├── test_writer.py     Clip editing, marker writing, speed changes
@@ -1094,7 +1106,7 @@ uv run --extra dev pytest tests/ -v    # or: python3 -m pytest tests/ -v
 ruff check . --exclude docs/           # lint — must pass before committing
 ```
 
-2701 tests across 97 suites, measured 2026-11-13 on v0.32.0: 2696 pass and 5 skip locally (`mcp` 1.28.1, ffmpeg 9.0.1, Pillow, Playwright's Chromium); 2627 pass and 5 skip on `mcp` 2.3.0 and 2623 pass and 9 skip on ffmpeg 6.1 via `scripts/test-ffmpeg6.sh` (no browser or Pillow there, so the rendered-label, motion and hero-asset suites skip as modules; CI runs them in their own job); 2672 pass and 29 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the labelled proof pictures (timecodes read back off every sheet and every burned frame), the `preview://` page and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
+2708 tests across 97 suites, measured 2026-11-13 on v0.32.0: 2703 pass and 5 skip locally (`mcp` 1.28.1, ffmpeg 9.0.1, Pillow, Playwright's Chromium); 2636 pass and 3 skip on `mcp` 2.3.0 with the `intelligence` and `scenes` extras, and 2630 pass and 9 skip on ffmpeg 6.1 via `scripts/test-ffmpeg6.sh` (no browser or Pillow in either, so the rendered-label, motion and hero-asset suites skip as modules; CI runs them in their own job); 2679 pass and 29 skip with `FCP_MCP_INDEX=off` (the extra skips there are the tests OF the cache). The other skips are the cases that need ffmpeg, PySceneDetect or Final Cut Pro present. Coverage spans models, parser, writer, FCPXMLWriter generation, server handlers, rough cut generation, speed cutting & pacing curves, marker pipeline, refactored helper functions, regression fixes, security hardening (XXE, entity expansion, path traversal, sandbox boundaries, minidom defense-in-depth, JSON depth limits, input validation, ffmpeg bounds, write-handler sandboxing), connected clips, roles, diff, export, compound clip flattening, audio track generation, templates, effects, `.fcpxmld` bundles with sidecar preservation, bulk media relink, gap-based multicam storylines (mc-clip angle resolution, caption text, connected-clip timeline positions, the media-tools view), real media silence detection, transcript-driven editing, filtergraph compilation, proxy rendering with artifact duration read-back, source-media visual checks, export watch detection, loopback bridge probing, EDL import, autopush, the operation journal and hash-checked undo, the deliver review gate, bulk organize edits, tiered shot search with its never-transcribes / never-downloads guards, the diversity constraint, the grouped tools dispatching to the flat handlers, the labelled proof pictures (timecodes read back off every sheet and every burned frame), the `preview://` page and its traversal/extension/null-byte/symlink rejection paths, the `final-cut-pro` skill, and DTD validation against Apple's official DTDs.
 
 Several of those are **mutation checks** — they exist to prove an instrument can see the failure it is meant to catch, because a check that reads identically on a good and a bad result certifies nothing:
 
@@ -1104,7 +1116,7 @@ Several of those are **mutation checks** — they exist to prove an instrument c
 - `test_a_touched_source_drops_its_rows` re-exports a source and asserts the cache forgets it; with the (mtime, size) check removed the stale rows survive and the test goes red.
 - `test_key_goes_in_the_header_and_nowhere_else` — moving the ElevenLabs key into the URL makes it fail.
 - `test_version.py` asserts `server.__version__` matches `pyproject.toml`; the two had disagreed since v0.17.0 without anything noticing.
-- `test_proofs.py` (v0.32.0) reads every timecode back off the pictures it guards (each sheet cell against the parsed timeline, both lines of each of the 724 burned frames against the clips on screen at that frame, each thumbnail against the ruler drawn under it, each ruler tick to a pixel, the picture-flash at 00:00:20:03, no label within 8 px of a line, every range in-out with its length) and was broken 114 ways in the real code and seen red.
+- `test_proofs.py` (v0.32.0) reads every timecode back off the pictures it guards (each sheet cell against the parsed timeline, both lines of each of the 724 burned frames against the clips on screen at that frame, each thumbnail against the ruler drawn under it, each ruler tick to a pixel, the picture-flash at 00:00:20:03, no label within 8 px of a line, every range in-out with its length, each dB label's ink on its tick, cyan only on record time, one red badge per FAIL) and was broken 158 ways in the real code and seen red.
 - `test_palette.py`, `test_schema_budget.py`, `test_front_door.py` and `test_pypi_readme.py` (v0.31.0) each plant the failure they guard against: amber back in a surface, one more character in a tool description, the old card's version in the README, a relative image in the built PyPI description.
 
 ---
