@@ -2,6 +2,82 @@
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-14
+
+Every clip the server AUTHORS goes on its file's own clock. Reported in #45
+against 0.32.0 (Final Cut Pro 12.4, macOS 27.0.1): `import_edl_json` on an
+iPhone clip with a 18:03:22:05 timecode track wrote `<asset start="0s">` and
+clips at their file times, Final Cut put the asset on the file's timecode
+clock, every range fell before the media began, and the import was an empty
+timeline with no warning. `validate_timeline` passed it. The write-side twin
+of 0.29.0, which taught the media tools to READ the asset clock.
+
+Measured on the issue's shape (a 30 fps `.mov` whose `tmcd` track starts at
+18:03:22:05, ranges 1-2 s and 3-4 s): 0.32.0 wrote the asset at `0s` and the
+clips at `1s` and `3s`; 0.33.0 writes `1950065/30s`, `1950095/30s` and
+`1950155/30s`, the form the reporter hand-edited and imported with both
+ranges playing. The same mistake was in every writer that makes a clip, so
+they are fixed together.
+
+A minor version because these operations' output changes on timecoded media.
+
+**Not verified in Final Cut on this machine.** The 30 fps case is the
+reporter's own Final Cut import. The 29.97 / 23.976 / drop-frame arithmetic
+follows SMPTE and the rule this codebase already reads by (a label counts
+nominal frames, each lasting the real frame duration: 01:00:00:00 at 29.97
+non-drop is 3603.6 s), and has not been imported into Final Cut yet.
+
+### Fixed (existing outputs moved)
+- **`import_edl_json`** reads each source's clock from the file and writes
+  `<asset start>` on it, with every range placed from there. Only a QuickTime
+  timecode track (`tmcd`) counts: Sony XAVC `.mp4` keeps its timecode in an
+  `rtmd` track that ffprobe prints all the same, and Final Cut starts it at 0
+  (the reporter imported one three ways; Final Cut's own export of a real
+  library writes all 35 of its Sony-named `C0xxx.MP4` clips at
+  `start="0s"`). The reply
+  names each clock it wrote ("On its timecode clock: IMG_1968.mov starts at
+  18:03:22:05 (30 fps), so <asset start> is 1950065/30s"), every timecode it
+  did not use and why, and every file whose clock could not be read (not on
+  this machine, no ffprobe), with what that risks in Final Cut.
+- **`apply_template`** and **`add_audio` / `add_music_bed` with a `src`**
+  write a new asset on its file's clock and start its clip there.
+- **`insert_clip`, `add_connected_clip` and `add_audio_clip` on an existing
+  asset** start the clip where the asset begins. They wrote `start="0s"`
+  whatever the asset's clock, so on any camera clip Final Cut exported
+  (`<asset start="3600s">`) the new clip asked for an hour of media before
+  the file and imported empty. An `in_point` before the asset's clock begins
+  is refused with its file-time equivalent ("2s into the file is 3602s")
+  instead of written. `add_audio_clip`'s length clamp measures the asset on
+  its own clock (it read a 3600s start as 3590s past the end).
+- **Media URLs** are written the way Final Cut writes them, percent-encoded
+  (`file:///Volumes/%E7%B4%A0%E6%9D%90%20Day%201/...`): `import_edl_json`
+  wrote `file://` plus the raw path, and `apply_template` / `add_audio`
+  wrote a bare path, so a folder with a space or Chinese in its name was not
+  a URL.
+- A clip's start stays on the sequence's frame grid, as the in-point always
+  was. Where a file's clock is not on that grid (29.97 drop-frame in a 30p
+  cut) it moves by under a frame, and only later: never before the file
+  begins.
+
+### Added
+- **`validate_timeline` checks the media clock** (its eighth check, run with
+  `formats`; inspect's Diagnose line counts it). FAIL when an asset's
+  `start` is not its file's timecode track by a frame or more: the #45 file
+  fails it. WARN when a QuickTime file with no timecode track is written on a
+  clock other than 0. Measured from the same ffprobe call as frame rate and
+  size; reported as not measured without ffprobe.
+- `fcpxml/media_clock.py`: the rule in one place (`read_clock`,
+  `clock_from_probe`, drop-frame-aware `smpte_frames`, `media_url`).
+
+### Tests
+`tests/test_media_clock.py` (39): the issue's repro, read back through the
+parser to the same file frames with and without timecode at 30, 29.97 NDF,
+29.97 DF and 23.976; NTSC in a film sequence; a 25 fps clock off the 30p grid
+never snapped before the file; Sony and Matroska timecode found and not used;
+missing media and no ffprobe; a Chinese folder with a space round-tripped
+and DTD-valid; the template, insert, connected and audio writers; the
+validator's FAIL, WARN, PASS and not-measured rows. 21 mutations, each red.
+
 ## [0.32.0] - 2026-11-13
 
 Proof you can read. Every picture the preview tools make now carries the

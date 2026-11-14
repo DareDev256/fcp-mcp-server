@@ -27,8 +27,9 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Optional
 
+from fcpxml.media_clock import IGNORED, TMCD, UNREAD, MediaClock, media_url, read_clock
 from fcpxml.models import TimeValue
-from fcpxml.rational import frame_duration_attr, nominal_fps
+from fcpxml.rational import frame_duration_attr, frame_duration_seconds, nominal_fps
 from fcpxml.writer import _create_asset_element, write_fcpxml
 
 
@@ -117,6 +118,13 @@ def edl_to_fcpxml(
     Both lists are reported rather than dropped: an operator who believes their
     grade came across, or that a relinked clip is present, finds out in Final
     Cut Pro otherwise.
+
+    ``clocks`` says where each source's clock starts. Final Cut puts an asset
+    on its file's timecode track, so a range's file time is written as
+    ``<asset start>`` plus that time (#45: at ``start="0s"`` an iPhone clip
+    with 18:03:22:05 imported as an empty timeline). Each entry is
+    ``{"source", "clock"}`` with a :class:`MediaClock`; a clock that was not
+    used or not read carries its reason in ``clock.note``.
     """
     if base_dir is None:
         base_dir = str(Path(out_path).parent)
@@ -140,15 +148,19 @@ def edl_to_fcpxml(
         furthest[cut["source"]] = max(current, cut["src_out"])
 
     asset_ids: dict[str, str] = {}
+    clocks: dict[str, MediaClock] = {}
     missing: list[str] = []
     for counter, (source, end) in enumerate(furthest.items(), start=2):
         asset_id = f"r{counter}"
         asset_ids[source] = asset_id
         if not Path(source).is_file():
             missing.append(source)
+        # The asset's clock is the FILE's (its tmcd track), not ours to pick.
+        clock = clocks[source] = read_clock(source)
         _create_asset_element(
-            resources, asset_id, Path(source).stem, f"file://{source}",
+            resources, asset_id, Path(source).stem, media_url(source),
             duration=TimeValue.from_seconds(float(end), fps).to_fcpxml(),
+            start=clock.start_attr,
         )
 
     # No `location`: the DTD marks it #IMPLIED, and a fabricated path is worse
@@ -177,12 +189,17 @@ def edl_to_fcpxml(
 
     offset = TimeValue.zero()
     for cut, duration in zip(cuts, durations):
+        # The range's in-point is FILE time, snapped to the sequence's frames
+        # as before; on a timecoded file it goes onto the file's clock.
+        clock = clocks[cut["source"]]
+        in_point = TimeValue.from_seconds(float(cut["src_in"]), fps)
         ET.SubElement(
             spine, 'asset-clip',
             ref=asset_ids[cut["source"]],
             offset=offset.to_fcpxml(),
             name=cut["label"],
-            start=TimeValue.from_seconds(float(cut["src_in"]), fps).to_fcpxml(),
+            start=clock.clip_start_attr(
+                Fraction(in_point.numerator, in_point.denominator), frame_duration_seconds(fps)),
             duration=duration.to_fcpxml(),
             format=format_id, tcFormat="NDF",
         )
@@ -202,4 +219,33 @@ def edl_to_fcpxml(
         "clips": len(cuts),
         "missing": missing,
         "ignored": ignored,
+        "clocks": [{"source": source, "clock": clock} for source, clock in clocks.items()],
     }
+
+
+def clock_lines(clocks: list[dict]) -> list[str]:
+    """What a reply says about each source's clock: the ones written on a
+    timecode, the timecodes not used, and the ones that could not be read
+    (whose clips Final Cut shows empty if the file turns out to carry one)."""
+    lines = []
+    for entry in clocks:
+        name, clock = Path(entry["source"]).name, entry["clock"]
+        if clock.source == TMCD:
+            lines.append(
+                f"On its timecode clock: {name} starts at {clock.timecode} "
+                f"({float(clock.rate):g} fps{' drop-frame' if clock.drop else ''}), "
+                f"so <asset start> is {clock.start_attr} and its clips are placed from there."
+            )
+        elif clock.source == IGNORED:
+            lines.append(f"Timecode not used: {name}: {clock.note}.")
+    unread = [e for e in clocks if e["clock"].source == UNREAD]
+    if unread:
+        reasons = sorted({e["clock"].note for e in unread})
+        lines.append(
+            "Clock not read, written at 0s ("
+            + "; ".join(reasons) + "): "
+            + ", ".join(Path(e["source"]).name for e in unread)
+            + ". If one carries a timecode track, Final Cut shows its clips empty; "
+            "author again where the media and ffprobe are present."
+        )
+    return lines

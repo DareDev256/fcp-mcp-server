@@ -1555,19 +1555,34 @@ class FCPXMLModifier:
         add_connected_clip, and add_audio_clip:
 
         1. If *in_point* and *out_point* are given → subclip range.
-        2. Else if *duration* is given → explicit duration, source start = 0.
-        3. Else → full asset duration, source start = 0.
+        2. Else if *duration* is given → explicit duration from the asset's start.
+        3. Else → full asset duration from the asset's start.
+
+        A clip's ``start`` is on its ASSET's clock, which begins at
+        ``<asset start>``: a camera clip with 01:00:00:00 timecode begins at
+        3600s, and a clip written at 0s asks for an hour of media before the
+        file starts. Final Cut shows it empty (the write-side twin of #45),
+        so a clip with no in-point starts where its asset does, and an
+        in-point before that is refused rather than guessed at.
 
         Returns:
             ``(clip_duration, source_start)`` TimeValue pair.
         """
+        origin = self._parse_time(asset.get('start') or '0s')
         if in_point and out_point:
             in_time = self._parse_time(in_point)
             out_time = self._parse_time(out_point)
+            if in_time < origin:
+                raise ValueError(
+                    f"in_point {in_point} is before asset '{asset.get('name', '')}' begins: "
+                    f"its clock starts at {asset.get('start')} (the file's timecode). "
+                    f"In- and out-points are on the asset's clock, as Final Cut writes a "
+                    f"clip's start; {in_point} into the file is {(origin + in_time).to_fcpxml()}."
+                )
             return out_time - in_time, in_time
         if duration:
-            return self._parse_time(duration), TimeValue.zero()
-        return self._parse_time(asset.get('duration', '0s')), TimeValue.zero()
+            return self._parse_time(duration), origin
+        return self._parse_time(asset.get('duration', '0s')), origin
 
     def _make_asset_clip(
         self,
@@ -3325,9 +3340,14 @@ class FCPXMLModifier:
                 asset_duration = f"{round(probed['duration'] * rate)}/{rate}s"
             else:
                 asset_duration = duration or "0s"
+            # The file's own clock (#45): a timecode track moves the asset.
+            from .media_clock import media_url, read_clock
+            from .media_intel import media_src_to_path
+            clock = read_clock(media_src_to_path(src))
             asset_elem = _create_asset_element(
-                resources, asset_id, Path(src).stem, src,
+                resources, asset_id, Path(src).stem, media_url(src),
                 duration=asset_duration,
+                start=clock.start_attr,
                 has_video="0", has_audio="1",
             )
             if probed:
@@ -3337,6 +3357,7 @@ class FCPXMLModifier:
             asset = {
                 'id': asset_id,
                 'name': Path(src).stem,
+                'start': clock.start_attr,
                 'duration': asset_duration,
                 'element': asset_elem,
             }
@@ -3346,10 +3367,12 @@ class FCPXMLModifier:
 
         clip_duration, source_start = self._resolve_clip_duration(asset, duration)
 
-        # Clamp so the clip never claims more media than the asset contains
+        # Clamp so the clip never claims more media than the asset contains.
+        # The asset ends at its start plus its duration, on its own clock.
         asset_duration_tv = self._parse_time(asset.get('duration', '0s'))
         if asset_duration_tv > TimeValue.zero():
-            available = asset_duration_tv - source_start
+            asset_end = self._parse_time(asset.get('start') or '0s') + asset_duration_tv
+            available = asset_end - source_start
             if available < TimeValue.zero():
                 raise ValueError(
                     f"Source start {source_start.to_fcpxml()} is beyond the end "

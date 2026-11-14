@@ -66,7 +66,7 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.32.0"
+__version__ = "0.33.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -2369,7 +2369,7 @@ def _audio_lines(tl, filepath: str) -> str:
 
 SHORT_CHECK = {"Flash Frames": "flash", "Gaps": "gap", "Offline media": "offline",
                "Transition handles": "handles", "Duplicate frames": "duplicate frames",
-               "Frame rate and size": "format"}
+               "Frame rate and size": "format", "Media clock": "clock"}
 
 
 def _diagnose_line(tl) -> str:
@@ -3133,6 +3133,52 @@ def _format_findings(tl):
 UPSCALE_WARN = Fraction(3, 2)  # a source the conform scales up more than this is a WARN
 
 
+def _clock_findings(tl):
+    """[(verdict, where, text)] per media file whose <asset start> is not the
+    clock Final Cut gives the file. Final Cut starts a file at its QuickTime
+    timecode track (tmcd), or at 0 without one, whatever the document says; a
+    clip written on another clock asks for frames the file does not have at
+    that time, and imports empty with no warning (#45). FAIL when the file has
+    a timecode track that disagrees by a frame or more; WARN when a QuickTime
+    file with no track is written on a clock that is not 0 (Final Cut ignores
+    a Sony XAVC timecode, for one). Measured with ffprobe; None when absent."""
+    from fcpxml import render as _render
+
+    if shutil.which("ffprobe") is None:
+        return None
+    out, seen = [], set()
+    for c in tl.all_clips():
+        media = getattr(c, "media", None)
+        path = media_src_to_path(getattr(c, "media_path", "") or "")
+        if media is None or media.still or not path or path in seen or not Path(path).is_file():
+            continue
+        seen.add(path)
+        facts = _render.stream_facts(path)
+        clock = (facts or {}).get("clock")
+        if clock is None:
+            continue
+        name, written = Path(path).name, Fraction(media.origin)
+        where = format_timecode(c.start)
+        if clock.source == "tmcd":
+            if abs(written - clock.origin) * clock.rate >= Fraction(1, 2):
+                out.append(("FAIL", where,
+                            f"{name}: <asset start> is {_seconds_attr(written)} but the file's timecode "
+                            f"track starts at {clock.timecode} ({clock.start_attr}); Final Cut plays it on "
+                            f"its own clock, so these clips import empty or on the wrong frames"))
+        elif clock.source in ("none", "ignored") and clock.quicktime and written != 0:
+            why = ("its timecode is outside a QuickTime timecode track, which Final Cut does not use"
+                   if clock.source == "ignored" else "the file has no QuickTime timecode track")
+            out.append(("WARN", where,
+                        f"{name}: <asset start> is {_seconds_attr(written)} but {why}, so Final Cut "
+                        f"starts it at 0s; if these clips import empty, this is why"))
+    return out
+
+
+def _seconds_attr(value: Fraction) -> str:
+    from fcpxml.rational import format_exact_seconds
+    return format_exact_seconds(Fraction(value))
+
+
 NOT_CHECKED = "loudness, true peak, black or frozen frames, audio sync"
 
 
@@ -3231,6 +3277,15 @@ def _diagnose(tl, checks=("all",)) -> tuple:
             rows.append(("INFO", "Frame rate and size", "—", ["not measured: ffprobe is not installed"]))
         else:
             row("Frame rate and size", formats)
+        clocks = _clock_findings(tl)
+        if clocks is None:
+            rows.append(("INFO", "Media clock", "—", ["not measured: ffprobe is not installed"]))
+        else:
+            row("Media clock", clocks)
+            if any(v == "FAIL" for v, _, _ in clocks):
+                fixes.append("Media clock: write each asset's start as its file's timecode (shown above) and move "
+                             "its clips' starts by the same amount; `generate · import_edl_json` and the edit "
+                             "tools write it that way.")
     return rows, issues, fixes
 
 
@@ -4179,7 +4234,7 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
     """
     import json
 
-    from fcpxml.edl import EDLValidationError, edl_to_fcpxml
+    from fcpxml.edl import EDLValidationError, clock_lines, edl_to_fcpxml
 
     filepath = arguments.get("filepath")
     if not filepath:
@@ -4218,6 +4273,7 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
             "it; relink in FCP or with deliver.relink_media): "
             + ", ".join(result["missing"])
         )
+    lines.extend(clock_lines(result["clocks"]))
     lines.append(
         "Preview it with preview.preview_render, or import with "
         "deliver.push_to_fcp."
