@@ -10,10 +10,13 @@ import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
+from fractions import Fraction
 from typing import Any, Dict, List, Optional
 
+from .media_clock import media_url, read_clock
+from .media_intel import media_src_to_path
 from .models import TimeValue
-from .rational import frame_duration_attr, nominal_fps
+from .rational import frame_duration_attr, frame_duration_seconds, nominal_fps
 from .writer import (
     _create_asset_element,
     _sanitize_xml_value,
@@ -217,6 +220,7 @@ def apply_template(
     clips_map: Dict[str, ClipSpec],
     output_path: str,
     fps: float = 24.0,
+    clocks: Optional[list] = None,
 ) -> str:
     """Fill a template with clips and write the resulting FCPXML.
 
@@ -225,6 +229,9 @@ def apply_template(
         clips_map: Dict mapping slot names to ClipSpec objects.
         output_path: Where to write the generated FCPXML.
         fps: Frame rate for the output timeline.
+        clocks: When a list, each asset written from a ``src`` is appended
+            as ``{"source", "clock"}`` (the clock it was written on), for
+            the reply to report (``media_clock.clock_lines``).
 
     Returns:
         The output file path.
@@ -261,6 +268,10 @@ def apply_template(
 
     # Create assets for each filled slot
     asset_map: Dict[str, str] = {}  # slot_name → asset_id
+    # slot_name → where its clip starts on its asset's clock. A file's clock
+    # is its timecode track's (#45): a clip at 0s on an 18:03:22:05 file asks
+    # for frames before the file begins, and Final Cut shows it empty.
+    clip_starts: Dict[str, str] = {}
     asset_counter = 2
     for slot_name, spec in clips_map.items():
         if spec.asset_id:
@@ -271,13 +282,18 @@ def apply_template(
             slot = next((s for s in template.slots if s.name == slot_name), None)
             dur = spec.duration or (slot.default_duration if slot else 5.0)
             dur_tv = TimeValue.from_seconds(dur, fps)
+            clock = read_clock(media_src_to_path(spec.src))
+            if clocks is not None:
+                clocks.append({"source": media_src_to_path(spec.src), "clock": clock})
             _create_asset_element(
-                resources, aid, spec.name, spec.src,
+                resources, aid, spec.name, media_url(spec.src),
                 duration=dur_tv.to_fcpxml(),
+                start=clock.start_attr,
                 has_video="1" if (not slot or slot.slot_type != "audio") else "0",
                 has_audio="1",
             )
             asset_map[slot_name] = aid
+            clip_starts[slot_name] = clock.clip_start_attr(Fraction(0), frame_duration_seconds(fps))
 
     # Library/event/project structure
     # No `location` — see the note in fcpxml/edl.py.
@@ -326,7 +342,7 @@ def apply_template(
                                       ref=aid,
                                       offset=current_offset.to_fcpxml(),
                                       name=_sanitize_xml_value(spec.name, 512),
-                                      start="0s",
+                                      start=clip_starts.get(slot.name, "0s"),
                                       duration=dur_tv.to_fcpxml(),
                                       format=format_id,
                                       tcFormat="NDF")
@@ -369,7 +385,7 @@ def apply_template(
                                       lane=str(slot.lane),
                                       offset="0s",
                                       name=_sanitize_xml_value(spec.name, 512),
-                                      start="0s",
+                                      start=clip_starts.get(slot.name, "0s"),
                                       duration=dur_tv.to_fcpxml(),
                                       audioRole=slot.role or "music")
         else:
@@ -379,7 +395,7 @@ def apply_template(
                                       lane=str(slot.lane),
                                       offset="0s",
                                       name=_sanitize_xml_value(spec.name, 512),
-                                      start="0s",
+                                      start=clip_starts.get(slot.name, "0s"),
                                       duration=dur_tv.to_fcpxml())
             if slot.role:
                 connected.set('videoRole', slot.role)
