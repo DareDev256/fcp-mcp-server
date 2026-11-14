@@ -11,6 +11,7 @@ from .models import (
     MARKER_XML_TAGS,
     Clip,
     ConnectedClip,
+    ConnectedStoryline,
     Keyword,
     Marker,
     MarkerType,
@@ -37,6 +38,12 @@ _CONNECTED_CLIP_TAGS = (
     'asset-clip', 'clip', 'video', 'audio', 'title', 'ref-clip',
     'mc-clip', 'sync-clip', 'caption',
 )
+
+# A connected storyline. Apple's DTD spells it <spine lane="N" offset="...">
+# (spine is an anchor item, so it hangs off a clip or a gap); <storyline> is
+# not in any FCPXML DTD and is read only so files shaped for it by 0.32 and
+# earlier keep their reading.
+_CONNECTED_STORYLINE_TAGS = ('spine', 'storyline')
 
 # Tags whose media path comes from a <media> resource rather than an <asset>.
 _MEDIA_REF_TAGS = ('mc-clip', 'ref-clip')
@@ -594,16 +601,21 @@ class FCPXMLParser:
         return result
 
     def _iter_connected_elements(self, parent_elem: ET.Element, parent_name: str,
-                                 parent_offset: int, parent_start: int):
+                                 parent_offset: int, parent_start: int,
+                                 storylines: Optional[list] = None):
         """Yield parsed :class:`ConnectedClip` objects hanging off ``parent_elem``.
 
         Shared iteration logic for both spine-clip and gap-attached connected
-        clips — walks direct children with a ``lane`` attribute and
-        ``<storyline>`` wrappers, without prescribing where the results get
-        stored. ``parent_offset`` is where the parent sits on the timeline
-        (frames) and ``parent_start`` is where its local clock begins; a
-        child's ``offset`` is written in that local clock, so its timeline
-        position is ``parent_offset + (offset - parent_start)``.
+        clips — walks direct children with a ``lane`` attribute and connected
+        storylines (``<spine lane>``, and the legacy ``<storyline>``), without
+        prescribing where the results get stored. ``parent_offset`` is where
+        the parent sits on the timeline (frames) and ``parent_start`` is
+        where its local clock begins; a child's ``offset`` is written in that
+        local clock, so its timeline position is
+        ``parent_offset + (offset - parent_start)``. A storyline's items are
+        on the storyline's own clock instead (see
+        :meth:`_parse_connected_storyline`); the storyline itself is appended
+        to ``storylines`` when given.
         """
         for child in parent_elem:
             lane = child.get('lane')
@@ -612,21 +624,89 @@ class FCPXMLParser:
                     child, int(lane), parent_name, parent_offset, parent_start)
                 if connected:
                     yield connected
-            elif child.tag == 'storyline':
-                lane_val = int(child.get('lane', '1'))
-                for sub_elem in child:
-                    if sub_elem.tag in _CONNECTED_CLIP_TAGS:
-                        connected = self._parse_one_connected_clip(
-                            sub_elem, lane_val, parent_name, parent_offset, parent_start)
-                        if connected:
-                            yield connected
+            elif child.tag in _CONNECTED_STORYLINE_TAGS:
+                storyline = self._parse_connected_storyline(
+                    child, parent_elem, parent_name, parent_offset)
+                if storylines is not None:
+                    storylines.append(storyline)
+                yield from storyline.clips
+
+    def _parse_connected_storyline(self, storyline: ET.Element, parent_elem: ET.Element,
+                                   parent_name: str, parent_offset: int) -> ConnectedStoryline:
+        """A connected storyline and every item in it, placed on the timeline.
+
+        Its ``offset`` is on the PARENT's clock (which starts at the parent's
+        ``start``); its items' offsets are on its OWN clock, which starts at
+        0. So an item plays at
+        ``parent position + (storyline offset - parent start) + item offset``,
+        measured in exact seconds and rounded to a frame once. Items follow
+        one another like the primary storyline's: clips and gaps take time, a
+        transition takes none and sits on the cut before it (the storyline's
+        first frame when it comes first). A clip's ``offset`` is kept on the
+        parent's clock (storyline offset + item offset), as it is for every
+        connected clip. The legacy ``<storyline>`` carries no offset: its
+        clock is the parent's, which is how 0.32 and earlier read it.
+        """
+        lane = int(storyline.get('lane', '1'))
+        frame = Fraction(1) / rational_fps(self.frame_rate)
+        try:
+            own_offset = parse_seconds(storyline.get('offset', '0s'))
+            base = own_offset - parse_seconds(parent_elem.get('start', '0s'))
+        except ValueError:
+            own_offset = base = Fraction(0)
+
+        def frames_at(local: Fraction) -> int:
+            return parent_offset + int(((base + local) / frame + Fraction(1, 2)) // 1)
+
+        def seconds(item: ET.Element, attr: str, default: Fraction) -> Fraction:
+            try:
+                return parse_seconds(item.get(attr)) if item.get(attr) is not None else default
+            except ValueError:
+                return default
+
+        record = ConnectedStoryline(
+            lane=lane,
+            start=Timecode(frames=frames_at(Fraction(0)), frame_rate=self.frame_rate),
+            duration=Timecode(frames=0, frame_rate=self.frame_rate),
+            parent_clip_name=parent_name,
+        )
+        running = Fraction(0)  # where the next item starts, on the storyline's clock
+        end = Fraction(0)
+        for item in storyline:
+            local = seconds(item, 'offset', running)
+            if item.tag == 'transition':
+                transition = self._parse_transition(item, frames_at(running), running)
+                if transition:
+                    transition.lane = lane
+                    record.transitions.append(transition)
+                continue
+            length = seconds(item, 'duration', Fraction(0))
+            if item.tag in _CONNECTED_CLIP_TAGS:
+                clip = self._parse_one_connected_clip(
+                    item, lane, parent_name,
+                    timeline_frames=frames_at(local),
+                    parent_clock_offset=own_offset + local)
+                if clip:
+                    record.clips.append(clip)
+            elif item.tag == 'gap':
+                record.gaps.append((
+                    Timecode(frames=frames_at(local), frame_rate=self.frame_rate),
+                    Timecode(frames=int((length / frame + Fraction(1, 2)) // 1), frame_rate=self.frame_rate),
+                ))
+            else:
+                record.skipped.append(item.tag)
+            running = local + length
+            end = max(end, running)
+        record.duration = Timecode(frames=int((end / frame + Fraction(1, 2)) // 1), frame_rate=self.frame_rate)
+        return record
 
     def _parse_connected_clips(self, parent_elem: ET.Element,
                                 parent_clip: Clip, timeline: Timeline):
         """Parse connected clips attached to a primary storyline clip."""
         for connected in self._iter_connected_elements(
                 parent_elem, parent_clip.name,
-                parent_clip.start.frames, parent_clip.source_start.frames):
+                parent_clip.start.frames, parent_clip.source_start.frames,
+                timeline.storylines):
             parent_clip.connected_clips.append(connected)
             timeline.connected_clips.append(connected)
 
@@ -634,16 +714,27 @@ class FCPXMLParser:
                                     gap_start: int, timeline: Timeline):
         """Parse connected clips attached to gap elements."""
         for connected in self._iter_connected_elements(
-                gap_elem, f"gap@{gap_offset}", gap_offset, gap_start):
+                gap_elem, f"gap@{gap_offset}", gap_offset, gap_start, timeline.storylines):
             timeline.connected_clips.append(connected)
 
     def _parse_one_connected_clip(self, elem: ET.Element, lane: int, parent_name: str,
                                    parent_offset: int = 0, parent_start: int = 0,
+                                   timeline_frames: Optional[int] = None,
+                                   parent_clock_offset: Optional[Fraction] = None,
                                    ) -> Optional[ConnectedClip]:
-        """Parse a single connected clip element."""
+        """Parse a single connected clip element.
+
+        ``timeline_frames`` and ``parent_clock_offset`` are given for an item
+        of a connected storyline, whose own ``offset`` is on the storyline's
+        clock: where it plays, and its offset restated on the parent's clock.
+        """
         duration = self._tc(elem, 'duration')
         start = self._tc(elem, 'start')
         offset = self._tc(elem, 'offset')
+        if parent_clock_offset is not None:
+            offset = Timecode(
+                frames=int(parent_clock_offset * rational_fps(self.frame_rate)),
+                frame_rate=self.frame_rate)
         ref = elem.get('ref', '')
         media_path = self._media_path_for(elem)
         role = elem.get('audioRole', '') or elem.get('videoRole', '')
@@ -652,7 +743,8 @@ class FCPXMLParser:
             text = ''.join(t.text or '' for t in elem.iter('text')).strip()
         name = self._name_for(elem, text or 'Untitled')
         timeline_start = Timecode(
-            frames=parent_offset + offset.frames - parent_start,
+            frames=(timeline_frames if timeline_frames is not None
+                    else parent_offset + offset.frames - parent_start),
             frame_rate=self.frame_rate,
         )
 

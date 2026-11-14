@@ -3,6 +3,35 @@
 ## [Unreleased]
 
 ### Fixed
+- **Clips in a connected storyline were silently dropped.** Until now, every
+  clip in a connected storyline from a real Final Cut export was missing from
+  the model, so from every reader and from the render, and nothing said so.
+  Apple's DTD has no `<storyline>` element: a connected storyline is a
+  `<spine lane="N" offset="...">` hanging off a spine clip or a gap, and the
+  parser and the writer knew only the invented `<storyline>` tag. On two
+  real Final Cut 1.14 exports (not committed), 16 clips in 13 storylines and
+  4 clips in 4 storylines were read as nothing: 129 connected clips became
+  145, and 26 across one library's timelines became 30. A storyline keeps
+  its own clock, which starts at 0: its `offset` is on the parent's clock
+  and its items' offsets on its own, so an item plays at parent position +
+  (storyline offset - parent start) + item offset, in exact seconds rounded
+  to a frame once. Its clips join `connected_clips` on its lane (their
+  `offset` restated on the parent's clock, as for every connected clip), so
+  `analyze_timeline`, `list_connected_clips`, `view`, `preview_timeline`,
+  `detect_gaps` and `preview_render`'s graph all see them. Its gaps and
+  transitions are kept on the new `Timeline.storylines`, so every item is
+  accounted for; a transition sits on the cut before it (the storyline's
+  first frame when it comes first).
+  `preview_render` draws those transitions as cuts and says so. The legacy
+  `<storyline>` still reads as before (no offset: the parent's clock).
+- **The writer placed storyline clips on the wrong clock, and snapping could
+  break a storyline.** `iter_connected_clips` now yields a storyline's clips
+  with the storyline as their host, and `connected_timeline_offset` /
+  `connected_offset_attribute` (now instance methods) put them on its own
+  clock, so `timeline_origin` and `timeline_marker_seconds` count them where
+  they play. `snap_connected_clips` moves a connected storyline as one, by
+  its `offset`, and keeps every cut inside it: moving one of its clips alone
+  would overlap the next or open a hole Final Cut never wrote.
 - **Markers on a gap were written and never read back.** On a gap-based
   edit (the spine is one `<gap>` and every clip hangs off it, as
   `examples/music-video.fcpxml` is), `mark · batch_add_markers` writes each
@@ -33,6 +62,24 @@
   frames") stays plural.
 
 ### Gates, each broken once in the real code and seen red (2026-11-13)
+- `tests/test_connected_storylines.py`: a fixture in the real shape (a
+  storyline under a trimmed spine clip with two clips in sequence, a
+  transition between them and a gap inside; one under a broadcast gap whose
+  first item is a transition) is checked against positions the test
+  computes from the XML, pinned to a hand-worked table: the parse, the
+  storylines' clips, gaps and transitions, `analyze_timeline`,
+  `list_connected_clips`, `view`'s payload, `preview_timeline`'s rows,
+  `detect_gaps`, the render graph's lane tracks and its note, the writer's
+  placement and its inverse, a snap and the legacy tag. Red on 0.32.0 (6
+  of 8). `FCP_MCP_REAL_FCPXML=<export>` runs one more against a real file
+  (skipped without it): every item of every connected spine accounted for.
+  The fixture in `tests/test_features_v05.py` moved from the invented
+  `<storyline>` to `<spine lane offset>`. Mutations, all red: the spine
+  branch dropped, the storyline's offset ignored, its children read on the
+  parent's clock, its transitions dropped (each in the parser and, the
+  first three, in the writer); a snap moving storyline clips one by one; a
+  storyline clip's offset not restated on the parent's clock; its gaps
+  dropped; the render note removed.
 - `tests/test_gap_markers.py`: three markers (standard, chapter, to-do)
   written with the real `batch_add_markers` on a copy of music-video come
   back as timeline markers at the positions the test computes from the XML
@@ -54,10 +101,18 @@
 ### Not done
 - A gap's `<keyword>` and `<rating>` are still not read: `Timeline` has no
   field for them, so reading them is a model change, not a parser fix.
-- A connected storyline written as the DTD spells it, `<spine lane="N">`
-  under a gap or a clip, is skipped with every clip in it; the parser only
-  knows a `<storyline>` tag. `<audition>` as an anchored item is skipped
-  too. Both need storyline offset handling and their own tests.
+- `<audition>` as an anchored item or inside a connected storyline is not
+  read (in a storyline it is counted in `skipped` and keeps its time).
+  Clips anchored to a clip INSIDE a connected storyline are not read
+  (neither real export has one).
+- A transition inside a connected storyline is in the model but not drawn
+  by `view` or the text timeline, and the proxy cuts it (named in the
+  render's notes).
+- `enabled="0"` is not read on any connected clip, in a storyline or not:
+  a disabled clip is listed and drawn.
+- The XMEML / Resolve export places every connected clip by its raw
+  `offset`, which is on the parent's clock: right only when the parent's
+  `offset` equals its `start`. Older than this change; not fixed here.
 - `analysis-marker` and `hidden-clip-marker` are not parsed on any host.
 
 ## [0.32.0] - 2026-11-13

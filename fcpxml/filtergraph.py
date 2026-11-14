@@ -514,6 +514,15 @@ def compile_timeline(
             )
             continue
         lanes.append(segment)
+    # A connected storyline's clips are lane clips like any other (above);
+    # the transitions between them are not drawn, and say so.
+    in_storylines = [t for s in getattr(timeline, "storylines", None) or [] for t in s.transitions]
+    if in_storylines:
+        notes.append(
+            f"{plural(len(in_storylines), 'transition')} inside connected storylines drawn as "
+            f"cuts (lane {', '.join(str(n) for n in sorted({t.lane for t in in_storylines}))}): "
+            f"the proxy blends transitions on the primary storyline only"
+        )
 
     compiled, transition_notes = (
         _place_transitions(list(getattr(timeline, "transitions", None) or []), spine)

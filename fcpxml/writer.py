@@ -151,6 +151,9 @@ SPINE_ELEMENT_TAGS = ('clip', 'asset-clip', 'video', 'audio', 'gap', 'transition
 # CLIP_TAGS because titles and connected audio are lane-bearing too, and
 # matches ``parser._CONNECTED_CLIP_TAGS``.
 CONNECTED_CLIP_TAGS = ('asset-clip', 'clip', 'video', 'audio', 'title', 'ref-clip')
+# A connected storyline: <spine lane="N" offset="..."> in Apple's DTD, plus the
+# invented <storyline> that 0.32 and earlier read (``parser._CONNECTED_STORYLINE_TAGS``).
+CONNECTED_STORYLINE_TAGS = ('spine', 'storyline')
 
 
 def _exact(seconds: Fraction) -> TimeValue:
@@ -1244,15 +1247,18 @@ class FCPXMLModifier:
         """Every lane-bearing clip under the spine as ``(lane, element, host)``.
 
         Covers both attachment forms: a ``lane`` attribute on a direct child
-        of a spine element (including a ``<gap>``), and a ``<storyline
-        lane="n">`` wrapper holding several clips.  Mirrors
+        of a spine element (including a ``<gap>``), and a connected storyline
+        (``<spine lane="n" offset="...">``, or the legacy ``<storyline>``)
+        holding several clips.  Mirrors
         ``FCPXMLParser._iter_connected_elements`` so read and write agree on
         what counts as connected.
 
-        *host* is the spine element the clip hangs off, and it is not
-        optional bookkeeping — a connected clip's ``offset`` is expressed in
-        its host's time frame, so the host is required to place it on the
-        timeline at all.  See :meth:`connected_timeline_offset`.
+        *host* is the element whose clock the clip's ``offset`` is written
+        on, and it is not optional bookkeeping: the host is required to
+        place the clip on the timeline at all.  For a direct connected clip
+        it is the spine element it hangs off; for a clip in a connected
+        storyline it is the storyline, whose clock starts at 0.  See
+        :meth:`connected_timeline_offset`.
         """
         found: list[tuple[int, ET.Element, ET.Element]] = []
         for parent in self._get_spine().findall('*'):
@@ -1262,15 +1268,33 @@ class FCPXMLModifier:
                 lane_attr = child.get('lane')
                 if lane_attr is not None and child.tag in CONNECTED_CLIP_TAGS:
                     found.append((int(lane_attr), child, parent))
-                elif child.tag == 'storyline':
+                elif child.tag in CONNECTED_STORYLINE_TAGS:
                     lane = int(child.get('lane', '1'))
                     for sub in child:
                         if sub.tag in CONNECTED_CLIP_TAGS:
-                            found.append((lane, sub, parent))
+                            found.append((lane, sub, child))
         return found
 
-    @staticmethod
-    def connected_timeline_offset(element: ET.Element, host: ET.Element) -> Fraction:
+    def iter_connected_storylines(self) -> list[tuple[int, ET.Element, ET.Element]]:
+        """Every connected storyline as ``(lane, storyline, host)``; *host* is
+        the spine element it hangs off, on whose clock its ``offset`` is."""
+        found: list[tuple[int, ET.Element, ET.Element]] = []
+        for parent in self._get_spine().findall('*'):
+            if parent.tag not in SPINE_ELEMENT_TAGS:
+                continue
+            for child in parent:
+                if child.tag in CONNECTED_STORYLINE_TAGS:
+                    found.append((int(child.get('lane', '1')), child, parent))
+        return found
+
+    def _storyline_host(self, storyline: ET.Element) -> ET.Element:
+        for parent in self._get_spine().findall('*'):
+            for child in parent:
+                if child is storyline:
+                    return parent
+        raise ValueError("connected storyline is not attached to the primary storyline")
+
+    def connected_timeline_offset(self, element: ET.Element, host: ET.Element) -> Fraction:
         """Where a connected clip actually sits on the timeline, in seconds.
 
         A connected clip's ``offset`` is measured in its host element's
@@ -1289,21 +1313,45 @@ class FCPXMLModifier:
 
         Taking the raw attribute would have put every clip in the second
         project one hour past the end of its own timeline.
+
+        When *host* is a connected storyline, the clip's ``offset`` is on the
+        storyline's own clock, which starts at 0 where the storyline starts:
+        ``host position + (storyline.offset - host.start) + element.offset``.
         """
+        if host.tag in CONNECTED_STORYLINE_TAGS:
+            return (self.connected_timeline_offset(host, self._storyline_host(host))
+                    + parse_seconds(element.get('offset', '0s')))
         return (
             parse_seconds(host.get('offset', '0s'))
             + parse_seconds(element.get('offset', '0s'))
             - parse_seconds(host.get('start', '0s'))
         )
 
-    @staticmethod
-    def connected_offset_attribute(timeline_seconds: Fraction, host: ET.Element) -> Fraction:
+    def connected_offset_attribute(self, timeline_seconds: Fraction, host: ET.Element) -> Fraction:
         """Inverse of :meth:`connected_timeline_offset` — what to write back."""
+        if host.tag in CONNECTED_STORYLINE_TAGS:
+            return timeline_seconds - self.connected_timeline_offset(host, self._storyline_host(host))
         return (
             parse_seconds(host.get('start', '0s'))
             + timeline_seconds
             - parse_seconds(host.get('offset', '0s'))
         )
+
+    def _storyline_extent(self, storyline: ET.Element) -> tuple[Fraction, Fraction]:
+        """(timeline start of its first item, its length) for a connected storyline."""
+        spans = []
+        running = Fraction(0)
+        for item in storyline:
+            if item.tag == 'transition':
+                continue
+            local = (parse_seconds(item.get('offset')) if item.get('offset') is not None else running)
+            running = local + parse_seconds(item.get('duration', '0s'))
+            spans.append((local, running))
+        zero = self.connected_timeline_offset(storyline, self._storyline_host(storyline))
+        if not spans:
+            return zero, Fraction(0)
+        first = min(a for a, _ in spans)
+        return zero + first, max(b for _, b in spans) - first
 
     def timeline_origin(self) -> Fraction:
         """The timeline's zero point in absolute seconds.
@@ -1432,9 +1480,16 @@ class FCPXMLModifier:
         if not markers:
             return report
 
+        # A clip in a connected storyline is magnetic to its neighbours, as
+        # on the primary storyline: moving one alone would overlap the next
+        # or open a hole Final Cut never wrote. The storyline moves as one,
+        # by its own offset, and keeps every cut inside it.
         lanes: Dict[int, list] = {}
         for lane, element, host in self.iter_connected_clips():
-            lanes.setdefault(lane, []).append((element, host))
+            if host.tag not in CONNECTED_STORYLINE_TAGS:
+                lanes.setdefault(lane, []).append((element, host))
+        for lane, storyline, host in self.iter_connected_storylines():
+            lanes.setdefault(lane, []).append((storyline, host))
 
         for lane in sorted(lanes):
             if lane < 0 and not include_audio_lanes:
@@ -1446,16 +1501,20 @@ class FCPXMLModifier:
             # attribute — the two differ by the host's start on a real
             # export. Everything below reasons in timeline seconds and
             # converts back only at the moment of writing.
+            def entry(element: ET.Element, host: ET.Element) -> Dict[str, Any]:
+                if element.tag in CONNECTED_STORYLINE_TAGS:
+                    begins, length = self._storyline_extent(element)
+                    return {'element': element, 'host': host, 'offset': begins, 'duration': length,
+                            'storyline': begins - self.connected_timeline_offset(element, host)}
+                return {
+                    'element': element,
+                    'host': host,
+                    'offset': self.connected_timeline_offset(element, host),
+                    'duration': parse_seconds(element.get('duration', '0s')),
+                }
+
             entries = sorted(
-                (
-                    {
-                        'element': element,
-                        'host': host,
-                        'offset': self.connected_timeline_offset(element, host),
-                        'duration': parse_seconds(element.get('duration', '0s')),
-                    }
-                    for element, host in lanes[lane]
-                ),
+                (entry(element, host) for element, host in lanes[lane]),
                 key=lambda e: e['offset'],
             )
 
@@ -1463,6 +1522,9 @@ class FCPXMLModifier:
                 report['considered'] += 1
                 element = entry['element']
                 name = element.get('name', element.tag)
+                if 'storyline' in entry:
+                    first = next((c for c in element if c.tag != 'transition'), None)
+                    name = f"storyline from {first.get('name', first.tag) if first is not None else 'nothing'}"
                 cut = entry['offset'] - origin
                 where = {'name': name, 'lane': lane, 'at_seconds': float(cut)}
 
@@ -1515,8 +1577,11 @@ class FCPXMLModifier:
                         })
                         continue
 
+                # a storyline's offset is where its clock's 0 falls, which
+                # its first item may follow; that distance moves with it
+                written = new_offset - entry.get('storyline', Fraction(0))
                 element.set('offset', format_seconds(
-                    self.connected_offset_attribute(new_offset, entry['host']),
+                    self.connected_offset_attribute(written, entry['host']),
                     frame_duration,
                 ))
                 entry['offset'] = new_offset

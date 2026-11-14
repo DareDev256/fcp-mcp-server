@@ -50,9 +50,9 @@ CONNECTED_CLIPS_XML = """<?xml version="1.0" encoding="UTF-8"?>
                             <asset-clip ref="r5" lane="1" offset="2400/24s" name="Title_Intro" start="0s" duration="120/24s"/>
                         </gap>
                         <asset-clip ref="r2" offset="2520/24s" name="Interview_2" start="2400/24s" duration="2280/24s" audioRole="dialogue" videoRole="video">
-                            <storyline lane="2">
+                            <spine lane="2" offset="2448/24s">
                                 <asset-clip ref="r3" offset="0s" name="BRoll_Street" start="480/24s" duration="240/24s"/>
-                            </storyline>
+                            </spine>
                         </asset-clip>
                     </spine>
                 </sequence>
@@ -194,6 +194,10 @@ class TestConnectedClips:
             street = [c for c in tl.connected_clips if c.name == "BRoll_Street"]
             assert len(street) == 1
             assert street[0].lane == 2
+            # a connected storyline is <spine lane offset> (there is no
+            # <storyline> in Apple's DTD): its offset on Interview_2's clock
+            # (from 100s) is 102s, so BRoll_Street plays 2s into Interview_2
+            assert street[0].timeline_start.seconds == 107
         finally:
             os.unlink(path)
 

@@ -831,6 +831,31 @@ class Transition:
     # centres a transition on its cut by default, but the document says where
     # it really begins (its own ``offset``); None means "assume centred".
     lead: Optional[Timecode] = None
+    # 0 on the primary storyline; N inside a connected storyline on lane N.
+    lane: int = 0
+
+
+@dataclass
+class ConnectedStoryline:
+    """A connected (secondary) storyline: ``<spine lane="N" offset="...">``.
+
+    Apple's DTD has no ``<storyline>`` element: a connected storyline is a
+    ``<spine>`` anchored to a spine clip or a gap like a connected clip. Its
+    ``offset`` is on the parent's clock (which starts at the parent's
+    ``start``); its items' offsets are on its OWN clock, which starts at 0.
+    ``start`` is where that 0 falls on the timeline. Its clips are also in
+    ``Timeline.connected_clips`` (so every reader sees them); the gaps and
+    transitions between them live only here, so a reader can account for
+    every item. ``skipped`` names any item the parser does not read.
+    """
+    lane: int
+    start: Timecode
+    duration: Timecode
+    parent_clip_name: str = ""
+    clips: List[ConnectedClip] = field(default_factory=list)
+    gaps: List[Tuple[Timecode, Timecode]] = field(default_factory=list)  # (timeline start, duration)
+    transitions: List[Transition] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -847,6 +872,7 @@ class Timeline:
     markers: List[Marker] = field(default_factory=list)
     connected_clips: List[ConnectedClip] = field(default_factory=list)
     compound_clips: List[CompoundClip] = field(default_factory=list)
+    storylines: List[ConnectedStoryline] = field(default_factory=list)
 
     @property
     def total_clips(self) -> int:
