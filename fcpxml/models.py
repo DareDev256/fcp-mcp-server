@@ -318,6 +318,13 @@ class TimeValue:
 
         # Timecode format: "HH:MM:SS:FF" or "HH:MM:SS;FF"
         if ':' in tc or ';' in tc:
+            # A drop-frame label (";") at 29.97 or 59.94 names a frame by the
+            # drop-frame count: 01:00:00;00 is 107892 frames, not 108000.
+            if ';' in tc and tc.count(':') + tc.count(';') == 3:
+                from .media_clock import drop_per_minute, smpte_frames
+                rate = rational_fps(fps)
+                if drop_per_minute(rate):
+                    return cls._from_frames(smpte_frames(tc, rate), fps)
             parts = tc.replace(';', ':').split(':')
             # Non-drop timecode counts `nominal` frames per labelled second
             # (24 at 23.98), which is not the same number as the real rate.
@@ -516,10 +523,18 @@ class Timecode:
     frames: int
     frame_rate: float = 24.0
     drop_frame: bool = False
+    # The value as written, when it is not a whole number of frames at
+    # frame_rate: a clip's source start on a 29.97 drop-frame asset in a 30p
+    # sequence (0.33). frames stays the floor, for the frame-based readers;
+    # seconds read this. Not compared, so equality is about frames as before.
+    exact: Optional[Fraction] = field(default=None, compare=False, repr=False)
 
     @property
     def _exact_seconds(self) -> Fraction:
-        """Exact seconds for this frame count at the exact frame rate."""
+        """Exact seconds for this frame count at the exact frame rate, or the
+        value as written when the parser kept one (``exact``)."""
+        if self.exact is not None:
+            return self.exact
         return self.frames * frame_duration_seconds(self.frame_rate)
 
     @property
@@ -536,7 +551,17 @@ class Timecode:
         return self.frames
 
     def to_smpte(self) -> str:
-        """Convert to SMPTE timecode string (HH:MM:SS:FF)."""
+        """Convert to SMPTE timecode string (HH:MM:SS:FF).
+
+        Drop-frame at 29.97 and 59.94 skips labels (``;``), so its label is
+        not a plain division of the frame count; it is
+        ``media_clock.smpte_label`` (0.33: it printed non-drop arithmetic
+        behind a ``;``, 3.6s late an hour). Elsewhere ``;`` is only a mark.
+        """
+        from .media_clock import drop_per_minute, smpte_label
+        rate = rational_fps(self.frame_rate)
+        if self.drop_frame and drop_per_minute(rate):
+            return smpte_label(self.frames, rate, drop=True)
         nominal = nominal_fps(self.frame_rate)
         total_seconds, frames = divmod(self.frames, nominal)
         hours = total_seconds // 3600

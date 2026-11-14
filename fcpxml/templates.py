@@ -220,6 +220,7 @@ def apply_template(
     clips_map: Dict[str, ClipSpec],
     output_path: str,
     fps: float = 24.0,
+    clocks: Optional[list] = None,
 ) -> str:
     """Fill a template with clips and write the resulting FCPXML.
 
@@ -228,6 +229,9 @@ def apply_template(
         clips_map: Dict mapping slot names to ClipSpec objects.
         output_path: Where to write the generated FCPXML.
         fps: Frame rate for the output timeline.
+        clocks: When a list, each asset written from a ``src`` is appended
+            as ``{"source", "clock"}`` (the clock it was written on), for
+            the reply to report (``media_clock.clock_lines``).
 
     Returns:
         The output file path.
@@ -279,6 +283,8 @@ def apply_template(
             dur = spec.duration or (slot.default_duration if slot else 5.0)
             dur_tv = TimeValue.from_seconds(dur, fps)
             clock = read_clock(media_src_to_path(spec.src))
+            if clocks is not None:
+                clocks.append({"source": media_src_to_path(spec.src), "clock": clock})
             _create_asset_element(
                 resources, aid, spec.name, media_url(spec.src),
                 duration=dur_tv.to_fcpxml(),

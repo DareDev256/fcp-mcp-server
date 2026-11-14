@@ -124,6 +124,21 @@ def _rate(text) -> Optional[Fraction]:
     return value if value > 0 else None
 
 
+_NTSC = tuple(Fraction(n * 1000, 1001) for n in (24, 30, 48, 60, 120))
+
+
+def exact_rate(rate: Fraction) -> Fraction:
+    """A timecode track's rate as the exact NTSC fraction it stands for.
+
+    Some files carry 29.97 as ``2997/100``: it is ``30000/1001``, and only
+    the exact value counts drop-frame labels and lands on Final Cut's
+    timebase (``107999892/30000s``, not ``10800000/2997s``)."""
+    for ntsc in _NTSC:
+        if abs(rate - ntsc) < Fraction(1, 100):
+            return ntsc
+    return rate
+
+
 def nominal_rate(rate: Fraction) -> int:
     """Frames per labelled second: 30 at 29.97, 24 at 23.976."""
     return max(1, int(round(rate)))
@@ -163,6 +178,23 @@ def smpte_frames(label: str, rate: Fraction) -> int:
     return frames
 
 
+def smpte_label(frames: int, rate: Fraction, drop: bool = False) -> str:
+    """The SMPTE label of frame *frames* at *rate*: the inverse of
+    :func:`smpte_frames`. Drop-frame (29.97, 59.94) adds back the labels a
+    minute skips, except every tenth minute."""
+    nominal = nominal_rate(rate)
+    skip = drop_per_minute(rate) if drop else 0
+    if skip:
+        per_ten = nominal * 600 - 9 * skip
+        per_minute = nominal * 60 - skip
+        tens, rest = divmod(frames, per_ten)
+        frames += 9 * skip * tens + (skip * ((rest - skip) // per_minute) if rest >= skip else 0)
+    seconds, f = divmod(frames, nominal)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}{';' if drop else ':'}{f:02d}"
+
+
 def clock_from_probe(data: dict) -> MediaClock:
     """A file's clock from ffprobe's JSON (``-show_entries
     stream=codec_type,codec_tag_string,r_frame_rate,avg_frame_rate:stream_tags=timecode:format=format_name:format_tags=timecode``).
@@ -179,6 +211,7 @@ def clock_from_probe(data: dict) -> MediaClock:
     if tmcd is not None:
         label = _timecode_tag(tmcd)
         rate = _rate(tmcd.get("avg_frame_rate")) or _rate(video and video.get("r_frame_rate"))
+        rate = exact_rate(rate) if rate else None
         if not label or rate is None:
             return MediaClock(source=UNREAD, quicktime=quicktime,
                               note="it has a timecode track whose start could not be read")
@@ -191,11 +224,26 @@ def clock_from_probe(data: dict) -> MediaClock:
                           drop=drop, quicktime=quicktime)
 
     other = next((t for t in [*(_timecode_tag(s) for s in streams), _timecode_tag(form)] if t), None)
-    if other:
+    container = ((form.get("format_name") or "").split(",") or ["?"])[0] or "?"
+    if other and quicktime:
+        # The one case with evidence: a QuickTime-family file whose timecode
+        # is not in a tmcd track (Sony XAVC .mp4, rtmd) starts at 0 in Final Cut.
         return MediaClock(
             source=IGNORED, timecode=other, quicktime=quicktime,
             note=(f"it carries timecode {other} outside a QuickTime timecode track (tmcd); "
                   "Final Cut starts such a file at 0 (Sony XAVC .mp4 does this), so it was written at 0s"),
+        )
+    if other:
+        return MediaClock(
+            source=UNREAD, timecode=other, quicktime=quicktime,
+            note=(f"it carries timecode {other} in a {container} file, and how Final Cut clocks "
+                  f"that container is not verified"),
+        )
+    reference = ((form.get("tags") or {}).get("time_reference") or "").strip()
+    if reference.isdigit() and int(reference):
+        return MediaClock(
+            source=UNREAD, quicktime=quicktime,
+            note=f"it carries a broadcast WAV time reference (sample {reference}), which Final Cut may start it at; not verified",
         )
     return MediaClock(source=NONE, quicktime=quicktime)
 
@@ -210,7 +258,7 @@ def read_clock(path: str) -> MediaClock:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
              "stream=codec_type,codec_tag_string,r_frame_rate,avg_frame_rate"
-             ":stream_tags=timecode:format=format_name:format_tags=timecode",
+             ":stream_tags=timecode:format=format_name:format_tags=timecode,time_reference",
              "-of", "json", str(path)],
             capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS,
         )
@@ -234,3 +282,30 @@ def media_url(src: str) -> str:
         return src
     path = Path(src).expanduser()
     return path.as_uri() if path.is_absolute() else src
+
+
+def clock_lines(clocks: list) -> list:
+    """What a reply says about the clocks it wrote, from entries
+    ``{"source": path, "clock": MediaClock}``: each file written on its
+    timecode, each timecode not used, and each file whose clock was not
+    read (written at 0s, with the reason; Final Cut shows its clips empty if
+    the file's real clock is another)."""
+    lines, unread = [], {}
+    for entry in clocks:
+        name, clock = Path(entry["source"]).name, entry["clock"]
+        if clock.source == TMCD:
+            lines.append(
+                f"On its timecode clock: {name} starts at {clock.timecode} "
+                f"({float(clock.rate):g} fps{' drop-frame' if clock.drop else ''}), "
+                f"so <asset start> is {clock.start_attr} and its clips are placed from there."
+            )
+        elif clock.source == IGNORED:
+            lines.append(f"Timecode not used: {name}: {clock.note}.")
+        elif clock.source == UNREAD:
+            unread.setdefault(clock.note, []).append(name)
+    for note, names in unread.items():
+        lines.append(f"Clock not read, written at 0s: {', '.join(names)} ({note}).")
+    if unread:
+        lines.append("If one of those files has another clock, Final Cut shows its clips empty; "
+                     "author again where the media and ffprobe are present.")
+    return lines

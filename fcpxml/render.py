@@ -145,7 +145,7 @@ def stream_facts(path: str) -> Optional[dict]:
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration,format_name:format_tags=timecode"
+             "format=duration,format_name:format_tags=timecode,time_reference"
              ":stream=codec_type,codec_tag_string,width,height,r_frame_rate,avg_frame_rate,sample_rate,channels"
              ":stream_tags=timecode",
              "-of", "json", str(path)],

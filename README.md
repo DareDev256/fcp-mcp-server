@@ -1198,7 +1198,7 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **The proxy has sound** — `preview_render` mixes the timeline's audio on the same clock as the picture — *v0.30.0*
 - [x] **Front door** — one palette (true black, one cyan, red only for failure), the GitHub card and PyPI page rebuilt from scripts, current prices with their sources, a schema budget held by a test — *v0.31.0*
 - [x] **Proof you can read** — every preview picture labelled by the server and returned inline: a contact sheet with cut numbers and timecodes, a check with a ruler and named silences, a 720p proxy with burn-in, a before/after strip per cut; `preview://` is the app — *v0.32.0*
-- [x] **Media clock** — every authored asset and clip on its file's own timecode clock (`tmcd`), so an iPhone ProRes or camera clip no longer imports empty; `validate_timeline` checks it (#45) — *v0.33.0*
+- [x] **Media clock** — every authored asset and clip on its file's own timecode clock (`tmcd`), so an iPhone ProRes or camera clip no longer imports empty; `validate_timeline` checks it; `insert_clip` / `add_connected_clip` bring any file in by `src` (#45) — *v0.33.0*
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written
 - [ ] Audio sync detection

@@ -230,7 +230,9 @@ def test_real_files_read_the_clock_ffmpeg_wrote(media):
 
 @needs_ffmpeg
 def test_a_matroska_timecode_tag_is_found_whatever_its_case(media):
-    """ffprobe prints a Matroska tag as TIMECODE: still a timecode we do not use."""
+    """ffprobe prints a Matroska tag as TIMECODE. Outside QuickTime there is no
+    evidence for how Final Cut clocks the file, so it is "not determined",
+    never claimed to start at 0."""
     mkv = media["dir"] / "tagged.mkv"
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
@@ -239,7 +241,38 @@ def test_a_matroska_timecode_tag_is_found_whatever_its_case(media):
         capture_output=True, timeout=60, check=True,
     )
     clock = read_clock(str(mkv))
-    assert clock.source == IGNORED and clock.timecode == "01:02:03:04" and clock.origin == 0
+    assert clock.source == UNREAD and clock.timecode == "01:02:03:04" and clock.origin == 0
+    assert "matroska" in clock.note and "not verified" in clock.note
+
+
+@needs_ffmpeg
+def test_mxf_and_broadcast_wav_clocks_are_reported_not_guessed(media):
+    """Final Cut may well honour an MXF timecode or a BWF time reference; it
+    is not verified, so they are written at 0s and SAID to be unknown."""
+    mxf = media["dir"] / "tc.mxf"
+    subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=25:duration=1",
+                    "-c:v", "mpeg2video", "-timecode", "01:00:00:00", str(mxf)],
+                   capture_output=True, timeout=60, check=True)
+    wav = media["dir"] / "bwf.wav"
+    subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "sine=d=1", "-c:a", "pcm_s16le", "-write_bext", "1",
+                    "-metadata", "time_reference=172800000", str(wav)],
+                   capture_output=True, timeout=60, check=True)
+    m = read_clock(str(mxf))
+    w = read_clock(str(wav))
+    assert m.source == UNREAD and "mxf" in m.note and m.start_attr == "0s"
+    assert w.source == UNREAD and "time reference (sample 172800000)" in w.note and w.start_attr == "0s"
+
+
+def test_a_2997_over_100_rate_is_the_ntsc_rate_it_stands_for():
+    """Some files carry 29.97 as 2997/100: drop-frame still applies, and the
+    origin lands on Final Cut's 30000 timebase."""
+    clock = clock_from_probe(_probe(
+        {"codec_type": "data", "codec_tag_string": "tmcd", "avg_frame_rate": "2997/100",
+         "tags": {"timecode": "01:00:00;00"}}))
+    assert clock.drop and clock.rate == Fraction(30000, 1001)
+    assert clock.start_attr == "107999892/30000s"
 
 
 # --- import_edl_json: the issue, verbatim in shape -------------------------------
@@ -327,7 +360,7 @@ def test_missing_media_is_written_at_0s_and_says_what_that_risks(tmp_path):
     text = asyncio.run(server.handle_group("generate", {
         "action": "import_edl_json", "args": {"filepath": str(payload), "fps": 30}}))[0].text
     assert _assets(tmp_path / "edl.fcpxml")["gone"].get("start") == "0s"
-    assert "Clock not read, written at 0s (the file is not on this machine): gone.mov" in text
+    assert "Clock not read, written at 0s: gone.mov (the file is not on this machine)." in text
     assert "Final Cut shows its clips empty" in text
 
 
@@ -440,6 +473,68 @@ def test_the_audio_clamp_measures_the_asset_on_its_own_clock(tmp_path):
 
 
 @needs_ffmpeg
+def test_template_and_audio_replies_name_the_clock_they_wrote(media, tmp_path, monkeypatch):
+    """Every writer that reads a clock says so; a silent 0s is how #45 hid."""
+    monkeypatch.setattr(server, "PROJECTS_DIR", str(tmp_path))
+    text = asyncio.run(server.call_tool("generate", {
+        "action": "apply_template", "template_name": "intro_outro", "fps": 30,
+        "output_path": str(tmp_path / "t.fcpxml"),
+        "clips": {"intro_card": {"src": str(media["plain"]), "name": "Intro"},
+                  "main_content": {"src": str(media["iphone"]), "name": "Main"},
+                  "end_card": {"src": str(tmp_path / "gone.mov"), "name": "End"}}}))[0].text
+    assert "On its timecode clock: IMG_1968.mov starts at 18:03:22:05" in text
+    assert "Clock not read, written at 0s: gone.mov (the file is not on this machine)." in text
+
+    project = _timecoded_project(tmp_path)
+    text = asyncio.run(server.call_tool("edit", {
+        "action": "add_audio", "filepath": project, "parent_clip_id": "Cam",
+        "src": str(media["ndf"]), "duration": "1s"}))[0].text
+    assert "On its timecode clock: ntsc_ndf.mov starts at 01:00:00:00 (29.97 fps)" in text
+
+
+@needs_ffmpeg
+def test_a_generated_clip_lands_on_its_files_clock(media, tmp_path):
+    """gen's insert: generated media has no timecode track and stays at 0s;
+    a file that carries one is played from it, never from 0s."""
+    from fcpxml import gen
+
+    m = FCPXMLModifier(_timecoded_project(tmp_path))
+    probe = gen.probe_media(str(media["iphone"]))
+    gen.insert_generated(m, media_path=str(media["iphone"]), probe=probe, at=Fraction(1),
+                         duration=Fraction(2), name="Gen", prompt="p", provider_label="test")
+    out = str(tmp_path / "gen.fcpxml")
+    m.save(out)
+    assert _assets(out)["Gen"].get("start") == "1950065/30s"
+    clip = next(c for c in FCPXMLParser().parse_file(out).primary_timeline.connected_clips if c.name == "Gen")
+    assert file_in_point(clip.as_clip()) == 0
+
+
+def test_writing_a_parsed_project_keeps_each_assets_clock(tmp_path):
+    """FCPXMLWriter rebuilt every asset at 0s with a bare path, so a parsed
+    camera clip (asset at 3600s, clip at 3601s) came back an hour early."""
+    from fcpxml.writer import FCPXMLWriter
+
+    project = FCPXMLParser().parse_file(_timecoded_project(tmp_path, src="file:///Volumes/A%20Cam/cam.mov"))
+    out = str(tmp_path / "rewritten.fcpxml")
+    FCPXMLWriter().write_project(project, out)
+    from fcpxml.rational import parse_seconds
+    asset = next(iter(_assets(out).values()))
+    assert asset.get("start") == "3600s" and [parse_seconds(v) for v in _clip_starts(out)] == [3601]
+    assert asset.get("src") == "file:///Volumes/A%20Cam/cam.mov"
+
+
+@needs_ffmpeg
+def test_validate_does_not_judge_a_container_whose_clock_is_unverified(media, tmp_path):
+    """An MXF with timecode written at 0s: unknown, so no FAIL and no WARN."""
+    mxf = media["dir"] / "tc.mxf"
+    if not mxf.exists():
+        pytest.skip("made by the MXF test")
+    out = tmp_path / "mxf.fcpxml"
+    edl_to_fcpxml({"sources": {"s": str(mxf)}, "ranges": [{"source": "s", "start": 0, "end": 1}]}, str(out), fps=25)
+    assert _row(_validate(out)) == "PASS"
+
+
+@needs_ffmpeg
 def test_add_audio_from_a_timecoded_file_writes_the_asset_on_its_clock(media, tmp_path):
     m = FCPXMLModifier(_timecoded_project(tmp_path))
     clip = m.add_audio_clip(parent_clip_id="Cam", src=str(media["ndf"]), duration="2s")
@@ -505,3 +600,123 @@ def test_without_ffprobe_the_clock_is_not_measured_and_says_so(tmp_path, monkeyp
     monkeypatch.setattr(server.shutil, "which", lambda name: None)
     text = _validate(_timecoded_project(tmp_path))
     assert _row(text) == "INFO" and "not measured: ffprobe is not installed" in text
+
+
+# --- 0.33 "not considering", done: any file in, exact source starts, DF labels ---
+
+
+@needs_ffmpeg
+def test_insert_clip_brings_any_file_in_on_its_own_clock(media, tmp_path, monkeypatch):
+    """Footage made anywhere (a camera, a generator) comes in by its path:
+    a new asset probed for length, rate and size, on its timecode clock."""
+    project = _timecoded_project(tmp_path)
+    text = asyncio.run(server.call_tool("edit", {
+        "action": "insert_clip", "filepath": project, "position": "end",
+        "src": str(media["iphone"]), "output_path": str(tmp_path / "in.fcpxml")}))[0].text
+    assert "On its timecode clock: IMG_1968.mov starts at 18:03:22:05" in text
+    out = tmp_path / "in.fcpxml"
+    asset = _assets(out)["IMG_1968"]
+    assert asset.get("start") == "1950065/30s" and asset.get("duration") == "6s"
+    assert asset.find("media-rep").get("src") == media["iphone"].as_uri()
+    import xml.etree.ElementTree as ET
+    fmt = next(f for f in ET.parse(str(out)).getroot().iter("format") if f.get("id") == asset.get("format"))
+    assert (fmt.get("frameDuration"), fmt.get("width"), fmt.get("height")) == ("1/30s", "160", "90")
+    clip = FCPXMLParser().parse_file(str(out)).primary_timeline.clips[-1]
+    assert clip.name == "IMG_1968" and file_in_point(clip) == 0 and clip.duration.seconds == 6
+    _dtd_valid(out)
+
+
+@needs_ffmpeg
+def test_add_connected_clip_brings_b_roll_in_by_path(media, tmp_path):
+    m = FCPXMLModifier(_timecoded_project(tmp_path))
+    clip = m.add_connected_clip(parent_clip_id="Cam", src=str(media["plain"]), duration="2s", lane=2)
+    assert clip.get("lane") == "2" and clip.get("start") == "0s" and clip.get("duration") == "2s"
+    assert m.resources[clip.get("ref")]["element"].get("start") == "0s"
+    assert [e["clock"].source for e in m.media_clocks] == [NONE]
+
+
+def test_a_src_that_is_missing_or_has_no_picture_is_refused(tmp_path):
+    m = FCPXMLModifier(_timecoded_project(tmp_path))
+    with pytest.raises(ValueError, match="src not found"):
+        m.insert_clip(position="end", src=str(tmp_path / "gone.mov"))
+    if not FFMPEG:
+        return
+    wav = tmp_path / "tone.wav"
+    subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "sine=d=1", str(wav)], capture_output=True, timeout=60, check=True)
+    with pytest.raises(ValueError, match="no picture ffprobe could read.*add_audio"):
+        m.add_connected_clip(parent_clip_id="Cam", src=str(wav))
+
+
+def test_an_existing_asset_wins_over_src(tmp_path):
+    m = FCPXMLModifier(_timecoded_project(tmp_path))
+    clip = m.insert_clip(position="end", asset_id="a1", src=str(tmp_path / "ignored.mov"), duration="1s")
+    assert clip.get("ref") == "a1" and m.media_clocks == []
+
+
+def test_a_source_start_off_the_sequence_grid_is_read_exactly(tmp_path):
+    """A clip at the head of a 29.97 drop-frame asset in a 30p sequence starts
+    at 107999892/30000s: read as whole 30p frames it was 0.03s before its
+    file began. Equality of Timecodes is still about frames."""
+    path = tmp_path / "df.fcpxml"
+    path.write_text('''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.13"><resources>
+<format id="r1" name="FFVideoFormat1080p30" frameDuration="1/30s" width="1920" height="1080"/>
+<asset id="a1" name="DF" start="107999892/30000s" duration="10s" hasVideo="1" format="r1"><media-rep kind="original-media" src="file:///nowhere/df.mov"/></asset>
+</resources><library><event name="E"><project name="P"><sequence format="r1" duration="2s" tcStart="0s"><spine>
+<asset-clip ref="a1" offset="0s" name="DF" start="107999892/30000s" duration="2s" format="r1"/>
+</spine></sequence></project></event></library></fcpxml>''')
+    clip = FCPXMLParser().parse_file(str(path)).primary_timeline.clips[0]
+    assert file_in_point(clip) == 0                      # was -0.0297s
+    assert clip.source_start.seconds == float(Fraction(107999892, 30000))
+    from fcpxml.models import Timecode
+    assert clip.source_start == Timecode(frames=clip.source_start.frames, frame_rate=clip.source_start.frame_rate)
+
+
+@pytest.mark.parametrize("label, fps, frames", [
+    ("01:00:00;00", 29.97, 107892),
+    ("00:01:00;02", 29.97, 1800),
+    ("00:10:00;00", 29.97, 17982),
+    ("01:00:00;00", 59.94, 215784),
+    ("01:00:00:00", 29.97, 108000),    # non-drop unchanged
+    ("01:00:00;00", 25, 90000),        # no drop-frame at 25
+])
+def test_a_typed_drop_frame_label_is_counted_as_drop_frame(label, fps, frames):
+    """TimeValue.from_timecode read ";" as ":": 01:00:00;00 came out 3.6s late."""
+    from fcpxml.models import TimeValue
+    from fcpxml.rational import frame_duration_seconds
+    tv = TimeValue.from_timecode(label, fps)
+    assert Fraction(tv.numerator, tv.denominator) == frames * frame_duration_seconds(fps)
+
+
+def test_a_drop_frame_label_that_does_not_exist_is_refused():
+    from fcpxml.models import TimeValue
+    with pytest.raises(ValueError, match="does not exist in drop-frame"):
+        TimeValue.from_timecode("00:01:00;00", 29.97)
+
+
+def test_drop_frame_labels_print_and_read_back_as_the_same_frame():
+    from fcpxml.media_clock import smpte_label
+    from fcpxml.models import Timecode
+    for rate, fps in ((Fraction(30000, 1001), 29.97), (Fraction(60000, 1001), 59.94)):
+        for f in range(0, 120000, 37):
+            label = Timecode(frames=f, frame_rate=fps, drop_frame=True).to_smpte()
+            assert smpte_frames(label, rate) == f, (fps, f, label)
+    assert smpte_label(1800, Fraction(30000, 1001), drop=True) == "00:01:00;02"
+    assert Timecode(frames=48, frame_rate=24.0, drop_frame=True).to_smpte() == "00:00:02;00"
+
+
+@needs_ffmpeg
+def test_diagnose_probes_each_file_once(media, tmp_path, monkeypatch):
+    """Frame rate and size and the media clock read one ffprobe per file."""
+    from fcpxml import render
+    calls = []
+    real = render.stream_facts
+    monkeypatch.setattr(render, "stream_facts", lambda path: calls.append(path) or real(path))
+    out = tmp_path / "once.fcpxml"
+    edl_to_fcpxml({"sources": {"a": str(media["iphone"]), "b": str(media["plain"])},
+                   "ranges": [{"source": "a", "start": 0, "end": 1}, {"source": "b", "start": 0, "end": 1},
+                              {"source": "a", "start": 2, "end": 3}]}, str(out), fps=30)
+    _validate(out)
+    assert sorted(calls) == sorted({str(media["iphone"]), str(media["plain"])})

@@ -27,7 +27,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Optional
 
-from fcpxml.media_clock import IGNORED, TMCD, UNREAD, MediaClock, media_url, read_clock
+from fcpxml.media_clock import MediaClock, clock_lines, media_url, read_clock  # noqa: F401  (clock_lines re-exported)
 from fcpxml.models import TimeValue
 from fcpxml.rational import frame_duration_attr, frame_duration_seconds, nominal_fps
 from fcpxml.writer import _create_asset_element, write_fcpxml
@@ -221,31 +221,3 @@ def edl_to_fcpxml(
         "ignored": ignored,
         "clocks": [{"source": source, "clock": clock} for source, clock in clocks.items()],
     }
-
-
-def clock_lines(clocks: list[dict]) -> list[str]:
-    """What a reply says about each source's clock: the ones written on a
-    timecode, the timecodes not used, and the ones that could not be read
-    (whose clips Final Cut shows empty if the file turns out to carry one)."""
-    lines = []
-    for entry in clocks:
-        name, clock = Path(entry["source"]).name, entry["clock"]
-        if clock.source == TMCD:
-            lines.append(
-                f"On its timecode clock: {name} starts at {clock.timecode} "
-                f"({float(clock.rate):g} fps{' drop-frame' if clock.drop else ''}), "
-                f"so <asset start> is {clock.start_attr} and its clips are placed from there."
-            )
-        elif clock.source == IGNORED:
-            lines.append(f"Timecode not used: {name}: {clock.note}.")
-    unread = [e for e in clocks if e["clock"].source == UNREAD]
-    if unread:
-        reasons = sorted({e["clock"].note for e in unread})
-        lines.append(
-            "Clock not read, written at 0s ("
-            + "; ".join(reasons) + "): "
-            + ", ".join(Path(e["source"]).name for e in unread)
-            + ". If one carries a timecode track, Final Cut shows its clips empty; "
-            "author again where the media and ffprobe are present."
-        )
-    return lines
