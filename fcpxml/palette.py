@@ -46,10 +46,21 @@ TOKENS: dict[str, tuple[str, str]] = {
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
     "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
     "danger": ("#FF3B30", "#D70015"),       # FAIL (and missing media) only: never an intended edit
+    # 0.33 direction B only: Final Cut's role colours, drawn as the 4 px role
+    # stripe on a clip and nowhere else (never text, never a fill; held by
+    # tests/test_palette.py). Close to Final Cut Pro 12.4's defaults (video
+    # blue, titles purple, dialogue light blue, music green, effects violet),
+    # set by eye, not sampled from the app.
+    "role-video": ("#4A7FE0", "#2F63C8"),
+    "role-titles": ("#9B6BDF", "#7A4FC2"),
+    "role-dialogue": ("#3BA4E8", "#1F7FC0"),
+    "role-music": ("#3FB55A", "#25913D"),
+    "role-effects": ("#C25BD1", "#9C3BAB"),
 }
 
 ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash", "badge")
 DANGER_TOKENS = ("danger",)
+ROLE_TOKENS = ("role-video", "role-titles", "role-dialogue", "role-music", "role-effects")
 
 # Text-on-background pairs that must read at 4.5:1 or better, in both modes.
 TEXT_PAIRS: tuple[tuple[str, str], ...] = (

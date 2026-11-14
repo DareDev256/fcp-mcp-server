@@ -61,6 +61,8 @@ PAYLOAD_CLOSE = "```"
 
 ThumbnailFn = Callable[[str, Fraction], Optional[str]]
 TranscriptFn = Callable[[str], Optional[dict]]
+WaveformFn = Callable[[str, Fraction, Fraction], Optional[list]]
+MAX_WAVE_POINTS = 600  # levels 0-100 per audio clip, evenly over its length
 
 
 def rational(value: Any) -> Optional[str]:
@@ -183,12 +185,15 @@ def build_payload(
     sha256: Optional[str] = None,
     thumbnail: Optional[ThumbnailFn] = None,
     transcript: Optional[TranscriptFn] = None,
+    waveform: Optional[WaveformFn] = None,
 ) -> dict:
     """The JSON the app draws from. Pure: every side effect is injected.
 
     ``thumbnail(media_path, source_seconds)`` returns a data URI or None;
-    ``transcript(media_path)`` returns a cached transcript dict or None.
-    Neither is ever called more than the bounds above allow.
+    ``transcript(media_path)`` returns a cached transcript dict or None;
+    ``waveform(media_path, file_start, duration)`` returns levels 0-100 for
+    an audio clip (0.33 directions draw it), or None. None is ever called
+    more than the bounds above allow.
     """
     origin = _origin(timeline)
     duration = _frac(timeline.duration)
@@ -253,6 +258,10 @@ def build_payload(
             "words": words,
             "thumb": _thumb(media, file_src + dur / 2) if media else None,
         }
+        if waveform is not None and media and row["kind"] == "audio":
+            levels = waveform(media, file_src, dur)
+            if levels:
+                row["wave"] = [max(0, min(100, int(v))) for v in levels[:MAX_WAVE_POINTS]]
         clips.append(row)
         lanes_seen.setdefault(lane, []).append(row["id"])
 
@@ -343,7 +352,10 @@ def data_uri_jpeg(path: str) -> Optional[str]:
 # The shell
 # ---------------------------------------------------------------------------
 
-def render_page_html(payload: dict) -> str:
+DIRECTIONS = ("a", "b")
+
+
+def render_page_html(payload: dict, direction: Optional[str] = None) -> str:
     """The ``preview://`` page (0.32): the same shell with ``payload`` inlined
     as a JSON script block, so a browser or a host that only shows HTML draws
     the timeline at once. It replaces the legacy static renderer
@@ -353,7 +365,14 @@ def render_page_html(payload: dict) -> str:
     block = f'<script type="application/json" id="fcp-inline-payload">{data}</script>\n'
     marker = "<script>"
     i = _APP_HTML.rindex(marker)
-    return _APP_HTML[:i] + block + _APP_HTML[i:]
+    html = _APP_HTML[:i] + block + _APP_HTML[i:]
+    if direction is not None:
+        if direction not in DIRECTIONS:
+            raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}, got {direction!r}")
+        # 0.33: two looks to pick from; the attribute switches CSS and the
+        # layout code, nothing else (no new request, no new resource)
+        html = html.replace('<html lang="en">', f'<html lang="en" data-direction="{direction}">', 1)
+    return html
 
 
 def render_app_html() -> str:
@@ -499,6 +518,102 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   #log { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--mute);
     max-height: 180px; overflow: auto; margin: 0; }
   .zoom { display: inline-flex; gap: 4px; align-items: center; color: var(--mute); font-size: 11px; }
+  /* ---- 0.33 directions: data-direction="a" (dense, like Resolve's edit page)
+     or "b" (open, like Final Cut's timeline). Nothing below applies without
+     the attribute. Both: an overview bar, fit with the median clip >= 44 px,
+     no label under 4 characters, a label rail for narrow connected clips,
+     a glyph per marker kind, cyan text for record time only. */
+  #overview { position: relative; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); overflow: hidden; cursor: pointer; }
+  #overview .ob { position: absolute; border-radius: 1px; background: var(--line-strong); }
+  #overview .ob.k-audio { background: var(--mute); }
+  #overview .om { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); }
+  #overview .ov { position: absolute; top: 1px; bottom: 1px; border: 1px solid var(--accent); background: var(--accent-wash);
+    border-radius: 3px; pointer-events: none; }
+  [data-direction] .meter { position: absolute; left: -9999px; top: 0; visibility: hidden; white-space: nowrap; }
+  [data-direction] #key { display: none; }
+  [data-direction] .clip .num { display: none; }
+  [data-direction] .mlabel { color: var(--ink); border-left: 0; padding: 0 3px 0 11px; font-size: 11px; line-height: 14px; }
+  [data-direction] .mlabel .mg { position: absolute; left: -4px; top: 3px; width: 8px; height: 8px; background: var(--accent); }
+  [data-direction] .mlabel .mg.standard { transform: rotate(45deg) scale(.82); }
+  [data-direction] .mlabel .mg.chapter { height: 11px; top: 2px; clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); }
+  [data-direction] .mlabel .mg.todo { background: transparent; border: 2px solid var(--accent); }
+  [data-direction] .mlabel .mg.completed { border: 2px solid var(--accent); }
+  [data-direction] .tick { top: auto; bottom: 0; height: 15px; padding-left: 4px; font: 11px/15px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  [data-direction] .ftick { position: absolute; bottom: 0; width: 0; height: 4px; border-left: 1px solid var(--line-strong); }
+  [data-direction] .ftick.sec { height: 7px; }
+  [data-direction] .clip { justify-content: flex-start; }
+  [data-direction] .clip .stripe { position: absolute; left: 0; right: 0; z-index: 1; }
+  [data-direction] .clip .wave { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; }
+  [data-direction] .clip .wave path { fill: var(--mute); }
+  [data-direction] .rail { position: relative; height: 16px; }
+  [data-direction] .rail.rows2 { height: 31px; }
+  /* A rail name sits on the panel colour, the row nearer its lane on top: a
+     leader from the farther row passes BEHIND a nearer name, never through it. */
+  [data-direction] .rail .rl { position: absolute; top: 0; bottom: 0; padding: 0 4px; border-left: 1px solid var(--line-strong);
+    color: var(--ink); white-space: nowrap; line-height: 15px; background: var(--panel); cursor: pointer; }
+  [data-direction] .rail .rl.r1 { top: 15px; z-index: 1; }
+  [data-direction] .rail.below .rl { top: 0; bottom: auto; height: 16px; }
+  [data-direction] .rail.below .rl.r1 { top: 0; height: 31px; padding-top: 15px; }
+  [data-direction] .gap { color: var(--mute); }
+
+  /* A: dense. Thin lanes, small mono labels, a timecode ruler with frame
+     ticks, a 3 px role stripe on the clip's top edge (palette greys: picture
+     ink, sound mute), the waveform under audio clips, a compact panel. */
+  [data-direction="a"] #overview { height: 26px; }
+  [data-direction="a"] .ruler { height: 50px; }
+  [data-direction="a"] .markers { top: 50px; }
+  [data-direction="a"] .playhead { top: 34px; }
+  [data-direction="a"] .lane { height: 52px; }
+  [data-direction="a"] .lane.audio { height: 60px; }
+  [data-direction="a"] .lane-tag { width: 40px; padding: 6px 0 0 8px; font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  [data-direction="a"] .clip { top: 2px; bottom: 2px; border-radius: 2px; }
+  [data-direction="a"] .clip .label, [data-direction="a"] .meter.label, [data-direction="a"] .rail .rl, [data-direction="a"] .meter.rl {
+    font: 11px/14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  [data-direction="a"] .clip .label { padding: 5px 4px 0; color: var(--ink); background: none; }
+  [data-direction="a"] .clip .stripe { top: 0; height: 3px; background: var(--ink); }
+  [data-direction="a"] .clip.k-audio .stripe { background: var(--mute); }
+  [data-direction="a"] .clip .wave { height: 34px; }
+  [data-direction="a"] #panel { margin-top: 8px; gap: 8px; }
+  [data-direction="a"] .card { padding: 8px 10px; min-height: 0; }
+  @media (min-width: 760px) { [data-direction="a"] dl { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); } }
+  [data-direction="a"] #log { max-height: 96px; }
+
+  /* B: open. Tall clips with a filmstrip, the name top-left on a scrim,
+     rounded corners, connected clips on their own lanes with the connection
+     line to the storyline, Final Cut's role colours as the stripe. */
+  [data-direction="b"] #overview { height: 34px; border-radius: 8px; }
+  [data-direction="b"] .ruler { height: 52px; }
+  [data-direction="b"] .markers { top: 52px; }
+  [data-direction="b"] .playhead { top: 36px; }
+  [data-direction="b"] .lane { height: 84px; border-bottom: 0; z-index: 1; }
+  [data-direction="b"] .lane.spine { height: 40px; }
+  [data-direction="b"] .lane.audio { height: 64px; }
+  [data-direction="b"] .lane-tag { visibility: hidden; width: 16px; padding: 0; border-right: 0; background: transparent; }
+  [data-direction="b"] .clip { top: 4px; bottom: 4px; border-radius: 7px; }
+  [data-direction="b"] .clip .label, [data-direction="b"] .meter.label, [data-direction="b"] .rail .rl, [data-direction="b"] .meter.rl {
+    font: 600 12px/15px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  [data-direction="b"] .clip .label { position: absolute; top: 0; left: 0; max-width: 100%; padding: 4px 7px 5px;
+    color: var(--on-media); background: var(--shade); border-bottom-right-radius: 7px; }
+  [data-direction="b"] .clip .stripe { bottom: 0; height: 4px; }
+  [data-direction="b"] .clip .stripe.role-video { background: var(--role-video); }
+  [data-direction="b"] .clip .stripe.role-titles { background: var(--role-titles); }
+  [data-direction="b"] .clip .stripe.role-dialogue { background: var(--role-dialogue); }
+  [data-direction="b"] .clip .stripe.role-music { background: var(--role-music); }
+  [data-direction="b"] .clip .stripe.role-effects { background: var(--role-effects); }
+  [data-direction="b"] .clip .wave { height: 40px; bottom: 4px; }
+  [data-direction="b"] .lane.spine .gap { top: 8px; bottom: 8px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--raised); padding: 4px 8px; font-size: 11px; }
+  [data-direction="b"] .rail { z-index: 1; }  /* a connection line passes behind a rail name */
+  [data-direction="b"] .conn { position: absolute; width: 0; border-left: 1px solid var(--mute); z-index: 0; pointer-events: none; }
+  [data-direction="b"] .conn::after { content: ""; position: absolute; left: -3px; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--mute); }
+  [data-direction="b"] .conn.up::after { bottom: -3px; }
+  [data-direction="b"] .conn.down::after { top: -3px; }
+  @media (max-width: 600px) {
+    [data-direction="b"] .lane { height: 64px; }
+    [data-direction="b"] .lane.audio { height: 56px; }
+  }
 </style>
 </head>
 <body>
@@ -528,6 +643,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   var PAYLOAD_OPEN = "```json fcp-timeline-app", PAYLOAD_CLOSE = "```";
   var state = { payload: null, pps: 24, playhead: 0, sel: null, range: null, pending: {}, nextId: 1, inHost: false, hostContext: null };
   var $ = function (id) { return document.getElementById(id); };
+  // 0.33: data-direction="a" | "b" picks a look; without it the app draws
+  // exactly as 0.32 shipped it (every function below checks DIR first).
+  var DIR = document.documentElement.getAttribute("data-direction") || "";
+  var MEDIAN_MIN = 44, LABEL_MIN = 28, KEEP_MIN = 4;
 
   // ---- rational time ------------------------------------------------------
   function frac(s) { if (s == null) return 0; var p = String(s).split("/"); return p.length === 2 ? Number(p[0]) / Number(p[1]) : Number(p[0]); }
@@ -809,7 +928,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       a.onfinish = function () { if (e.parentNode) e.parentNode.removeChild(e); };
     });
   }
-  var GUTTER = 48, MIN_PPS = 0.25;
+  var GUTTER = DIR === "a" ? 40 : DIR === "b" ? 16 : 48, MIN_PPS = 0.25;
   function extent() {
     // Fit the whole sequence, like Final Cut's zoom to fit. Until 0.31 this
     // fitted the clips only, because a ripple left the sequence's declared
@@ -824,11 +943,23 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     // ran a 164 s cut 14 s past the edge with no sign of it).
     var w = $("scroller").clientWidth - GUTTER - 24;
     state.pps = Math.max(MIN_PPS, w / extent());
+    // 0.33: fitting a long bed under short shots made every shot a sliver;
+    // the median clip gets at least MEDIAN_MIN px and the overview bar shows
+    // the whole cut with the part in view boxed
+    if (DIR) state.pps = Math.max(state.pps, (MEDIAN_MIN + 1) / medianDuration());  // + the 1 px between clips
+  }
+  function medianDuration() {
+    var d = state.payload.clips.map(function (c) { return frac(c.duration); }).filter(function (v) { return v > 0; })
+      .sort(function (a, b) { return a - b; });
+    if (!d.length) return 1;
+    var m = d.length >> 1;
+    return d.length % 2 ? d[m] : (d[m - 1] + d[m]) / 2;
   }
   function x(sec) { return GUTTER + sec * state.pps; }   // a position
   function w(sec) { return sec * state.pps; }            // a width: no gutter
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function draw() {
+    if (DIR) return drawDir();
     var p = state.payload, canvas = $("canvas"); canvas.textContent = "";
     var dur = frac(p.duration), width = Math.max(x(dur) + 24, $("scroller").clientWidth - 2);
     canvas.style.width = width + "px";
@@ -936,6 +1067,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // there (never cut), and is still in the key.
   function placeNumbers(left, right) {
     var sc = $("scroller");
+    if (DIR) { var k0 = $("key"); if (k0) k0.hidden = true; return; }  // the directions name clips inline or on a rail
     sc.querySelectorAll(".onum").forEach(function (e) { e.remove(); });
     var outside = [];
     sc.querySelectorAll(".clip").forEach(function (c) {
@@ -980,12 +1112,207 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       key.hidden = all.length === 0;
     }
   }
+
+  // ---- 0.33 directions ------------------------------------------------------
+  // A label is measured in the font it is drawn in (a hidden meter span with
+  // the same class), never guessed from a character count.
+  function textW(s, kind) {
+    var m = $("meter"); if (!m) { m = el("span"); m.id = "meter"; document.body.appendChild(m); }
+    m.className = "meter " + kind; m.textContent = s; return m.getBoundingClientRect().width;
+  }
+  var PAD = { a: 10, b: 16 };
+  // The name, whole, or cut in the middle so its ending survives ("SHOT…A 1"),
+  // keeping at least KEEP_MIN of its characters; null when even that won't fit.
+  function middleFit(name, room, kind) {
+    if (textW(name, kind) <= room) return { text: name, kept: name.length };
+    for (var k = name.length - 1; k >= KEEP_MIN; k--) {
+      var tail = Math.ceil(k / 2), head = name.slice(0, k - tail).replace(/\s+$/, ""), end = name.slice(name.length - tail).replace(/^\s+/, "");
+      var t = head + "…" + end;
+      if (head.length + end.length >= KEEP_MIN && textW(t, kind) <= room) return { text: t, kept: head.length + end.length };
+    }
+    return null;
+  }
+  // A connected clip is named inside only when its WHOLE name fits; else on
+  // its lane's rail. A storyline clip is named inside, cut in the middle.
+  function insideName(c) {
+    var wpx = w(frac(c.duration)) - 1;
+    if (wpx < LABEL_MIN) return null;
+    var room = wpx - PAD[DIR];
+    if (c.lane) return textW(c.name, "label") <= room ? { text: c.name, kept: c.name.length } : null;
+    return middleFit(c.name, room, "label");
+  }
+  function roleOf(c) {
+    var r = String(c.role || "").split(".")[0].toLowerCase();
+    if (["video", "titles", "dialogue", "music", "effects"].indexOf(r) >= 0) return r;
+    return c.kind === "audio" ? "dialogue" : c.kind === "title" ? "titles" : "video";
+  }
+  function glyphOf(type) {
+    var t = String(type || "").toLowerCase();
+    return t === "chapter" ? "chapter" : (t === "todo" || t === "incomplete") ? "todo" : t === "completed" ? "completed" : "standard";
+  }
+  function waveEl(levels) {
+    var n = levels.length, top = [], bottom = [];
+    levels.forEach(function (v, i) {
+      if (DIR === "a") { top.push(i + "," + (50 - v / 2)); bottom.unshift(i + "," + (50 + v / 2)); }  // centred, as Resolve draws it
+      else { top.push(i + "," + (100 - v)); }                                                         // up from the bottom, as Final Cut does
+    });
+    var d = "M" + (DIR === "a" ? top.concat(bottom) : ["0,100"].concat(top, [(n - 1) + ",100"])).join(" L") + " Z";
+    // built by the HTML parser (numbers only), which gives it the SVG namespace
+    var holder = el("div");
+    holder.innerHTML = '<svg class="wave" viewBox="0 0 ' + n + ' 100" preserveAspectRatio="none"><path d="' + d + '"></path></svg>';
+    return holder.firstChild;
+  }
+  function clipElDir(c) {
+    var thumbed = DIR === "b" && !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
+    var e = el("div", "clip k-" + c.kind + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : ""));
+    e.style.left = x(frac(c.start)) + "px"; e.style.width = Math.max(3, w(frac(c.duration)) - 1) + "px";
+    e.title = c.name + " · " + secOfSeconds(frac(c.duration)); e.__c = c;
+    if (thumbed) e.appendChild(thumbsOf(c));
+    if (c.wave && c.wave.length) e.appendChild(waveEl(c.wave));
+    e.appendChild(el("div", "stripe role-" + roleOf(c)));
+    (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; e.appendChild(mk); });
+    var name = insideName(c);
+    if (name) { var lab = el("div", "label", name.text); lab.dataset.kept = String(name.kept); e.appendChild(lab); }
+    e.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); state.playhead = frac(c.start); placePlayhead(); });
+    return e;
+  }
+  // Names of the clips on one lane that are not named inside: whole, on two
+  // rows at most, each at its clip's start with a leader down (or up) to it.
+  // A name with no room on either row is left to the tap sheet (the
+  // selection panel), never squeezed under KEEP_MIN characters.
+  function railFor(clips, lane) {
+    var rail = el("div", "rail" + (lane < 0 ? " below" : "")), rowEnd = [-1e9, -1e9], used = 0;
+    rail.dataset.lane = "rail " + lane;
+    clips.slice().sort(function (a, b) { return frac(a.start) - frac(b.start); }).forEach(function (c) {
+      var cx = x(frac(c.start)), need = textW(c.name, "rl") + 9;
+      var row = cx > rowEnd[0] + 4 ? 0 : cx > rowEnd[1] + 4 ? 1 : -1;
+      if (row < 0) return;
+      var r = el("div", "rl" + (row ? " r1" : ""), c.name); r.style.left = cx + "px"; r.dataset.kept = String(c.name.length); r.title = c.name;
+      r.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); });
+      rail.appendChild(r); rowEnd[row] = cx + need; used = Math.max(used, row + 1);
+    });
+    if (used > 1) rail.classList.add("rows2");
+    return used ? rail : null;
+  }
+  function drawDir() {
+    var p = state.payload, canvas = $("canvas"); canvas.textContent = "";
+    var dur = extent(), width = Math.max(x(dur) + 24, $("scroller").clientWidth - 2);
+    canvas.style.width = width + "px";
+    var ruler = el("div", "ruler");
+    canvas.appendChild(ruler);
+    // Labelled ticks on whole timecode seconds; between them, ticks on frame
+    // multiples (the finest at least 4 px apart in A, 6 in B), a second taller.
+    var step = niceStep(dur, width - GUTTER), nom = p.nominal_fps || 24, perSec = nom / (frac(p.fps) || 24);
+    for (var S = 0; S * perSec <= dur + 1e-9; S += step) {
+      var t = S * perSec, k = el("div", "tick", tcOf(t)); k.style.left = x(t) + "px"; k.__key = "t:" + S; ruler.appendChild(k);
+    }
+    var fpx = state.pps * perSec / nom, gapPx = DIR === "a" ? 4 : 6;
+    var sub = [1, 2, 3, 4, 6, 8, 12, 24, 48, 120, 240, 600, 1440].filter(function (n) { return n * fpx >= gapPx; })[0] || 1440;
+    for (var F = sub; F / nom * perSec <= dur + 1e-9; F += sub) {
+      if (F % (step * nom) === 0) continue;
+      var ft = el("div", "ftick" + (F % nom === 0 ? " sec" : "")); ft.style.left = x(F / nom * perSec) + "px"; ruler.appendChild(ft);
+    }
+    ruler.dataset.frames = String(sub);
+    var rowEnd = [-1, -1], named = p.markers.slice();
+    p.clips.forEach(function (c) { (c.markers || []).forEach(function (m) { named.push(m); }); });
+    named.sort(function (a, b) { return frac(a.start) - frac(b.start); });
+    named.forEach(function (m) {
+      var left = x(frac(m.start));
+      var lab = el("div", "mlabel", m.name); lab.style.left = left + "px"; lab.title = m.name + " (" + glyphOf(m.type) + ")";
+      lab.insertBefore(el("span", "mg " + glyphOf(m.type)), lab.firstChild); lab.dataset.kind = glyphOf(m.type);
+      ruler.appendChild(lab);
+      var row = left > rowEnd[0] + 4 ? 0 : (left > rowEnd[1] + 4 ? 1 : -1);
+      if (row === 1) lab.classList.add("row1");
+      if (row < 0) { lab.classList.add("unfit", "crowded"); return; }
+      rowEnd[row] = left + lab.offsetWidth;
+    });
+    ruler.addEventListener("mousedown", rulerDown);
+    var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
+    var lanes = p.lanes.slice();
+    // B draws the primary storyline even when it is one gap, so every
+    // connected clip has a line to what it hangs from
+    if (DIR === "b" && !lanes.some(function (l) { return l.lane === 0; })) {
+      var at = lanes.findIndex(function (l) { return l.lane < 0; });
+      lanes.splice(at < 0 ? lanes.length : at, 0, { lane: 0, kind: "spine", clips: [] });
+    }
+    var rows = {};
+    lanes.forEach(function (lane) {
+      var here = lane.clips.map(function (id) { return byId[id]; });
+      var rail = lane.lane ? railFor(here.filter(function (c) { return !insideName(c); }), lane.lane) : null;
+      if (rail && lane.lane > 0) canvas.appendChild(rail);
+      var row = el("div", "lane " + lane.kind + (lane.lane < 0 ? " below" : "")); row.dataset.lane = String(lane.lane);
+      var tag = lane.lane > 0 ? "V" + lane.lane : lane.lane < 0 ? "A" + (-lane.lane) : "";
+      row.appendChild(el("span", "lane-tag", DIR === "a" ? tag : ""));
+      if (lane.kind === "spine") p.gaps.forEach(function (g) {
+        var ge = el("div", "gap", (DIR === "b" ? "Gap " : "gap ") + secOfSeconds(frac(g.duration)));
+        ge.style.left = x(frac(g.start)) + "px"; ge.style.width = Math.max(2, w(frac(g.duration))) + "px"; row.appendChild(ge);
+      });
+      here.forEach(function (c) { row.appendChild(clipElDir(c)); });
+      canvas.appendChild(row); rows[lane.lane] = row;
+      if (rail && lane.lane < 0) canvas.appendChild(rail);
+    });
+    var marks = el("div", "markers");
+    p.markers.forEach(function (m) { var me = el("div", "tmark"); me.style.left = x(frac(m.start)) + "px"; me.title = m.name; marks.appendChild(me); });
+    canvas.appendChild(marks);
+    if (DIR === "b" && rows[0]) {
+      // the connection line: from each connected clip's start to the storyline
+      var s0 = rows[0].offsetTop, gapTop = s0 + 8, gapBottom = s0 + rows[0].offsetHeight - 8;
+      canvas.querySelectorAll(".lane .clip").forEach(function (ce) {
+        var lane = Number(ce.parentNode.dataset.lane); if (!lane) return;
+        var top = ce.parentNode.offsetTop + ce.offsetTop, bottom = top + ce.offsetHeight, line = el("div", "conn");
+        line.style.left = (ce.offsetLeft + 4) + "px";
+        if (lane > 0) { line.classList.add("down"); line.style.top = bottom + "px"; line.style.height = Math.max(0, gapTop - bottom) + "px"; }
+        else { line.classList.add("up"); line.style.top = gapBottom + "px"; line.style.height = Math.max(0, top - gapBottom) + "px"; }
+        canvas.appendChild(line);
+      });
+    }
+    var ph = el("div", "playhead"); ph.id = "playhead"; ph.appendChild(el("div", "phead")); canvas.appendChild(ph);
+    var rg = el("div", "range"); rg.id = "range"; rg.hidden = true; canvas.appendChild(rg);
+    placePlayhead();
+    fitLabels();
+    drawOverview();
+  }
+  // The whole cut, always: every lane as a thin row, the markers, and a box
+  // round the part the tracks show. A click there scrolls the tracks to it.
+  function drawOverview() {
+    var p = state.payload, sc = $("scroller"), ov = $("overview");
+    if (!ov) {
+      ov = el("div"); ov.id = "overview"; sc.parentNode.insertBefore(ov, sc);
+      ov.addEventListener("click", function (ev) {
+        var r = ov.getBoundingClientRect(), t = (ev.clientX - r.left - 4) / (r.width - 8) * extent();
+        sc.scrollLeft = Math.max(0, x(t) - GUTTER - (sc.clientWidth - GUTTER) / 2);
+      });
+    }
+    ov.textContent = "";
+    var W = ov.clientWidth, H = ov.clientHeight, dur = extent(), lanes = p.lanes;
+    var sx = function (t) { return 4 + t / dur * (W - 8); }, rowH = (H - 6) / Math.max(1, lanes.length);
+    var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
+    lanes.forEach(function (lane, i) {
+      lane.clips.forEach(function (id) {
+        var c = byId[id], b = el("div", "ob k-" + c.kind);
+        b.style.left = sx(frac(c.start)) + "px"; b.style.width = Math.max(1.5, sx(frac(c.end)) - sx(frac(c.start)) - 0.5) + "px";
+        b.style.top = (3 + i * rowH) + "px"; b.style.height = Math.max(2, rowH - 2) + "px"; ov.appendChild(b);
+      });
+    });
+    var named = p.markers.slice(); p.clips.forEach(function (c) { (c.markers || []).forEach(function (m) { named.push(m); }); });
+    named.forEach(function (m) { var o = el("div", "om"); o.style.left = sx(frac(m.start)) + "px"; ov.appendChild(o); });
+    var box = el("div", "ov"); box.id = "ovbox"; ov.appendChild(box);
+    syncOverview();
+  }
+  function syncOverview() {
+    var box = $("ovbox"), sc = $("scroller"), ov = $("overview"); if (!DIR || !box || !state.payload) return;
+    var W = ov.clientWidth, dur = extent(), sx = function (t) { return 4 + t / dur * (W - 8); };
+    var t0 = sc.scrollLeft / state.pps, t1 = Math.min(dur, (sc.scrollLeft + sc.clientWidth - GUTTER) / state.pps);
+    box.style.left = sx(t0) + "px"; box.style.width = Math.max(6, sx(t1) - sx(t0)) + "px";
+  }
+  // The only CSS image the shell sets: a data: thumbnail (the caller checks it is one).
+  function thumbsOf(c) { var th = el("div", "thumbs"); th.style.backgroundImage = 'url("' + c.thumb + '")'; return th; }
   function clipEl(c) {
     var thumbed = !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
     var e = el("div", "clip" + (c.kind === "title" ? " title" : "") + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : ""));
     e.style.left = x(frac(c.start)) + "px"; e.style.width = Math.max(3, w(frac(c.duration)) - 1) + "px";
     e.title = c.name + " · " + secOfSeconds(frac(c.duration)); e.__c = c;
-    if (thumbed) { var th = el("div", "thumbs"); th.style.backgroundImage = 'url("' + c.thumb + '")'; e.appendChild(th); }
+    if (thumbed) e.appendChild(thumbsOf(c));
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; mk.__key = "k:" + (c.media || c.name) + "@" + m.start; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
     if (wpx >= 20) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
@@ -1079,8 +1406,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     if (!state.payload || window.innerWidth === drawnWidth) return;
     drawnWidth = window.innerWidth; draw();
   });
-  $("scroller").addEventListener("scroll", fitLabels);
-  window.__fcpApp = { setPayload: setPayload, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION,
+  $("scroller").addEventListener("scroll", function () { fitLabels(); syncOverview(); });
+  window.__fcpApp = { setPayload: setPayload, direction: DIR, extract: extract, state: state, fitLabels: fitLabels, motion: MOTION,
                       revealWhenWide: revealWhenWide, hideWhenNarrow: hideWhenNarrow, timeForProgress: timeForProgress,
                       placePlayhead: placePlayhead };
 
