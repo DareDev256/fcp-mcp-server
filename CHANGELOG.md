@@ -18,9 +18,9 @@ Measured on the issue's shape (a 30 fps `.mov` whose `tmcd` track starts at
 clips at `1s` and `3s`; 0.33.0 writes `1950065/30s`, `1950095/30s` and
 `1950155/30s`, the form the reporter hand-edited and imported with both
 ranges playing. The same mistake was in every writer that makes a clip, so
-they are fixed together, and a fresh-context review of the first pass found
-four more places (gen's insert, `FCPXMLWriter`, the silent replies, a
-`2997/100` rate) that are in this release too.
+they are fixed together. Two fresh-context reviews found more, and all of it
+is in this release: gen's insert, `FCPXMLWriter`, replies that said nothing,
+a `2997/100` rate, and a `src` clip that ended between frames.
 
 A minor version because these operations' output changes on timecoded media.
 
@@ -71,8 +71,10 @@ non-drop is 3603.6 s), and has not been imported into Final Cut yet.
   equality is still about frames).
 - **Drop-frame labels.** A typed `01:00:00;00` at 29.97 is 107892 frames
   (`TimeValue.from_timecode` counted 108000, 3.6 s late an hour), and
-  `Timecode.to_smpte` prints drop-frame labels by the drop-frame count. A
-  label that drop-frame skips (`00:01:00;00`) is refused. A timecode track
+  `Timecode.to_smpte` prints a Timecode marked drop-frame by the drop-frame
+  count. Nothing yet marks a timecode drop-frame from a DF sequence
+  (`tcFormat="DF"`), so replies about a DF project still print non-drop
+  labels. A label that drop-frame skips (`00:01:00;00`) is refused. A timecode track
   rate written as `2997/100` is read as 30000/1001, so drop-frame applies and
   the origin lands on Final Cut's timebase (`107999892/30000s`).
 - A clip on a NEW asset starts on the sequence's frame grid, as the in-point
@@ -84,9 +86,12 @@ non-drop is 3603.6 s), and has not been imported into Final Cut yet.
 - **`insert_clip` and `add_connected_clip` take a `src`**: a media file made
   anywhere (a camera, a generator, a download) comes in by its path as a new
   asset, probed for its length, rate and size (a matching `<format>` is
-  reused), on its own timecode clock, with the clock named in the reply. A
-  missing file, or one with no picture ffprobe can read, is refused (a sound
-  file goes to `add_audio`). An `asset_id` or `asset_name` still wins.
+  reused), on its own timecode clock, with the clock named in the reply. The
+  same file twice is one asset. A file brought in whole is floored to whole
+  sequence frames (its start stays exact), so the clips after it stay on the
+  grid, and the clip carries the file's format. A missing file, or one with
+  no picture ffprobe can read, is refused (a sound file goes to
+  `add_audio`), and so is a `src` given with an `asset_id` or `asset_name`.
 - **`validate_timeline` checks the media clock** (its eighth check, run with
   `formats`; inspect's Diagnose line counts it). FAIL when an asset's `start`
   differs from its file's timecode track by half a frame or more: the #45 file
@@ -103,17 +108,18 @@ Tools that take a `src` now run ffprobe on it (30 s timeout). A typed
 drop-frame label that does not exist is refused instead of read as non-drop.
 
 ### Tests
-`tests/test_media_clock.py` (59): the issue's repro; every writer read back
+`tests/test_media_clock.py` (62): the issue's repro; every writer read back
 through the parser to the same file frames with and without a timecode track
 at 30, 29.97 NDF, 29.97 DF and 23.976; NTSC in a film sequence; a 25 fps
 clock off the 30p grid never snapped before the file; Sony, Matroska, MXF and
 broadcast WAV timecode found and not used; a `2997/100` rate; missing media
 and no ffprobe; a Chinese folder with a space round-tripped and DTD-valid;
 the template, insert, connected, audio, gen and `FCPXMLWriter` paths; `src`
-on insert and connected clips, refused when missing or picture-less; exact
+on insert and connected clips (one asset per file, whole frames, the file's
+format; refused when missing, picture-less or given with an asset); exact
 source starts; drop-frame labels read and printed as the same frame across
 28,000+ frame counts at 29.97 and 59.94; the validator's FAIL, WARN, PASS,
-not-judged and not-measured rows, and one probe per file. 36 mutations, each
+not-judged and not-measured rows, and one probe per file. 41 mutations, each
 red.
 
 ## [0.32.0] - 2026-11-13

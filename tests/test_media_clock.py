@@ -648,10 +648,59 @@ def test_a_src_that_is_missing_or_has_no_picture_is_refused(tmp_path):
         m.add_connected_clip(parent_clip_id="Cam", src=str(wav))
 
 
-def test_an_existing_asset_wins_over_src(tmp_path):
+def test_src_and_an_asset_together_is_refused_not_one_dropped(tmp_path):
     m = FCPXMLModifier(_timecoded_project(tmp_path))
-    clip = m.insert_clip(position="end", asset_id="a1", src=str(tmp_path / "ignored.mov"), duration="1s")
-    assert clip.get("ref") == "a1" and m.media_clocks == []
+    with pytest.raises(ValueError, match="src or asset_id/asset_name, not both"):
+        m.insert_clip(position="end", asset_id="a1", src=str(tmp_path / "x.mov"), duration="1s")
+    with pytest.raises(ValueError, match="not both"):
+        m.add_connected_clip(parent_clip_id="Cam", asset_name="Cam", src=str(tmp_path / "x.mov"))
+
+
+@needs_ffmpeg
+def test_a_file_brought_in_whole_ends_on_a_sequence_frame(media, tmp_path):
+    """A 29.97 file in a 30p cut runs 179 x 1001/30000s: as a clip it is
+    floored to whole 30p frames, so the clip after it stays on the grid."""
+    m = FCPXMLModifier(_timecoded_project(tmp_path))
+    clip = m.insert_clip(position="start", src=str(media["ndf"]))
+    from fcpxml.rational import parse_seconds
+    length = parse_seconds(clip.get("duration"))
+    asset = m.resources[clip.get("ref")]
+    assert (length * 30).denominator == 1 and length <= parse_seconds(asset["duration"])
+    assert parse_seconds(asset["duration"]) - length < Fraction(1, 30)
+    assert clip.get("start") == "108108000/30000s"            # the start stays exact
+    assert clip.get("format") == asset["element"].get("format")
+    cam = next(c for c in m.root.iter("asset-clip") if c.get("name") == "Cam")
+    assert (parse_seconds(cam.get("offset")) * 30).denominator == 1
+
+
+@needs_ffmpeg
+def test_the_same_file_twice_is_one_asset(media, tmp_path):
+    m = FCPXMLModifier(_timecoded_project(tmp_path))
+    a = m.insert_clip(position="end", src=str(media["plain"]), duration="1s")
+    b = m.add_connected_clip(parent_clip_id="Cam", src=str(media["plain"]), duration="1s")
+    assert a.get("ref") == b.get("ref") and len(m.media_clocks) == 1
+    out = str(tmp_path / "twice.fcpxml")
+    m.save(out)
+    assert list(_assets(out)).count("plain") == 1
+
+
+def test_writing_a_parsed_project_keeps_an_exact_source_start(tmp_path):
+    from fcpxml.writer import FCPXMLWriter
+    path = tmp_path / "df.fcpxml"
+    path.write_text(_DF_DOC)
+    out = str(tmp_path / "df_out.fcpxml")
+    FCPXMLWriter().write_project(FCPXMLParser().parse_file(str(path)), out)
+    assert _clip_starts(out) == ["107999892/30000s"]
+
+
+_DF_DOC = '''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.13"><resources>
+<format id="r1" name="FFVideoFormat1080p30" frameDuration="1/30s" width="1920" height="1080"/>
+<asset id="a1" name="DF" start="107999892/30000s" duration="10s" hasVideo="1" format="r1"><media-rep kind="original-media" src="file:///nowhere/df.mov"/></asset>
+</resources><library><event name="E"><project name="P"><sequence format="r1" duration="2s" tcStart="0s"><spine>
+<asset-clip ref="a1" offset="0s" name="DF" start="107999892/30000s" duration="2s" format="r1"/>
+</spine></sequence></project></event></library></fcpxml>'''
 
 
 def test_a_source_start_off_the_sequence_grid_is_read_exactly(tmp_path):
@@ -659,14 +708,7 @@ def test_a_source_start_off_the_sequence_grid_is_read_exactly(tmp_path):
     at 107999892/30000s: read as whole 30p frames it was 0.03s before its
     file began. Equality of Timecodes is still about frames."""
     path = tmp_path / "df.fcpxml"
-    path.write_text('''<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE fcpxml>
-<fcpxml version="1.13"><resources>
-<format id="r1" name="FFVideoFormat1080p30" frameDuration="1/30s" width="1920" height="1080"/>
-<asset id="a1" name="DF" start="107999892/30000s" duration="10s" hasVideo="1" format="r1"><media-rep kind="original-media" src="file:///nowhere/df.mov"/></asset>
-</resources><library><event name="E"><project name="P"><sequence format="r1" duration="2s" tcStart="0s"><spine>
-<asset-clip ref="a1" offset="0s" name="DF" start="107999892/30000s" duration="2s" format="r1"/>
-</spine></sequence></project></event></library></fcpxml>''')
+    path.write_text(_DF_DOC)
     clip = FCPXMLParser().parse_file(str(path)).primary_timeline.clips[0]
     assert file_in_point(clip) == 0                      # was -0.0297s
     assert clip.source_start.seconds == float(Fraction(107999892, 30000))

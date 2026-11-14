@@ -670,7 +670,7 @@ def insert_generated(
     frames = int(min(duration, available) // frame)
     if frames < 1:
         raise ValueError(
-            f"Nothing to insert: {float(min(duration, probe['duration'])):.3f}s is under one frame "
+            f"Nothing to insert: {float(min(duration, available)):.3f}s is under one frame "
             f"of the sequence ({frame})."
         )
     clip_duration = frames * frame

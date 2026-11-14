@@ -107,6 +107,16 @@ def clock_attr(value: Fraction, *rates: Optional[Fraction]) -> str:
     return format_exact_seconds(value)
 
 
+_COMMON_RATES = (Fraction(30000, 1001), Fraction(24000, 1001), Fraction(60000, 1001),
+                 Fraction(24), Fraction(25), Fraction(30), Fraction(50), Fraction(60), Fraction(2400))
+
+
+def standard_attr(value: Fraction) -> str:
+    """Exact seconds over a timebase Final Cut writes, whatever rate it came
+    from (``107999892/30000s``, never the reduced ``8999991/2500s``)."""
+    return clock_attr(Fraction(value), *_COMMON_RATES)
+
+
 def _timecode_tag(entry: Optional[dict]) -> Optional[str]:
     """The ``timecode`` tag of a stream or format, whatever its case: ffprobe
     prints a QuickTime one as ``timecode`` and a Matroska one as ``TIMECODE``."""
