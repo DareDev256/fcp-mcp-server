@@ -20,6 +20,7 @@ from .rational import (
     rational_fps,
     tick_timebase,
 )
+from .words import plural
 
 # ============================================================================
 # ENUMS
@@ -78,7 +79,7 @@ class MarkerType(Enum):
             raise ValueError("Marker type contains invalid control characters")
         if len(value) > _MAX_MARKER_TYPE_LENGTH:
             raise ValueError(
-                f"Marker type exceeds maximum length ({_MAX_MARKER_TYPE_LENGTH} chars)"
+                f"Marker type exceeds maximum length ({plural(_MAX_MARKER_TYPE_LENGTH, 'char')})"
             )
         lowered = value.strip().lower()
         if not lowered:

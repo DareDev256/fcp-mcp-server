@@ -2268,8 +2268,9 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
         # Spine statistics are all zero here by construction, not because the
         # edit is empty. Say so before the zeros, or they read as a clean bill.
         shape = (
-            f"\n> **Gap-based primary storyline.** The spine holds only gaps; the "
-            f"{len(tl.connected_clips)} connected clips in lanes carry the edit. "
+            f"\n> **Gap-based primary storyline.** The spine holds only gaps; "
+            f"{plural(len(tl.connected_clips), 'connected clip')} in lanes "
+            f"{'carries' if len(tl.connected_clips) == 1 else 'carry'} the edit. "
             f"Spine clip and cut counts below are 0 by construction — see "
             f"`list_connected_clips`; the media tools read the lane clips.\n"
         )
@@ -2428,8 +2429,8 @@ async def handle_list_clips(arguments: dict) -> Sequence[TextContent]:
         clips = clips[:limit] if limit else clips
         result = (
             f"# Clips in {tl.name}\n\n"
-            f"_Gap-based primary storyline: the spine holds only gaps, so these are the "
-            f"{len(tl.connected_clips)} connected clips in lanes._\n\n"
+            f"_Gap-based primary storyline: the spine holds only gaps, so this lists the "
+            f"{plural(len(tl.connected_clips), 'connected clip')} in lanes._\n\n"
             f"| # | Name | Lane | Type | Start | Duration | Keywords |\n"
             f"|---|------|------|------|-------|----------|----------|\n"
         )
@@ -2501,7 +2502,7 @@ async def handle_list_keywords(arguments: dict) -> Sequence[TextContent]:
         return _text_result("No keywords found")
     result = f"# Keywords ({len(keywords)})\n\n"
     for kw, clips in sorted(keywords.items()):
-        result += f"**{kw}** ({len(clips)} clips)\n"
+        result += f"**{kw}** ({plural(len(clips), 'clip')})\n"
     return _text_result(result)
 
 
@@ -2536,10 +2537,10 @@ async def handle_analyze_pacing(arguments: dict) -> Sequence[TextContent]:
     suggestions = []
     flash = [c for c in clips if c.duration_seconds < 0.2]
     if flash:
-        suggestions.append(f"  {len(flash)} potential flash frames (< 0.2s)")
+        suggestions.append(f"  {plural(len(flash), 'potential flash frame')} (< 0.2s)")
     long = [c for c in clips if c.duration_seconds > 30]
     if long:
-        suggestions.append(f"  {len(long)} long takes (> 30s) - consider trimming")
+        suggestions.append(f"  {plural(len(long), 'long take')} (> 30s) - consider trimming")
     if len(seg_avgs) >= 4 and seg_avgs[3] < seg_avgs[0] * 0.7:
         suggestions.append("  Pacing accelerates toward end - good for building energy")
     elif len(seg_avgs) >= 4 and seg_avgs[3] > seg_avgs[0] * 1.3:
@@ -2592,7 +2593,7 @@ async def handle_detect_flash_frames(arguments: dict) -> Sequence[TextContent]:
     )
 
     if not flash_frames:
-        return _text_result(f"No flash frames detected (threshold: {warning_threshold} frames)")
+        return _text_result(f"No flash frames detected (threshold: {plural(warning_threshold, 'frame')})")
 
     critical = [f for f in flash_frames if f.severity == FlashFrameSeverity.CRITICAL]
     warnings = [f for f in flash_frames if f.severity == FlashFrameSeverity.WARNING]
@@ -2600,9 +2601,9 @@ async def handle_detect_flash_frames(arguments: dict) -> Sequence[TextContent]:
     result = f"""# Flash Frame Detection
 
 ## Summary
-- **Critical** (< {critical_threshold} frames): {len(critical)} found
-- **Warning** (< {warning_threshold} frames): {len(warnings)} found
-- **Total**: {len(flash_frames)} flash frames
+- **Critical** (< {plural(critical_threshold, 'frame')}): {len(critical)} found
+- **Warning** (< {plural(warning_threshold, 'frame')}): {len(warnings)} found
+- **Total**: {plural(len(flash_frames), 'flash frame')}
 
 ## Critical Flash Frames
 """
@@ -2647,7 +2648,7 @@ async def handle_detect_duplicates(arguments: dict) -> Sequence[TextContent]:
 ## Duplicate Groups
 """
     for group in duplicates:
-        result += f"\n### {group.source_name} ({group.count} uses)\n"
+        result += f"\n### {group.source_name} ({plural(group.count, 'use')})\n"
         result += "| Clip Name | Timeline Position | Duration |\n|-----------|-------------------|----------|\n"
         for c in group.clips:
             result += f"| {c['name']} | {c['timecode']} | {format_duration(c['duration'])} |\n"
@@ -2729,7 +2730,7 @@ async def handle_batch_add_markers(arguments: dict) -> Sequence[TextContent]:
     )
     modifier.save(output_path)
     return _text_result(
-        f"Added {len(markers_added)} markers\n\nSaved to: {output_path}"
+        f"Added {plural(len(markers_added), 'marker')}\n\nSaved to: {output_path}"
         + _marker_cap_notice(dropped)
     )
 
@@ -2814,7 +2815,7 @@ async def handle_split_clip(arguments: dict) -> Sequence[TextContent]:
         split_points=arguments["split_points"],
     )
     modifier.save(output_path)
-    return _text_result(f"Split '{arguments['clip_id']}' into {len(new_clips)} clips\n\nSaved to: {output_path}")
+    return _text_result(f"Split '{arguments['clip_id']}' into {plural(len(new_clips), 'clip')}\n\nSaved to: {output_path}")
 
 
 async def handle_insert_clip(arguments: dict) -> Sequence[TextContent]:
@@ -2849,7 +2850,7 @@ async def handle_fix_flash_frames(arguments: dict) -> Sequence[TextContent]:
 
     result = _format_batch_result(
         title="Flash Frames Fixed",
-        summary={"Fixed": f"{len(fixed)} flash frames", "Mode": arguments.get('mode', 'auto')},
+        summary={"Fixed": f"{plural(len(fixed), 'flash frame')}", "Mode": arguments.get('mode', 'auto')},
         headers=["Clip", "Frames", "Action", "Result"],
         rows=[
             [f['clip_name'], f"{f['duration_frames']}f", f['action'], f"Extended: {f.get('extended_clip', 'N/A')}"]
@@ -3204,7 +3205,7 @@ def _diagnose(tl, checks=("all",)) -> tuple:
                                  f"({', '.join(c['name'] for c in group.clips)})"))
             else:
                 reused.append(("INFO", ", ".join(uses),
-                               f"Source used {group.count} times, different ranges: {group.source_name}"))
+                               f"Source used {plural(group.count, 'time')}, different ranges: {group.source_name}"))
         row("Duplicate frames", overlaps)
         row("Reused source", reused)
 
@@ -3267,7 +3268,7 @@ async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
 
 ## Verdict: {_verdict(issues)} · {_tally_text(issues)}
 
-**Health Score**: {health_score}% from the {len(rows)} checks below (each FAIL -10, each WARN -3, INFO 0)
+**Health Score**: {health_score}% from the {plural(len(rows), 'check')} below (each FAIL -10, each WARN -3, INFO 0)
 
 ## Summary
 | Result | Check | Found | Where |
@@ -3282,7 +3283,7 @@ Not checked: {NOT_CHECKED}.
         result += "| Result | Where | Issue |\n|--------|-------|-------|\n"
         result += "\n".join(f"| {VERDICT[v]} | {at} | {what} |" for v, at, what, _check in issues[:20])
         if len(issues) > 20:
-            result += f"\n... and {len(issues) - 20} more issues"
+            result += f"\n... and {plural(len(issues) - 20, 'more issue')}"
     else:
         result += "_No issues found!_"
 
@@ -3291,8 +3292,9 @@ Not checked: {NOT_CHECKED}.
         # Without this line a 100 % reads as a clean bill for an edit the
         # check never looked at (issue #23).
         result += (
-            f"\n\n> **Gap-based primary storyline**: the spine holds only gaps and the "
-            f"{len(tl.connected_clips)} connected clips carry the edit. Flash frames were "
+            f"\n\n> **Gap-based primary storyline**: the spine holds only gaps and "
+            f"{plural(len(tl.connected_clips), 'connected clip')} "
+            f"{'carries' if len(tl.connected_clips) == 1 else 'carry'} the edit. Flash frames were "
             f"checked on the connected clips and on the picture; the gap check applies to "
             f"the spine and did not evaluate them."
         )
@@ -3632,9 +3634,9 @@ def _format_snap_report(
             "lanes could be moved."
         )
     elif moved == 0:
-        headline = f"**0 of {considered} cuts moved.** Nothing was changed."
+        headline = f"**0 of {plural(considered, 'cut')} moved.** Nothing was changed."
     else:
-        headline = f"**{moved} of {considered} cuts moved.**"
+        headline = f"**{moved} of {plural(considered, 'cut')} moved.**"
 
     lines = [
         "# Cuts Snapped to Beats",
@@ -4208,7 +4210,7 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
         return _text_result(f"Invalid EDL: {exc}")
 
     lines = [
-        f"Authored {result['path']} from {result['clips']} ranges.",
+        f"Authored {result['path']} from {plural(result['clips'], 'range')}.",
     ]
     for note in result["ignored"]:
         lines.append(f"Ignored: {note}")

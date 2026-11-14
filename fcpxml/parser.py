@@ -393,6 +393,10 @@ class FCPXMLParser:
                 gap_frames = self._tc(elem, 'duration').frames
                 self._parse_gap_connected_clips(
                     elem, current_offset, self._tc(elem, 'start').frames, timeline)
+                # A gap's own markers are timeline markers. The mark tool writes
+                # them here on a gap-based storyline; until 0.33 they were
+                # written and never read back.
+                timeline.markers.extend(self._collect_gap_markers(elem, current_offset))
                 current_offset += gap_frames
             elif tag == 'transition':
                 transition = self._parse_transition(elem, current_offset, raw_cut)
@@ -486,6 +490,36 @@ class FCPXMLParser:
                     frame_rate=self.frame_rate,
                 )
         return markers
+
+    def _collect_gap_markers(self, gap: ET.Element, gap_offset_frames: int) -> list:
+        """A gap's markers, each placed on the timeline: where the gap sits
+        plus how far into the gap's clock (which begins at its ``start``) the
+        marker is, measured in exact seconds and rounded to the nearest
+        frame once. A broadcast gap starts at 3600s, which is not on the
+        23.976 frame grid; subtracting two separately truncated frame counts
+        put every marker one frame late."""
+        try:
+            gap_start = parse_seconds(gap.get('start', '0s'))
+        except ValueError:
+            gap_start = Fraction(0)
+        frame = Fraction(1) / rational_fps(self.frame_rate)
+        out = []
+        for child in gap:
+            if child.tag not in MARKER_XML_TAGS:
+                continue
+            marker = self._parse_marker_element(child)
+            if marker is None:
+                continue
+            try:
+                into = parse_seconds(child.get('start', '0s')) - gap_start
+            except ValueError:
+                into = Fraction(0)
+            marker.timeline_start = Timecode(
+                frames=gap_offset_frames + int((into / frame + Fraction(1, 2)) // 1),
+                frame_rate=self.frame_rate,
+            )
+            out.append(marker)
+        return out
 
     def _parse_keyword(self, elem: ET.Element) -> Optional[Keyword]:
         """Parse a keyword element."""

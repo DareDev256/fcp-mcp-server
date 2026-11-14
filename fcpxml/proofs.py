@@ -54,6 +54,7 @@ from typing import Optional
 from . import filtergraph as fg
 from . import raster as rs
 from .rational import nominal_fps, rational_fps
+from .words import plural
 
 GROUND, PANEL = rs.colour("ground"), rs.colour("panel")
 INK, MUTE, ACCENT = rs.colour("ink"), rs.colour("mute"), rs.colour("accent")
@@ -985,7 +986,7 @@ def scene_strip(rows: list, out_dir: Path, fps=24, *, scenes: Optional[list] = N
         height = margin + head_h + len(page) * row_h - gap + (gap + list_h if list_h else 0) + margin
         r = rs.Raster.filled(width, height, GROUND)
         first, final = p * per_page + 1, p * per_page + len(page)
-        clip_word = f"in clip {clips[0]}" if len(clips) == 1 else f"in {len(clips)} clips"
+        clip_word = f"in clip {clips[0]}" if len(clips) == 1 else f"in {plural(len(clips), 'clip')}"
         head = f"Cuts {first} to {final} of {len(rows)} {clip_word}: before | after"
         r.text(rs.fit(head, f, width - 2 * margin)[0], f, margin, margin, INK)
         sub = [f"{backend or 'scene'} score vs threshold {threshold:g}" if threshold is not None else
@@ -1321,7 +1322,10 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
         seconds = getattr(at, "seconds", at)
         if seconds is None:
             continue
-        t = Fraction(str(seconds)).limit_denominator(100000) - origin
+        # a marker the parser placed (timeline_start) is on the sequence clock
+        # already; only a raw one (a sequence marker at 3600s) needs the origin off
+        shift = origin if getattr(m, "timeline_start", None) is None else 0
+        t = Fraction(str(seconds)).limit_denominator(100000) - shift
         if 0 <= t <= total:
             markers.append((t, m))
     if markers:

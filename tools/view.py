@@ -25,6 +25,7 @@ from typing import Optional
 import tools
 from fcpxml import journal, render, timeline_app
 from fcpxml.media_intel import media_src_to_path
+from fcpxml.words import plural
 from tools import find as _find
 from tools._common import parse_project, text_result
 
@@ -83,7 +84,7 @@ def _timeline_or_message(filepath):
 
 
 def _plural(n: int, word: str) -> str:
-    return f"{n} {word}{'' if n == 1 else 's'}"
+    return plural(n, word)
 
 
 def _marker_phrase(payload: dict) -> str:
@@ -132,7 +133,7 @@ async def handle_view_timeline(args: dict):
         f"**{timeline.name}** — {_plural(len(payload['clips']), 'clip')} across "
         f"{_plural(len(payload['lanes']), 'lane')}, {float(Fraction(payload['duration'])):.2f}s, "
         f"{_marker_phrase(payload)}, {_gap_phrase(timeline)}; "
-        f"{thumbs} thumbnails, {words} transcript words.\n"
+        f"{plural(thumbs, 'thumbnail')}, {plural(words, 'transcript word')}.\n"
         f"sha256: {sha}\n"
         "A host with MCP Apps renders this inline (`ui://fcp/timeline`); "
         "otherwise the JSON below is the timeline, every time an exact "

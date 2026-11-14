@@ -2,6 +2,64 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Markers on a gap were written and never read back.** On a gap-based
+  edit (the spine is one `<gap>` and every clip hangs off it, as
+  `examples/music-video.fcpxml` is), `mark · batch_add_markers` writes each
+  marker inside the gap, which is where Final Cut puts it, and the parser
+  skipped a gap's own `<marker>`/`<chapter-marker>` children. Three markers
+  written there read back as none: `analyze_timeline` said Total 0,
+  `list_markers` listed none, `view`'s payload carried none and
+  `preview_timeline` drew no `^`. The parser now reads them as timeline
+  markers at the gap's offset plus (marker start minus gap start), measured
+  in exact seconds and rounded to a frame once: subtracting two separately
+  truncated frame counts put all three one frame late at 23.976, because
+  the gap's 3600s start is not on that frame grid.
+- **The text timeline took the origin off twice.** `preview_timeline` drew a
+  marker the parser had already placed (`timeline_start`) on the sequence
+  clock and then subtracted the timeline's origin again, so on a timeline
+  whose earliest element sits at 01:00:00:00 (a gap-only spine) every placed
+  marker landed an hour before the start and was dropped. Only a raw
+  sequence marker has the origin taken off now.
+- **"Added 1 markers".** The 0.32 "(s)" sweep missed counts printed straight
+  into a plural noun (`f"{n} markers"`, or behind a modifier:
+  `f"{n} connected clips"`), which reads right for every n but one. All 75
+  of them in `server.py`, `tools/` and `fcpxml/` go through
+  `fcpxml.words.plural` ("Added 1 marker", "Split 1 clip into 3 pieces",
+  "Applied to 1 clip", "from 1 range.", "Index cleared: 1 media row
+  dropped", "1 flash frame"); the gap-based notes agree with their verb
+  ("1 connected clip in lanes carries the edit"). One test asserted "1 media
+  rows dropped" and now asserts the singular. A measured decimal ("2.5
+  frames") stays plural.
+
+### Gates, each broken once in the real code and seen red (2026-11-13)
+- `tests/test_gap_markers.py`: three markers (standard, chapter, to-do)
+  written with the real `batch_add_markers` on a copy of music-video come
+  back as timeline markers at the positions the test computes from the XML
+  itself, and `analyze_timeline` (Total 3, Chapters 1), `list_markers` (3
+  rows), `view`'s payload (3, as exact `n/d`) and `preview_timeline` (3 `^`
+  rows) all see them. Red on 0.32.0. Mutations, all red: the gap branch
+  deleted; placement from truncated frame counts; the text timeline
+  subtracting the origin from placed markers.
+- `tests/test_plurals.py`: an AST scan of `server.py`, `tools/` and
+  `fcpxml/` finds no f-string printing a value into a plural noun, straight
+  or behind up to two modifiers (verbs, units and the four values that are
+  not counts listed by name; 75 hits on 0.32.0, 0 now), and every
+  `plural()` call (95) is rendered at n=1 and n=2. Mutations, all red:
+  "Added {n} markers" put back; "{words} transcript words" put back;
+  "Index cleared: {before} media rows dropped" put back; the scanner
+  narrowed to the word right after the value; a `plural()` handed a plural
+  noun; `words.plural` always plural.
+
+### Not done
+- A gap's `<keyword>` and `<rating>` are still not read: `Timeline` has no
+  field for them, so reading them is a model change, not a parser fix.
+- A connected storyline written as the DTD spells it, `<spine lane="N">`
+  under a gap or a clip, is skipped with every clip in it; the parser only
+  knows a `<storyline>` tag. `<audition>` as an anchored item is skipped
+  too. Both need storyline offset handling and their own tests.
+- `analysis-marker` and `hidden-clip-marker` are not parsed on any host.
+
 ## [0.32.0] - 2026-11-13
 
 Proof you can read. Every picture the preview tools make now carries the
