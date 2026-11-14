@@ -429,11 +429,13 @@ class TestFrameRateDisplay:
         assert "23.98fps" in text
         assert "23.976023976" not in text
 
-    def test_preview_render_prints_the_enum_name(self):
+    def test_the_preview_page_carries_the_enum_name(self):
+        """preview:// (the app shell with the payload inlined since 0.32)
+        labels the rate 23.98, never 23.976023976."""
+        from fcpxml import timeline_app
         from fcpxml.parser import FCPXMLParser
-        from fcpxml.preview import render_timeline_html
 
         tl = FCPXMLParser().parse_file("examples/music-video.fcpxml").primary_timeline
-        html = render_timeline_html(tl)
-        assert "23.98fps" in html
+        html = timeline_app.render_page_html(timeline_app.build_payload(tl))
+        assert '"fps_label":"23.98"' in html
         assert "23.976023976" not in html

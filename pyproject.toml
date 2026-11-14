@@ -7,7 +7,7 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.31.0"
+version = "0.32.0"
 
 description = "MCP server for Final Cut Pro XML. 15 grouped tools (102 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, real media analysis (silence, beats, shot boundaries, local Whisper or ElevenLabs transcripts), a SQLite cache, ffmpeg proxy preview with source-media verification, export watch-folder round-trip, EDL import, an operation journal with undo, a review gate on delivery, bulk organize, tiered shot search with offline captions."
 readme = "README.md"
@@ -101,6 +101,13 @@ where = ["."]
 # clean directory; the publish workflow installs the built wheel into a fresh
 # venv and starts the server before uploading.
 include = ["fcpxml*", "tools*"]
+
+[tool.setuptools.package-data]
+# The proof images (0.32) draw their text with this bundled bitmap face
+# (Spleen, BSD-2-Clause; the licence ships beside it). Not Python, so
+# setuptools leaves it out unless named here; tests/test_packaging.py builds a
+# wheel and looks for it, and the publish job draws text from the installed one.
+fcpxml = ["fonts/*.bdf", "fonts/LICENSE-spleen.txt"]
 
 [tool.black]
 line-length = 100

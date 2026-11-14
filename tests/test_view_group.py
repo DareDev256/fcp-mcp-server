@@ -118,7 +118,7 @@ def _summary(path):
 def _diagnose_gaps(path):
     text = asyncio.run(server.call_tool(
         "diagnose", {"action": "validate_timeline", "args": {"filepath": str(path)}}))[0].text
-    return int(next(line for line in text.splitlines() if line.startswith("| Gaps |")).split("|")[2])
+    return int(next(line for line in text.splitlines() if "| Gaps |" in line).split("|")[3])
 
 
 @pytest.mark.parametrize("path", [SAMPLE, MUSIC_VIDEO], ids=["sample", "music-video"])

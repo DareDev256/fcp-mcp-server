@@ -20,17 +20,18 @@ text and lines, because ``#00E5FF`` on white is unreadable.
 from __future__ import annotations
 
 # name: (dark, light). Hex only: six digits, or eight where the last two are
-# alpha. Neutrals have r == g == b within a few points; the accent and the
-# danger red are the only colours with a hue.
+# alpha. Neutrals are exact greys, r == g == b (0.32: they carried a blue tint,
+# 18,18,22 and 28,28,34, read as off-black against the true-black ground); the
+# accent and the danger red are the only colours with a hue.
 TOKENS: dict[str, tuple[str, str]] = {
     "ground": ("#000000", "#FFFFFF"),       # page and app background
-    "panel": ("#121216", "#F4F4F5"),        # cards, the track area, the waveform plate
-    "raised": ("#1C1C22", "#E4E4E7"),       # connected clips, buttons
-    "raised-2": ("#2A2A32", "#D9D9DE"),     # spine clips, titles
-    "line": ("#26262C", "#D4D4D8"),         # hairlines, lane rules
-    "line-strong": ("#3A3A44", "#A1A1AA"),  # clip borders, ticks, inputs
-    "ink": ("#EDEDF0", "#09090B"),          # text
-    "mute": ("#8C8C96", "#5B5B66"),         # secondary text
+    "panel": ("#121212", "#F4F4F4"),        # cards, the track area, the waveform plate
+    "raised": ("#1C1C1C", "#E4E4E4"),       # connected clips, buttons
+    "raised-2": ("#2A2A2A", "#D9D9D9"),     # spine clips, titles
+    "line": ("#262626", "#D4D4D4"),         # hairlines, lane rules
+    "line-strong": ("#3A3A3A", "#A1A1A1"),  # clip borders, ticks, inputs
+    "ink": ("#EDEDED", "#090909"),          # text
+    "mute": ("#8C8C8C", "#5B5B5B"),         # secondary text
     "accent": ("#00E5FF", "#007A8A"),       # playhead, selection, markers, links, waveform
     "accent-fill": ("#00E5FF", "#00E5FF"),  # primary button fill (black ink on it)
     "accent-ink": ("#000000", "#000000"),   # text on accent-fill
@@ -44,7 +45,7 @@ TOKENS: dict[str, tuple[str, str]] = {
     "badge": ("#33EBFF", "#33EBFF"),
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
     "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
-    "danger": ("#FF3B30", "#D70015"),       # FAIL and removed spans, nothing else
+    "danger": ("#FF3B30", "#D70015"),       # FAIL (and missing media) only: never an intended edit
 }
 
 ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash", "badge")

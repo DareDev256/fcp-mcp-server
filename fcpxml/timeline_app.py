@@ -1,9 +1,10 @@
 """The timeline app — an MCP Apps view of the cut, rendered by the host.
 
-``fcpxml/preview.py`` draws a static HTML snapshot and serves it as
-``preview://``. This module is the interactive successor: one ``ui://``
-resource (the app shell, served once as ``text/html;profile=mcp-app``) and a
-JSON payload the ``view`` tool returns on every call. The host renders the
+One ``ui://`` resource (the app shell, served once as
+``text/html;profile=mcp-app``) and a JSON payload the ``view`` tool returns on
+every call. Since 0.32 ``preview://`` serves the same shell with the payload
+inlined (:func:`render_page_html`); the static renderer it used to serve
+(``fcpxml/preview.py``) is gone, so there is one timeline picture. The host renders the
 shell in a sandboxed iframe, posts each tool result into it, and the app
 draws lanes, clips, markers, gaps, transcript words and thumbnails from the
 payload alone. The app calls back into the server through the host
@@ -342,6 +343,19 @@ def data_uri_jpeg(path: str) -> Optional[str]:
 # The shell
 # ---------------------------------------------------------------------------
 
+def render_page_html(payload: dict) -> str:
+    """The ``preview://`` page (0.32): the same shell with ``payload`` inlined
+    as a JSON script block, so a browser or a host that only shows HTML draws
+    the timeline at once. It replaces the legacy static renderer
+    (fcpxml/preview.py, deleted). ``<`` is escaped inside the JSON, so a clip
+    named ``</script>`` stays data."""
+    data = json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    block = f'<script type="application/json" id="fcp-inline-payload">{data}</script>\n'
+    marker = "<script>"
+    i = _APP_HTML.rindex(marker)
+    return _APP_HTML[:i] + block + _APP_HTML[i:]
+
+
 def render_app_html() -> str:
     """The ``ui://fcp/timeline`` resource. Self-contained; takes no payload.
 
@@ -418,8 +432,27 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
      label over a white frame still reads at 10:1 (tests/test_palette.py, test_app_labels.py). */
   .clip.has-thumb .label { color: var(--on-media); padding-top: 12px;
     background: linear-gradient(to bottom, transparent 0, var(--shade) 10px); }
-  .clip .role { font-size: 9px; color: var(--mute); margin-left: 6px; }
+  .clip .role { font-size: 12px; color: var(--mute); margin-left: 6px; text-transform: uppercase; letter-spacing: .04em; }
   .clip.has-thumb .role { color: var(--on-media); }
+  /* Every clip carries its number: inside, top right, when it fits clear of
+     the name; else just outside the box on a leader, above it (below it for
+     lanes under the spine), in a strip the lane opens for it. */
+  .clip .num { position: absolute; right: 2px; top: 2px; z-index: 1; padding: 0 3px; border-radius: 3px;
+    font-size: 11px; font-weight: 600; color: var(--ink); background: var(--ground); visibility: hidden; white-space: nowrap; }
+  .clip .num.on { visibility: visible; }
+  .lane.has-out { height: 62px; }
+  .lane.spine.has-out { height: 76px; }
+  .lane.audio.has-out { height: 48px; }
+  .lane.has-out:not(.below) .clip, .lane.has-out:not(.below) .gap { top: 21px; }
+  .lane.has-out.below .clip { bottom: 21px; }
+  .onum { position: absolute; top: 1px; z-index: 3; padding: 0 3px; border-radius: 3px; font-size: 11px; font-weight: 600;
+    line-height: 14px; color: var(--ink); background: var(--ground); border: 1px solid var(--line-strong); white-space: nowrap; }
+  .lane.below .onum { top: auto; bottom: 1px; }
+  .onum .lead { position: absolute; left: 50%; top: 100%; width: 0; height: 5px; border-left: 1px solid var(--line-strong); }
+  .lane.below .onum .lead { top: auto; bottom: 100%; }
+  #key { margin-top: 6px; font-size: 12px; color: var(--mute); line-height: 1.6; }
+  #key b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+  #key span { margin-right: 14px; white-space: nowrap; }
   .clip.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .clip .mk { position: absolute; top: 0; width: 2px; height: 8px; background: var(--accent); z-index: 2; }
   .gap { position: absolute; top: 3px; bottom: 3px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--gap);
@@ -455,8 +488,14 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   /* No opacity: a 45% button read at 4.1:1. Disabled text is the mute token (palette.TEXT_PAIRS). */
   button:disabled { color: var(--mute); cursor: default; }
   button.primary:disabled { background: var(--raised); color: var(--mute); border-color: var(--line-strong); font-weight: 400; }
+  /* Read only (preview://, no host): the controls are OFF, not merely unwired. */
+  .readonly button, .readonly input[type=text] { background: transparent; border-style: dashed; color: var(--mute);
+    cursor: not-allowed; font-weight: 400; }
+  .readonly-note { width: 100%; font-size: 12px; color: var(--mute); }
   input[type=text] { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line-strong);
     background: var(--ground); color: var(--ink); flex: 1 1 120px; min-width: 0; max-width: 100%; }
+  /* The browser's own placeholder grey read 4.07:1 on the panel; the mute token reads 5.6:1. */
+  input::placeholder { color: var(--mute); opacity: 1; }
   #log { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--mute);
     max-height: 180px; overflow: auto; margin: 0; }
   .zoom { display: inline-flex; gap: 4px; align-items: center; color: var(--mute); font-size: 11px; }
@@ -471,6 +510,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
 </header>
 <div id="empty">Waiting for a timeline. Call the <b>view</b> tool with <code>view_timeline</code> and a filepath.</div>
 <div id="scroller" hidden><div id="canvas"></div></div>
+<div id="key" hidden></div>
 <div id="panel" hidden>
   <div class="card">
     <h2>Selection</h2>
@@ -557,7 +597,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     state.payload = p; state.sel = null; state.range = null; state.playhead = 0;
     $("empty").hidden = true; $("scroller").hidden = false; $("panel").hidden = false;
     $("title").textContent = p.name || "timeline";
-    $("meta").textContent = p.clips.length + " clips · " + secOfSeconds(frac(p.duration)) + " · " + p.width + "×" + p.height + " @ " + p.fps_label + "fps" + (p.gap_based ? " · gap-based storyline" : "");
+    var spineN = p.clips.filter(function (c) { return !c.lane; }).length, connN = p.clips.length - spineN;
+    // the clip count worded as every other output words it (proofs.counts_label)
+    $("meta").textContent = spineN + (spineN === 1 ? " clip" : " clips") + " + " + connN + " connected · " + secOfSeconds(frac(p.duration)) + " · " + p.width + "×" + p.height + " @ " + p.fps_label + "fps" + (p.gap_based ? " · gap-based storyline" : "");
     fit(); draw(); updateSel();
     if (before) animateFrom(before);
   }
@@ -767,7 +809,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       a.onfinish = function () { if (e.parentNode) e.parentNode.removeChild(e); };
     });
   }
-  var GUTTER = 48, MIN_PPS = 8;
+  var GUTTER = 48, MIN_PPS = 0.25;
   function extent() {
     // Fit the whole sequence, like Final Cut's zoom to fit. Until 0.31 this
     // fitted the clips only, because a ripple left the sequence's declared
@@ -778,6 +820,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     return Math.max(end, frac(p.duration)) || 1;
   }
   function fit() {
+    // The whole sequence in the width, however long (0.32: an 8 px/s floor
+    // ran a 164 s cut 14 s past the edge with no sign of it).
     var w = $("scroller").clientWidth - GUTTER - 24;
     state.pps = Math.max(MIN_PPS, w / extent());
   }
@@ -817,6 +861,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     });
     ruler.addEventListener("mousedown", rulerDown);
     var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
+    state.num = {};
+    // record order, as the sheet and the text timeline number them: by start,
+    // the spine first, then lanes from the lowest
+    p.clips.slice().sort(function (a, b) {
+      return frac(a.start) - frac(b.start) || (!!a.lane - !!b.lane) || (a.lane || 0) - (b.lane || 0); })
+      .forEach(function (c, i) { state.num[c.id] = i + 1; });
     // Room for a connected clip: a spine with nothing above it keeps one empty
     // lane-1 row, so a clip laid on lane 1 (gen_broll) appears in place instead
     // of pushing the spine, and everything under it, down.
@@ -824,7 +874,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     if (lanes.some(function (l) { return l.kind === "spine"; }) && !lanes.some(function (l) { return l.lane > 0; }))
       lanes.unshift({ lane: 1, kind: "video reserved", clips: [] });
     lanes.forEach(function (lane) {
-      var row = el("div", "lane " + lane.kind); row.dataset.lane = String(lane.lane);
+      var row = el("div", "lane " + lane.kind + (lane.lane < 0 ? " below" : "")); row.dataset.lane = String(lane.lane);
       row.appendChild(el("span", "lane-tag", lane.kind === "spine" ? "spine" : "lane " + lane.lane));
       if (lane.kind === "spine") p.gaps.forEach(function (g) {
         var ge = el("div", "gap", "gap " + secOfSeconds(frac(g.duration)));
@@ -875,6 +925,60 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var b = range.getBoundingClientRect(), own = e.scrollWidth > e.clientWidth + 0.5 && !e.classList.contains("tick") && !e.classList.contains("mlabel");
       e.classList.toggle("unfit", own || b.left < left - 0.5 || b.right > right + 0.5);
     });
+    placeNumbers(left, right);
+  }
+  // Every clip is numbered (record order: start, spine first, then lanes
+  // from the lowest) and the key under the timeline names every number. The
+  // number sits inside the box, top right, when it fits there clear of the
+  // name; otherwise just outside it on a leader, in a strip its lane opens:
+  // above the box, or below it for a lane under the spine. Outside numbers
+  // never overlap each other. A number outside the visible area is hidden
+  // there (never cut), and is still in the key.
+  function placeNumbers(left, right) {
+    var sc = $("scroller");
+    sc.querySelectorAll(".onum").forEach(function (e) { e.remove(); });
+    var outside = [];
+    sc.querySelectorAll(".clip").forEach(function (c) {
+      var num = c.querySelector(".num"); if (!num) return;
+      var lab = c.querySelector(".label"), named = lab && !lab.classList.contains("unfit");
+      var nb = num.getBoundingClientRect(), cb = c.getBoundingClientRect();
+      var inside = nb.left >= cb.left + 1 && nb.right <= cb.right - 1;
+      if (inside && named) {
+        var rg = document.createRange(); rg.selectNodeContents(lab); var tb = rg.getBoundingClientRect();
+        if (tb.right > nb.left - 3 && tb.left < nb.right && tb.bottom > nb.top && tb.top < nb.bottom) inside = false;
+      }
+      num.classList.toggle("on", inside && nb.left >= left - 0.5 && nb.right <= right + 0.5);
+      if (!inside) outside.push(c);
+    });
+    var rows = new Set();
+    outside.forEach(function (c) { rows.add(c.parentNode); });
+    sc.querySelectorAll(".lane").forEach(function (row) { row.classList.toggle("has-out", rows.has(row)); });
+    var lastRight = {};
+    outside.sort(function (a, b) { return a.offsetLeft - b.offsetLeft; }).forEach(function (c) {
+      var row = c.parentNode, n = c.querySelector(".num").textContent;
+      var badge = el("div", "onum", n), lead = el("div", "lead");
+      badge.appendChild(lead); badge.dataset.for = n; row.appendChild(badge);
+      var centre = c.offsetLeft + c.offsetWidth / 2, bw = badge.offsetWidth;
+      // never under the sticky lane tags at the left, never on the previous number
+      var at = Math.max(centre - bw / 2, GUTTER + 2, (lastRight[row.dataset.lane] || -1e9) + 3);
+      badge.style.left = at + "px";
+      lead.style.left = (centre - at) + "px";
+      lastRight[row.dataset.lane] = at + bw;
+      var bb = badge.getBoundingClientRect();
+      badge.style.visibility = bb.left >= left - 0.5 && bb.right <= right + 0.5 ? "visible" : "hidden";
+    });
+    var key = $("key");
+    if (key) {
+      key.textContent = "";
+      var all = [];
+      sc.querySelectorAll(".clip").forEach(function (c) {
+        var num = c.querySelector(".num"); if (num && c.__c) all.push([Number(num.textContent), c.__c.name]);
+      });
+      all.sort(function (a, b) { return a[0] - b[0]; }).forEach(function (k) {
+        var sp = el("span"); sp.appendChild(el("b", null, String(k[0]))); sp.appendChild(document.createTextNode(k[1])); key.appendChild(sp);
+      });
+      key.hidden = all.length === 0;
+    }
   }
   function clipEl(c) {
     var thumbed = !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
@@ -885,6 +989,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; mk.__key = "k:" + (c.media || c.name) + "@" + m.start; e.appendChild(mk); });
     var wpx = w(frac(c.duration));
     if (wpx >= 20) { var lab = el("div", "label", c.name); if (c.role && wpx >= 90) lab.appendChild(el("span", "role", c.role)); e.appendChild(lab); }
+    if (state.num && state.num[c.id]) e.appendChild(el("div", "num", String(state.num[c.id])));
     e.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); state.playhead = frac(c.start); placePlayhead(); });
     return e;
   }
@@ -947,6 +1052,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       edit("edit", { action: "delete_clips", args: { filepath: file, clip_ids: [c.name], expected_sha256: p.file.sha256 } });
     }, !!c && c.kind === "spine" && ok);
     [inspect, similar, name, mark, del].forEach(function (b) { acts.appendChild(b); });
+    acts.classList.toggle("readonly", !ok);
+    if (!ok) {
+      [inspect, similar, mark, del].forEach(function (b) { b.setAttribute("aria-disabled", "true"); b.title = "read only here"; });
+      name.disabled = true; name.setAttribute("aria-disabled", "true");
+      acts.appendChild(el("div", "readonly-note", "Read only: these edits run when the view tool's timeline is open in an MCP Apps host."));
+    }
   }
   function btn(label, fn, enabled, primary) { var b = el("button", primary ? "primary" : null, label); b.disabled = !enabled; b.addEventListener("click", fn); return b; }
   function edit(tool, args) {
@@ -975,12 +1086,23 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
 
   // ---- boot --------------------------------------------------------------
   state.inHost = window.parent && window.parent !== window;
+  // preview:// serves this same shell with the timeline inlined (0.32): drawn
+  // at once, with no host and no fetch.
+  var inline = document.getElementById("fcp-inline-payload");
   if (state.inHost) {
     request("ui/initialize", { appInfo: { name: "fcp-mcp-server timeline", version: "1" }, appCapabilities: {}, protocolVersion: "2025-11-21" })
       .then(function (res) { applyHostContext((res && res.hostContext) || null); notify("ui/notifications/initialized"); log("host initialized"); },
             function (err) { log("ui/initialize failed: " + err.message); });
-  } else {
+  } else if (!inline) {
     log("not inside an MCP Apps host; waiting for a payload via window.__fcpApp.setPayload()");
+  }
+  if (inline) {
+    try {
+      setPayload(JSON.parse(inline.textContent));
+      log(state.inHost ? "timeline inlined by preview://"
+                       : "timeline inlined by preview://; read only here (edits run inside an MCP Apps host)");
+    }
+    catch (err) { log("inlined timeline could not be read: " + err.message); }
   }
 })();
 </script>

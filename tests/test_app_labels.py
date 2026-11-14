@@ -19,12 +19,13 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from fcpxml import timeline_app
+from fcpxml import palette, timeline_app
 from fcpxml.parser import FCPXMLParser
 
 # The CI job that exists to run this sets FCP_MCP_REQUIRE_BROWSER=1: there a
@@ -310,46 +311,131 @@ def test_the_thumbnail_check_goes_red_at_the_old_size(browser):
 
 
 # ---------------------------------------------------------------------------
-# The legacy preview:// page has no script: its rule is CSS (fcpxml/preview.py)
+# preview:// is the app with the payload inlined (0.32): it draws on its own
 # ---------------------------------------------------------------------------
-
-LEGACY_OFFENDERS = """() => {
-  const out = [];
-  document.querySelectorAll('.fit').forEach((row) => {
-    const r = row.getBoundingClientRect(), name = row.querySelector('span'), b = name.getBoundingClientRect();
-    const visible = b.top < r.bottom - 1 && b.bottom > r.top + 1;   // on the row's one visible line
-    if (visible && b.right > r.right + 0.5) out.push('cut "' + name.textContent + '"');
-  });
-  return out;
-}"""
-
-
-def _legacy(width: int, html: str, browser) -> list[str]:
-    page = browser.new_page(viewport={"width": width, "height": 700})
-    try:
-        page.set_content(html)
-        return page.evaluate(LEGACY_OFFENDERS)
-    finally:
-        page.close()
-
 
 @pytest.mark.parametrize("width", [1440, 390])
 @pytest.mark.parametrize("fixture", ["music-video.fcpxml", "sample.fcpxml"])
-def test_the_legacy_preview_never_shows_a_cut_name(browser, fixture, width):
-    from fcpxml.preview import render_timeline_html
+def test_the_preview_page_draws_itself_with_no_host(browser, fixture, width):
     tl = FCPXMLParser().parse_file(str(EXAMPLES / fixture)).timelines[0]
-    assert _legacy(width, render_timeline_html(tl), browser) == []
+    payload = timeline_app.build_payload(tl)
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    try:
+        page.set_content(timeline_app.render_page_html(payload))
+        page.wait_for_timeout(50)
+        drawn = page.evaluate("() => document.querySelectorAll('#canvas .clip').length")
+        offenders = page.evaluate(OFFENDERS)
+    finally:
+        page.close()
+    assert drawn == len(payload["clips"])
+    assert offenders == []
 
 
-def test_the_legacy_check_goes_red_without_the_wrapping_row(browser):
-    """Mutation check: with the row allowed to stay on one line, the names
-    of narrow blocks are cut at 390 and the measurement sees it."""
-    from fcpxml.preview import render_timeline_html
+PAGE_FACTS = """() => {
+  const sc = document.getElementById('scroller'), r = sc.getBoundingClientRect();
+  const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+  const clips = [...document.querySelectorAll('#canvas .clip')].map(c => {
+    const num = c.querySelector('.num'), lane = Number(c.parentNode.dataset.lane);
+    const out = [...c.parentNode.querySelectorAll('.onum')].find(o => o.dataset.for === num.textContent);
+    return { name: c.title.split(' · ')[0], num: num.textContent, lane, clip: box(c),
+             inside: num.classList.contains('on') && getComputedStyle(num).visibility === 'visible',
+             out: out ? { box: box(out), visible: getComputedStyle(out).visibility === 'visible',
+                          lead: !!out.querySelector('.lead') } : null };
+  });
+  const texts = [...document.querySelectorAll('#canvas .tick, #canvas .mlabel, #canvas .clip .label')]
+    .filter(e => !e.classList.contains('unfit') && getComputedStyle(e).visibility !== 'hidden' && e.textContent.trim())
+    .map(e => { const g = document.createRange(); g.selectNodeContents(e); const b = g.getBoundingClientRect();
+                return { text: e.textContent.trim().slice(0, 20), l: b.left, r: b.right, t: b.top, b: b.bottom }; });
+  const key = [...document.querySelectorAll('#key span')].map(s => [s.querySelector('b').textContent, s.textContent.slice(s.querySelector('b').textContent.length)]);
+  const acts = [...document.querySelectorAll('#acts button')].map(b => ({ aria: b.getAttribute('aria-disabled'),
+             border: getComputedStyle(b).borderStyle }));
+  const role = document.querySelector('.clip .role');
+  const input = document.querySelector('#acts input');
+  let bg = input, bgc = getComputedStyle(bg).backgroundColor;
+  while (bg && (bgc === 'rgba(0, 0, 0, 0)' || bgc === 'transparent')) { bg = bg.parentElement; bgc = bg ? getComputedStyle(bg).backgroundColor : 'rgb(0, 0, 0)'; }
+  return { overflow: sc.scrollWidth - sc.clientWidth, clips, texts, key, acts,
+           meta: document.getElementById('meta').textContent,
+           note: (document.querySelector('.readonly-note') || {}).textContent || '',
+           role: role ? { size: parseFloat(getComputedStyle(role).fontSize), upper: getComputedStyle(role).textTransform } : null,
+           card: getComputedStyle(document.querySelector('.card')).backgroundColor,
+           placeholder: getComputedStyle(input, '::placeholder').color, placeholderOn: bgc };
+}"""
+
+
+def _hex(css: str) -> str:
+    r, g, b = (int(v) for v in re.findall(r"\d+", css)[:3])
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _meets(a: dict, b: dict) -> bool:
+    return a["l"] < b["r"] and b["l"] < a["r"] and a["t"] < b["b"] and b["t"] < a["b"]
+
+
+@pytest.mark.parametrize("width", [980, 1440, 390])
+def test_the_preview_page_fits_numbers_and_keys_every_clip(browser, width):
+    """The whole 164 s sequence in the width (an 8 px/s floor ran it 14 s
+    past the edge). EVERY clip carries its number: inside, or just outside on
+    a leader (above, or below for a lane under the spine) when the box is
+    too narrow; the key lists every clip, as many as the header counts; no
+    outside number meets another or any label. The edit controls are
+    visibly off and say why; the role tag is 12 px capitals; the panels a
+    neutral grey; the placeholder reads at 4.5:1 on what it sits on."""
     tl = FCPXMLParser().parse_file(str(EXAMPLES / "music-video.fcpxml")).timelines[0]
-    html = render_timeline_html(tl)
-    broken = html.replace("flex-wrap: wrap;", "flex-wrap: nowrap;")
-    assert broken != html
-    assert _legacy(390, broken, browser)
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    try:
+        page.set_content(timeline_app.render_page_html(timeline_app.build_payload(tl)))
+        page.wait_for_timeout(50)
+        facts = page.evaluate(PAGE_FACTS)
+    finally:
+        page.close()
+    assert facts["overflow"] <= 1, facts["overflow"]
+    n, m = (int(v) for v in re.search(r"(\d+) clips? \+ (\d+) connected", facts["meta"]).groups())
+    assert len(facts["key"]) == n + m == len(facts["clips"])
+    assert facts["key"] == [[c["num"], c["name"]] for c in sorted(facts["clips"], key=lambda c: int(c["num"]))]
+    outs = []
+    for c in facts["clips"]:
+        assert c["inside"] or (c["out"] and c["out"]["visible"]), c
+        if c["out"]:
+            o = c["out"]["box"]
+            assert c["out"]["lead"], c
+            if c["lane"] >= 0:
+                assert o["b"] <= c["clip"]["t"], c  # above the box
+            else:
+                assert o["t"] >= c["clip"]["b"], c  # below it, under the spine
+            outs.append(o)
+    for i, a in enumerate(outs):
+        assert not any(_meets(a, b) for b in outs[i + 1:]), a
+        assert not any(_meets(a, t) for t in facts["texts"]), a
+    assert all(b["aria"] == "true" and b["border"] == "dashed" for b in facts["acts"])
+    assert "Read only" in facts["note"]
+    assert facts["role"]["size"] >= 12 and facts["role"]["upper"] == "uppercase"
+    r, g, b = (int(v) for v in re.findall(r"\d+", facts["card"])[:3])
+    assert r == g == b, facts["card"]
+    assert palette.contrast(_hex(facts["placeholder"]), _hex(facts["placeholderOn"])) >= 4.5, facts
+
+
+@pytest.mark.parametrize("width", [980, 390])
+def test_a_narrow_clip_under_the_spine_is_numbered_below_it(browser, tmp_path, width):
+    """The fixture's one clip under the spine (the music bed) is long enough
+    to hold its number; cut to one second it is not, and its number goes
+    just BELOW its box on a leader, visible, never above it."""
+    src = (EXAMPLES / "music-video.fcpxml").read_text()
+    old = 'lane="-1" name="TRACK"\n                          offset="3600s" start="0s" duration="164s"'
+    assert src.count(old) == 1
+    short = tmp_path / "short-bed.fcpxml"
+    short.write_text(src.replace(old, old.replace('duration="164s"', 'duration="1s"')))
+    tl = FCPXMLParser().parse_file(str(short)).timelines[0]
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    try:
+        page.set_content(timeline_app.render_page_html(timeline_app.build_payload(tl)))
+        page.wait_for_timeout(50)
+        facts = page.evaluate(PAGE_FACTS)
+    finally:
+        page.close()
+    bed = next(c for c in facts["clips"] if c["lane"] < 0)
+    assert not bed["inside"] and bed["out"] and bed["out"]["visible"] and bed["out"]["lead"], bed
+    assert bed["out"]["box"]["t"] >= bed["clip"]["b"], bed
+    assert [bed["num"], bed["name"]] in facts["key"]
 
 
 HEAD_GAP = """() => {

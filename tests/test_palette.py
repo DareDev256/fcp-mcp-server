@@ -34,8 +34,8 @@ REPO = Path(__file__).resolve().parent.parent
 # Files that paint something a person sees. A new surface goes on this list.
 SURFACES = [
     "fcpxml/timeline_app.py",
-    "fcpxml/preview.py",
-    "fcpxml/visual.py",
+    "fcpxml/proofs.py",
+    "fcpxml/raster.py",
     "demo/hero/build.py",
     "demo/hero/record.js",
     "scripts/social_card.py",
@@ -45,7 +45,9 @@ SURFACES = [
 # `&#183;` is an HTML entity, not a colour; a hex must not follow & or a word char.
 HEX = re.compile(r"(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b")
 FFMPEG_HEX = re.compile(r"\b0x[0-9a-fA-F]{6}\b")
-RGB_FN = re.compile(r"\brgba?\(")
+# a CSS rgb()/rgba() literal; ``palette.rgb(token)`` (a Python call that turns a
+# palette token into a tuple, used by the raster proofs) is not a colour literal
+RGB_FN = re.compile(r"(?<![.\w])rgba?\(")
 
 TOKEN_VALUES = {v.upper() for pair in palette.TOKENS.values() for v in pair}
 
@@ -89,15 +91,16 @@ def test_the_scanner_sees_a_retired_colour():
 
 def test_the_rendered_surfaces_carry_only_tokens():
     """The files can be clean while what they RENDER is not (a colour built
-    from parts at run time). Render the app and the legacy preview and scan
-    the HTML they actually serve."""
+    from parts at run time). Render the app and the preview:// page (the app
+    with a payload inlined, 0.32) and scan the HTML they actually serve."""
     from fcpxml import timeline_app
     from fcpxml.parser import FCPXMLParser
-    from fcpxml.preview import render_timeline_html
 
     assert off_palette(timeline_app.render_app_html()) == []
     project = FCPXMLParser().parse_file(str(REPO / "examples" / "music-video.fcpxml"))
-    assert off_palette(render_timeline_html(project.timelines[0])) == []
+    page = timeline_app.render_page_html(timeline_app.build_payload(project.timelines[0]))
+    shell = page[:page.index('<script type="application/json"')] + page[page.index("</script>") + len("</script>"):]
+    assert off_palette(shell) == []
 
 
 def _hue_degrees(hex_value: str) -> float:
@@ -117,6 +120,47 @@ def test_tokens_are_grey_or_cyan_or_red():
                 assert hue <= 10 or hue >= 350, (name, value)
             else:
                 assert palette.is_neutral(value), (name, value)
+
+
+FAILURE_ONLY = ("fcpxml/proofs.py", "fcpxml/raster.py", "tools/preview.py", "tools/scenes.py")
+
+
+def red_uses(text: str) -> list:
+    """Lines that paint with the danger red without saying which failure it
+    marks (``# red: failure (...)`` on the call). The intended edit (a
+    removed silence, a cut) is not a failure and is never red."""
+    lines = text.splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        if "DANGER" not in line or line.lstrip().startswith(("#", "LINE,")) or "rs.colour(" in line:
+            continue
+        window = " ".join(lines[i:i + 2])
+        if "# red: failure" not in window:
+            out.append(f"{i + 1}: {line.strip()}")
+    return out
+
+
+@pytest.mark.parametrize("surface", FAILURE_ONLY)
+def test_red_marks_only_a_failure(surface):
+    """0.32 round 3: the check marked a REMOVED silence (the edit working)
+    in red on its ruler. Every danger-red paint call names its failure."""
+    assert red_uses((REPO / surface).read_text(encoding="utf-8")) == []
+
+
+def test_the_red_rule_can_go_red():
+    assert red_uses("            r.fill(x, y, w, 5, DANGER)\n")
+    assert red_uses("            r.fill(x, y, w, 5, DANGER)  # red: failure (offline media)\n") == []
+
+
+def test_neutral_tokens_are_exact_greys():
+    """0.32: the panels were blue-tinted near-black (#121216, #1C1C22) and
+    read as off-black beside the true-black ground. A neutral is r == g == b."""
+    for name, pair in palette.TOKENS.items():
+        if name in palette.ACCENT_HUE_TOKENS or name in palette.DANGER_TOKENS:
+            continue
+        for value in pair:
+            r, g, b = palette.rgb(value)[:3]
+            assert r == g == b, (name, value)
 
 
 def test_the_hue_rule_can_go_red():
@@ -144,24 +188,8 @@ def test_block_fills_read_at_3_to_1(fill, ground, mode):
     assert ratio >= 3.0, f"{fill} on {ground}: {ratio:.2f}:1"
 
 
-def legacy_fills(html: str) -> list[str]:
-    """The fill tokens the legacy preview paints its clip blocks with."""
-    rules = re.findall(r"\.clip[^{]*\{([^}]*)\}", html)
-    return [m for rule in rules for m in re.findall(r"background:\s*var\(--([\w-]+)\)", rule)]
-
-
-def test_the_legacy_preview_paints_blocks_with_3_to_1_fills():
-    from fcpxml.parser import FCPXMLParser
-    from fcpxml.preview import render_timeline_html
-
-    html = render_timeline_html(FCPXMLParser().parse_file(str(REPO / "examples" / "music-video.fcpxml")).timelines[0])
-    fills = legacy_fills(html)
-    assert fills and all((f, "panel") in palette.FILL_PAIRS for f in fills), fills
-    assert "inset 0 3px 0 var(--accent)" in html  # the thin accent strip on top
-
-
 def test_the_fill_rule_can_go_red():
-    """Mutation check: 0.31's first legacy fill (raised on panel) was 1.15:1."""
+    """Mutation check: 0.31's first legacy-preview fill (raised on panel) was 1.15:1."""
     assert palette.contrast(palette.dark("raised"), palette.dark("panel")) < 3.0
 
 

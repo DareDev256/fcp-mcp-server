@@ -32,3 +32,13 @@ requires_index = pytest.mark.skipif(index_is_off(), reason="FCP_MCP_INDEX=off pa
 def _isolated_journal(tmp_path, monkeypatch):
     """The journal is a ledger under ``~/.fcp-mcp/``; tests never touch the real one."""
     monkeypatch.setenv("FCP_MCP_JOURNAL", str(tmp_path / "journal"))
+
+
+@pytest.fixture(autouse=True)
+def _never_paint_the_operators_screen(monkeypatch, tmp_path):
+    """The preview tools paint their pictures into a cmux pane beside the
+    terminal when ~/.claude/hooks/cmux-image-preview.mjs exists. A test run
+    on the author's machine must not put test pictures on his screen."""
+    from tools import preview
+
+    monkeypatch.setattr(preview, "CMUX_PREVIEW", tmp_path / "no-cmux-preview.mjs")

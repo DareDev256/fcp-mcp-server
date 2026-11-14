@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote, unquote
@@ -47,7 +49,7 @@ from fcpxml.mcp_compat import (
 # bound server module (srv.detect_silence, ...) because the tests monkeypatch
 # them HERE to keep ffmpeg and Whisper out of the suite. Drop the import and
 # the handlers would still run, but every patch would silently miss.
-from fcpxml.media_intel import detect_beats, detect_silence  # noqa: F401
+from fcpxml.media_intel import detect_beats, detect_silence, media_src_to_path  # noqa: F401
 from fcpxml.models import (
     DuplicateGroup,
     FlashFrame,
@@ -58,13 +60,13 @@ from fcpxml.models import (
     Timecode,
 )
 from fcpxml.parser import FCPXMLParser
-from fcpxml.preview import render_timeline_html
 from fcpxml.rational import fcp_frame_rate_name
 from fcpxml.rough_cut import RoughCutGenerator
 from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see above)
+from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.31.0"
+__version__ = "0.32.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -738,7 +740,8 @@ def _transcript_cap_notice(dropped: int) -> str:
     if not dropped:
         return ""
     return (
-        f"\n\n⚠️ TRUNCATED: {dropped} character(s) of transcript text were NOT "
+        f"\n\n{TEXT_WARNING} TRUNCATED: {plural(dropped, 'character')} of transcript text "
+        f"{'was' if dropped == 1 else 'were'} NOT "
         f"read — input exceeded the {MAX_INLINE_TRANSCRIPT_CHARS}-character cap. "
         f"Raise FCP_MAX_TRANSCRIPT_CHARS or split the transcript."
     )
@@ -749,7 +752,8 @@ def _marker_cap_notice(dropped: int) -> str:
     if not dropped:
         return ""
     return (
-        f"\n\n⚠️ TRUNCATED: {dropped} marker(s) were NOT written — the batch hit "
+        f"\n\n{TEXT_WARNING} TRUNCATED: {plural(dropped, 'marker')} {'was' if dropped == 1 else 'were'} "
+        f"NOT written — the batch hit "
         f"the {MAX_BATCH_MARKERS}-marker cap. Raise FCP_MAX_BATCH_MARKERS or "
         f"split the import."
     )
@@ -870,7 +874,7 @@ async def list_resources() -> list[Resource]:
         resources.append(Resource(
             uri=f"preview://{encoded}",
             name=f"{p.stem} (visual preview)",
-            description=f"HTML timeline preview: {p.name}",
+            description=f"Timeline (the app, drawn from this file): {p.name}",
             mimeType="text/html",
         ))
     return resources
@@ -915,7 +919,10 @@ async def read_resource(uri: str) -> str | list[ReadResourceContents]:
         _project, tl = _parse_project(filepath)
         if not tl:
             return f"No timelines found in {filepath}"
-        return [ReadResourceContents(content=render_timeline_html(tl), mime_type="text/html")]
+        # 0.32: the app shell with the timeline inlined, the same picture the
+        # view tool draws; the legacy static renderer is gone.
+        payload = _timeline_app.build_payload(tl, filepath=filepath, sha256=_journal.file_hash(filepath))
+        return [ReadResourceContents(content=_timeline_app.render_page_html(payload), mime_type="text/html")]
 
     filepath = _uri_to_path(raw, "file://")
     try:
@@ -2164,11 +2171,13 @@ def _detect_gaps(tl: Any, *, min_gap_frames: int = 1) -> list:
     return gaps
 
 
-def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source") -> list:
+def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source", include_connected: bool = False) -> list:
     """Group clips that share a source media reference.
 
     Returns a list of ``DuplicateGroup`` objects.  Shared by
-    ``handle_detect_duplicates`` and ``handle_validate_timeline``.
+    ``handle_detect_duplicates`` and ``handle_validate_timeline``;
+    ``include_connected`` counts connected clips too (validate does: a
+    cutaway from the same take shows the same frames twice).
     """
     source_groups: dict[str, list[dict]] = {}
     for clip in tl.clips:
@@ -2182,6 +2191,18 @@ def _detect_duplicate_groups(tl: Any, *, mode: str = "same_source") -> list:
             'source_start': clip.source_start.seconds if clip.source_start else 0,
             'source_duration': clip.duration_seconds,
             'timecode': format_timecode(clip.start),
+        })
+    for clip in (getattr(tl, 'connected_clips', []) or []) if include_connected else []:
+        if not clip.media_path:
+            continue
+        at = clip.timeline_start or clip.offset
+        source_groups.setdefault(clip.media_path, []).append({
+            'name': f"{clip.name} (L{clip.lane})",
+            'start': at.seconds if at else 0,
+            'duration': clip.duration_seconds,
+            'source_start': clip.source_start.seconds if clip.source_start else 0,
+            'source_duration': clip.duration_seconds,
+            'timecode': format_timecode(at) if at else "—",
         })
 
     duplicates: list[DuplicateGroup] = []
@@ -2226,12 +2247,12 @@ async def handle_list_projects(arguments: dict) -> Sequence[TextContent]:
     if not files:
         return _text_result(f"No FCPXML files found in {directory}")
     notice = (
-        f"\n\n⚠️ TRUNCATED: the walk stopped at the {MAX_DISCOVERY_FILES}-file cap. "
+        f"\n\n{TEXT_WARNING} TRUNCATED: the walk stopped at the {MAX_DISCOVERY_FILES}-file cap. "
         f"This list is incomplete — narrow the directory or raise "
         f"FCP_MAX_DISCOVERY_FILES." if truncated else ""
     )
     return _text_result(
-        f"Found {len(files)} FCPXML file(s):\n"
+        f"Found {plural(len(files), 'FCPXML file')}:\n"
         + "\n".join(f"  - {f}" for f in files)
         + notice
     )
@@ -2256,26 +2277,146 @@ async def handle_analyze_timeline(arguments: dict) -> Sequence[TextContent]:
 {shape}
 ## Overview
 - **sha256**: {_journal.file_hash(arguments["filepath"])} (pass as `expected_sha256` to edit this exact file)
-- **Duration**: {format_duration(tl.duration.seconds)}
+- **Duration**: {_duration_line(tl)}
 - **Resolution**: {tl.width}x{tl.height} @ {fcp_frame_rate_name(tl.frame_rate)}fps
 
 ## Clip Statistics
-- **Total Clips**: {tl.total_clips}
-- **Connected Clips**: {len(tl.connected_clips)}
-- **Total Cuts**: {tl.total_cuts}
+- **Clips**: {_proofs().counts_label(tl)}
+- **Edit points**: {_edit_points(tl)}
 - **Transitions**: {len(tl.transitions)}
 
-## Pacing
+## Pacing (spine clips)
 - **Average**: {format_duration(avg)}
 - **Median**: {format_duration(med)}
 - **Shortest**: {format_duration(mn)}
 - **Longest**: {format_duration(mx)}
-- **Cuts/Minute**: {tl.cuts_per_minute:.1f}
+- **Edits/minute**: {tl.cuts_per_minute:.1f} · cuts/minute {_cuts_per_minute(tl):.1f}
+- **Shortest on screen**: {_shortest_on_screen(tl)}
 
 ## Markers
-- **Total**: {len(tl.markers)}
-- **Chapters**: {len([m for m in tl.markers if m.marker_type == MarkerType.CHAPTER])}
+- **Total**: {len(_all_markers(tl))} (on the timeline and on its clips, connected clips included)
+- **Chapters**: {len([m for m in _all_markers(tl) if m.marker_type == MarkerType.CHAPTER])}
+
+## Audio
+{_audio_lines(tl, arguments["filepath"])}
+
+## Diagnose
+{_diagnose_line(tl)}
 """)
+
+
+def _shortest_on_screen(tl) -> str:
+    """The shortest run of one picture in the composited frame (connected
+    clips included), read from the picture, not the spine: "1f (Squat,
+    flash at 00:00:20:03)"."""
+    from fcpxml import filtergraph as _fg
+    from fcpxml import proofs as _pf
+
+    try:
+        runs = _pf.picture_runs(_fg.compile_timeline(tl))
+    except Exception:  # noqa: BLE001 - a timeline the compiler cannot read has no picture to measure
+        return "not measured"
+    shown = [(b - a, i, a, layers) for i, (a, b, layers) in enumerate(runs) if layers]
+    if not shown:
+        return "nothing on screen"
+    frames, i, a, layers = min(shown, key=lambda r: (r[0], r[1]))
+    nominal = max(1, int(round(tl.frame_rate)))
+    flash = frames < 6 and 0 < i < len(runs) - 1
+    return (f"{frames}f ({_pf.picture_name(layers)}"
+            f"{', flash at ' + _pf.frames_timecode(a, nominal) if flash else ''})")
+
+
+def _cuts_per_minute(tl) -> float:
+    """Cuts only (a transition is an edit point, not a cut), per minute."""
+    if tl.duration.seconds <= 0:
+        return 0.0
+    return (tl.total_cuts - len(tl.transitions)) / tl.duration.seconds * 60
+
+
+def _audio_lines(tl, filepath: str) -> str:
+    """The sequence's audio setting, the clips that play sound, and each
+    sound file's channels and rate (measured; "not measured" without ffprobe)."""
+    from fcpxml import render as _render
+
+    lines = []
+    try:
+        head = Path(filepath).read_text(encoding="utf-8", errors="replace")[:200_000]
+        m = re.search(r"<sequence\b[^>]*>", head)
+        layout = re.search(r'audioLayout="([^"]+)"', m.group(0)) if m else None
+        rate = re.search(r'audioRate="([^"]+)"', m.group(0)) if m else None
+        if layout or rate:
+            lines.append(f"- **Sequence**: {layout.group(1) if layout else '?'}, {rate.group(1) if rate else '?'}")
+    except OSError:
+        pass
+    clips = tl.all_clips()
+    sound = [c for c in clips if getattr(getattr(c, "media", None), "has_audio", False)]
+    lines.append(f"- **Clips with sound**: {len(sound)} of {len(clips)}")
+    seen = set()
+    for c in sound:
+        path = media_src_to_path(getattr(c, "media_path", "") or "")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        facts = _render.stream_facts(path)
+        if facts is None:
+            lines.append(f"- {Path(path).name}: not measured")
+        elif facts["channels"]:
+            lines.append(f"- {Path(path).name}: {facts['channels']} ch, {facts['sample_rate']} Hz")
+        else:
+            lines.append(f"- {Path(path).name}: no audio stream in the file")
+    return "\n".join(lines)
+
+
+SHORT_CHECK = {"Flash Frames": "flash", "Gaps": "gap", "Offline media": "offline",
+               "Transition handles": "handles", "Duplicate frames": "duplicate frames",
+               "Frame rate and size": "format"}
+
+
+def _diagnose_line(tl) -> str:
+    """Every count diagnose prints, from the same checks, so inspect never
+    reads lighter than diagnose."""
+    _rows, issues, _fixes = _diagnose(tl)
+    t = _tally(issues)
+    fails = [i for i in issues if i[0] == "FAIL"]
+    first = f" ({SHORT_CHECK.get(fails[0][3], fails[0][3].lower())} {fails[0][1]})" if fails else ""
+    return (f"- **Verdict {_verdict(issues)}**: {t['FAIL']} FAIL{first}, {t['WARN']} WARN, {t['INFO']} INFO; "
+            f"run `diagnose · validate_timeline` for the full report and the fix.")
+
+
+def _proofs():
+    from fcpxml import proofs
+    return proofs
+
+
+def _duration_line(tl) -> str:
+    """"00:00:30:04 (724f, 30.17s)": timecode and frames, as every proof prints it."""
+    fps = tl.frame_rate or 24
+    nominal = max(1, int(round(fps)))
+    frames = int(round(tl.duration.seconds * fps))
+    return f"{_proofs().frames_timecode(frames, nominal)} ({frames}f, {format_duration(tl.duration.seconds)})"
+
+
+def _all_markers(tl) -> list:
+    """Every marker of the edit: the timeline's own and every clip's,
+    connected clips included (0.32: analyze_timeline counted the
+    timeline-level ones only and read 0 for a cut with four chapters)."""
+    markers = list(tl.markers)
+    for clip in tl.all_clips():
+        markers.extend(clip.markers)
+    return markers
+
+
+def _edit_points(tl) -> str:
+    """"5 (4 cuts, 1 dissolve)": a transition is an edit point but not a cut."""
+    points = tl.total_cuts
+    kinds: dict = {}
+    for t in tl.transitions:
+        word = "dissolve" if "dissolve" in (t.name or "").lower() else "transition"
+        kinds[word] = kinds.get(word, 0) + 1
+    joined = sum(kinds.values())
+    parts = [f"{points - joined} cut{'' if points - joined == 1 else 's'}"]
+    parts += [f"{n} {w}{'' if n == 1 else 's'}" for w, n in sorted(kinds.items())]
+    return f"{points} ({', '.join(parts)})"
 
 
 async def handle_list_clips(arguments: dict) -> Sequence[TextContent]:
@@ -2530,16 +2671,16 @@ async def handle_detect_gaps(arguments: dict) -> Sequence[TextContent]:
     if connected_count:
         lanes = len({c.lane for c in tl.connected_clips})
         scope_note = (
-            f"\n\n_Scope: the primary storyline only ({len(tl.clips)} spine "
-            f"clip(s)). {connected_count} connected clip(s) across {lanes} "
-            "lane(s) were not checked — space between connected clips is "
+            f"\n\n_Scope: the primary storyline only ({plural(len(tl.clips), 'spine clip')}). "
+            f"{plural(connected_count, 'connected clip')} across {plural(lanes, 'lane')} "
+            f"{'was' if connected_count == 1 else 'were'} not checked — space between connected clips is "
             "normal, not a gap._"
         )
 
     if not gaps:
         return _text_result(
             f"No gaps detected on the primary storyline "
-            f"(minimum: {min_gap_frames} frame(s)){scope_note}"
+            f"(minimum: {plural(min_gap_frames, 'frame')}){scope_note}"
         )
 
     result = f"""# Gap Detection
@@ -2547,7 +2688,7 @@ async def handle_detect_gaps(arguments: dict) -> Sequence[TextContent]:
 ## Summary
 - **Gaps Found**: {len(gaps)}
 - **Total Gap Duration**: {format_duration(sum(g.duration_seconds for g in gaps))}
-- **Minimum Detection**: {min_gap_frames} frame(s)
+- **Minimum Detection**: {plural(min_gap_frames, 'frame')}
 
 ## Gaps
 """
@@ -2657,7 +2798,7 @@ async def handle_delete_clips(arguments: dict) -> Sequence[TextContent]:
     # Report what was deleted, never what was asked for. Counting the request
     # made this answer "Deleted 2 clip(s)" to a request that matched nothing.
     missed = [c for c in requested if c not in deleted]
-    text = f"Deleted {len(deleted)} clip(s)"
+    text = f"Deleted {plural(len(deleted), 'clip')}"
     if missed:
         text += (
             f"\n\nNo clip matched: {', '.join(repr(m) for m in missed)} — "
@@ -2774,81 +2915,390 @@ async def handle_fill_gaps(arguments: dict) -> Sequence[TextContent]:
     return _text_result(result)
 
 
-async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
-    project, tl = _require_timeline(arguments["filepath"])
-    checks = arguments.get("checks", ["all"])
-    run_all = "all" in checks
+# The verdict glyphs a diagnose report reads by (0.32): a column the eye runs
+# down in three seconds, the word beside the glyph for screen readers and for
+# a terminal without the glyph.
+# U+26A0 has an emoji form some markdown clients draw as an amber picture;
+# U+FE0E asks for the text form. ✓ (U+2713), ✗ (U+2717) and · have none.
+TEXT_WARNING = "\u26a0\ufe0e"
+VERDICT = {"FAIL": "✗ FAIL", "WARN": f"{TEXT_WARNING} WARN", "INFO": "· INFO", "PASS": "✓ PASS"}
 
-    issues: list[str] = []
-    flash_count = 0
-    gap_count = 0
-    duplicate_count = 0
+
+def _overlap(group) -> tuple | None:
+    """The first source range two uses of one file both show, as (start,
+    end) seconds on the asset clock, or None."""
+    uses = sorted(group.clips, key=lambda c: c.get('source_start', 0))
+    for i, a in enumerate(uses):
+        for b in uses[i + 1:]:
+            lo = max(a['source_start'], b['source_start'])
+            hi = min(a['source_start'] + a['source_duration'], b['source_start'] + b['source_duration'])
+            if hi > lo + 1e-9:
+                return lo, hi
+    return None
+
+
+def _fr(seconds, fps) -> int:
+    return int(Fraction(str(seconds)).limit_denominator(1_000_000) * Fraction(str(fps)).limit_denominator(1001) + Fraction(1, 2))
+
+
+def _model_clip(tl, segment):
+    """The parsed clip a compiled segment came from (spine or connected)."""
+    from fcpxml import proofs as _pf
+
+    at = _pf.frame_of(segment.tl_in)
+    if segment.lane == 0:
+        return next((c for c in tl.clips if c.start.frames == at and c.name == segment.label), None)
+    return next((c for c in tl.connected_clips if c.lane == segment.lane and c.name == segment.label
+                 and (c.timeline_start or c.offset).frames == at), None)
+
+
+def _media_frames(clip, fps):
+    """(head, tail, last) in frames: media before the clip's in-point, after
+    its out-point, and the asset's last frame time; None where unknown."""
+    media = getattr(clip, "media", None)
+    if media is None or media.duration is None or media.still:
+        return None, None, None
+    origin, end = media.origin, media.origin + media.duration
+    src_in = Fraction(clip.source_start._exact_seconds) if clip.source_start else origin
+    src_out = src_in + Fraction(clip.duration._exact_seconds)
+    return _fr(src_in - origin, fps), _fr(end - src_out, fps), end
+
+
+def _picture_flash_fix(tl, graph, at, frames, run_before, run_after, fps) -> str:
+    """How to close a flash in the picture, checked against the media: lead
+    with what the handles allow, then the ripple and what it moves."""
+    from fcpxml import proofs as _pf
+
+    nominal = max(1, int(round(fps)))
+    where = _pf.frames_timecode(at, nominal)
+    out = []
+    before = run_before[0] if run_before else None
+    after = run_after[0] if run_after else None
+    if before is not None:
+        clip = _model_clip(tl, before)
+        _head, tail, last = _media_frames(clip, fps) if clip else (None, None, None)
+        name = _pf.lane_name(before)
+        if tail is not None and tail >= frames:
+            src_in = _fr(Fraction(clip.source_start._exact_seconds), fps)
+            src_out = _fr(Fraction(clip.source_start._exact_seconds) + Fraction(clip.duration._exact_seconds), fps)
+            cost = _duplicate_growth(tl, clip, src_in, src_out, frames, fps)
+            out.append(f"extend {name} out by {frames}f, to src {_pf.frames_timecode(src_out + frames, nominal)} "
+                       f"({_pf.source_name(before)} has media to {_pf.frames_timecode(_fr(last, fps), nominal)}"
+                       f"{'; ' + cost if cost else ''})")
+        elif tail is not None:
+            out.append(f"{name} cannot be extended: {_pf.source_name(before)} has {tail}f after its out-point")
+    if after is not None:
+        clip = _model_clip(tl, after)
+        head, _tail, _last = _media_frames(clip, fps) if clip else (None, None, None)
+        name = _pf.lane_name(after)
+        if head is not None and head >= frames:
+            out.append(f"or roll {name}'s in-point {frames}f earlier ({head}f of head media)")
+        elif head is not None:
+            src_in = _fr(Fraction(clip.source_start._exact_seconds), fps)
+            out.append(f"{name} cannot start earlier as a roll: its src in is "
+                       f"{_pf.frames_timecode(src_in, nominal)} and {_pf.source_name(after)} has "
+                       f"{head}f before it")
+            moved_clips = [c.name for c in tl.clips if c.start.frames >= at + frames]
+            moved_tr = [t for t in tl.transitions if t.start.frames >= at + frames]
+            markers = [m for m in _all_markers(tl) if m.timeline_start is not None and m.timeline_start.frames >= at + frames]
+            out.append(f"a {frames}f ripple would close it but moves {', '.join(moved_clips)}, "
+                       f"{plural(len(moved_tr), 'transition')} and {plural(len(markers), 'marker')} "
+                       f"{frames}f earlier")
+    return f"Flash at {where}: " + "; ".join(out) + "."
+
+
+def _duplicate_growth(tl, clip, src_in: int, src_out: int, frames: int, fps) -> str:
+    """What extending ``clip`` by ``frames`` costs when another use of its
+    file already shows the same frames: "the duplicate with Bench grows to
+    67f" (the overlap now and after, in frames). "" when it costs nothing."""
+    path = getattr(clip, "media_path", "") or ""
+    others = [c for c in list(tl.clips) + list(getattr(tl, "connected_clips", []) or [])
+              if c is not clip and path and (getattr(c, "media_path", "") or "") == path]
+    for other in others:
+        o_in = _fr(Fraction(other.source_start._exact_seconds), fps) if other.source_start else 0
+        o_out = o_in + _fr(Fraction(other.duration._exact_seconds), fps)
+        now = max(0, min(src_out, o_out) - max(src_in, o_in))
+        after = max(0, min(src_out + frames, o_out) - max(src_in, o_in))
+        if now and after > now:
+            return f"the duplicate with {other.name} grows to {after}f"
+    return ""
+
+
+def _flash_findings(tl):
+    """[(verdict, where, issue, fix or None)] from both readings of a flash:
+    a clip shorter than six frames, and a run shorter than six frames in the
+    composited picture (connected clips included)."""
+    from fcpxml import filtergraph as _fg
+    from fcpxml import proofs as _pf
+
+    out, seen = [], set()
+    for f in _detect_flash_frames(tl):
+        verdict = "FAIL" if f.severity == FlashFrameSeverity.CRITICAL else "WARN"
+        seen.add(f.start.frames)
+        out.append((verdict, format_timecode(f.start), f"Flash frame: {f.clip_name} ({f.duration_frames}f)",
+                    "Flash frames (short clips): `edit · fix_flash_frames` extends or removes them."))
+    graph = _fg.compile_timeline(tl)
+    nominal = max(1, int(round(tl.frame_rate)))
+    runs = _pf.picture_runs(graph)
+    for i, (a, b2, layers) in enumerate(runs):
+        frames = b2 - a
+        if frames >= 6 or not layers or a in seen:
+            continue
+        before = runs[i - 1][2] if i > 0 else ()
+        after = runs[i + 1][2] if i + 1 < len(runs) else ()
+        where = _pf.frames_timecode(a, nominal)
+        between = (f" between {_pf.picture_name(before)} and {_pf.picture_name(after)}" if before and after else "")
+        fix = _picture_flash_fix(tl, graph, a, frames, before, after, tl.frame_rate) if before and after else None
+        out.append(("FAIL" if frames < 2 else "WARN", where,
+                    f"Flash frame in the picture: {_pf.picture_name(layers)} shows for {frames}f{between}", fix))
+    return out
+
+
+def _handle_findings(tl):
+    """[(verdict, where, text)] per spine transition: the media each side
+    has against what the transition draws on (Final Cut refuses the import
+    when either is short)."""
+    from fcpxml import proofs as _pf
+
+    fps = tl.frame_rate
+    nominal = max(1, int(round(fps)))
+    out = []
+    for t in tl.transitions:
+        cut = t.start.frames
+        outgoing = next((c for c in tl.clips if c.start.frames + c.duration.frames == cut), None)
+        incoming = next((c for c in tl.clips if c.start.frames == cut), None)
+        lead = t.lead.frames if getattr(t, "lead", None) is not None else t.duration.frames // 2
+        trail = t.duration.frames - lead
+        where = _pf.frames_timecode(cut, nominal)
+        parts, verdict = [], "PASS"
+        for clip, side, needs in ((outgoing, "tail", trail), (incoming, "head", lead)):
+            if clip is None:
+                continue
+            head, tail, _last = _media_frames(clip, fps)
+            has = tail if side == "tail" else head
+            if has is None:
+                parts.append(f"{clip.name} {side} not known")
+                verdict = "INFO" if verdict == "PASS" else verdict
+                continue
+            parts.append(f"{clip.name} {side} needs {needs}f, has {has}f")
+            if has < needs:
+                verdict = "FAIL"
+        out.append((verdict, where, f"{t.name or 'Transition'} {t.duration.frames}f: " + ", ".join(parts)))
+    return out
+
+
+def _offline_findings(tl):
+    out = []
+    for c in tl.all_clips():
+        path = media_src_to_path(getattr(c, "media_path", "") or "")
+        if path and not Path(path).is_file():
+            out.append(("FAIL", format_timecode(c.start), f"Offline: {c.name} ({Path(path).name} not found)"))
+    return out
+
+
+def _format_findings(tl):
+    """[(verdict, where, text)] per media file: a frame rate that differs
+    from the sequence's is retimed by Final Cut (WARN); a picture size that
+    differs is scaled (INFO). Measured with ffprobe; None when it is absent."""
+    from fcpxml import render as _render
+
+    if shutil.which("ffprobe") is None:
+        return None
+    seq_fps = Fraction(str(tl.frame_rate)).limit_denominator(1001)
+    out, seen, sizes = [], {}, {}
+    for c in tl.all_clips():
+        path = media_src_to_path(getattr(c, "media_path", "") or "")
+        if not path or path in seen or not Path(path).is_file():
+            continue
+        facts = seen[path] = _render.stream_facts(path)
+        if not facts:
+            continue
+        name = Path(path).name
+        if facts["fps"] and abs(facts["fps"] - seq_fps) > Fraction(1, 100):
+            out.append(("WARN", format_timecode(c.start),
+                        f"{name} is {float(facts['fps']):.3f} fps in a {float(seq_fps):.3f} fps sequence (retimed)"))
+        if facts["width"] and tl.width and (facts["width"], facts["height"]) != (tl.width, tl.height):
+            sizes.setdefault((facts["width"], facts["height"]), []).append((name, format_timecode(c.start)))
+    for (w, h), files in sizes.items():  # one line per size, every file named
+        # the conform fits the picture: scaled by the smaller of the two ratios
+        scale = min(Fraction(tl.width, w), Fraction(tl.height, h))
+        up = scale > UPSCALE_WARN
+        out.append(("WARN" if up else "INFO", ", ".join(at for _, at in files),
+                    f"{', '.join(n for n, _ in files)}: {w}x{h} in a {tl.width}x{tl.height} sequence "
+                    f"(scaled {'up ' if scale > 1 else ''}{float(scale):.2g}x"
+                    f"{': soft, a post house would not pass it' if up else ''})"))
+    return out
+
+
+UPSCALE_WARN = Fraction(3, 2)  # a source the conform scales up more than this is a WARN
+
+
+NOT_CHECKED = "loudness, true peak, black or frozen frames, audio sync"
+
+
+def _overlap_plays(group, lo, hi, fps) -> list:
+    """Where the shared source frames [lo, hi) PLAY: each use's record range
+    (in-out, out exclusive), read through the clip (its record start plus how
+    far into it the shared frames begin), in record order."""
+    nominal = max(1, int(round(fps)))
+    out = []
+    for c in group.clips:
+        a = max(lo, c["source_start"])
+        b = min(hi, c["source_start"] + c["source_duration"])
+        if b <= a + 1e-9:
+            continue
+        rec = _fr(c["start"], fps)
+        ra = rec + _fr(a, fps) - _fr(c["source_start"], fps)
+        rb = rec + _fr(b, fps) - _fr(c["source_start"], fps)
+        out.append((ra, f"{_proofs().frames_timecode(ra, nominal)}–{_proofs().frames_timecode(rb, nominal)}"))
+    return [text for _, text in sorted(out)]
+
+
+def _diagnose(tl, checks=("all",)) -> tuple:
+    """(rows, issues, fixes): the checks validate_timeline runs. A row is
+    (verdict, check, found, where); found is what the check FOUND (0 on a
+    PASS); an issue is (verdict, where, what, check). inspect reads the same
+    counts, so the two cannot disagree."""
+    run_all = "all" in checks
+    fps = tl.frame_rate
+    issues: list = []
+    fixes: list[str] = []
+    rows = []
+
+    def row(name, found, empty_where=""):
+        verdicts = [v for v, _, _ in found]
+        worst = next((v for v in ("FAIL", "WARN", "INFO") if v in verdicts), "PASS")
+        rows.append((worst, name, len(found), [w for _, w, _ in found] or ([empty_where] if empty_where else [])))
+        issues.extend((v, w, t, name) for v, w, t in found)
 
     if run_all or "flash_frames" in checks:
-        flashes = _detect_flash_frames(tl)
-        flash_count = len(flashes)
-        for f in flashes:
-            severity = "error" if f.severity == FlashFrameSeverity.CRITICAL else "warning"
-            issues.append(
-                f"- [{severity.upper()}] Flash frame: {f.clip_name} "
-                f"({f.duration_frames}f) at {format_timecode(f.start)}"
-            )
+        # Two readings of one question: a clip shorter than six frames, and
+        # a run shorter than six frames in the PICTURE as seen (a connected
+        # clip ending one frame before the next cut leaves a frame of the
+        # spine showing, and no clip is short). Both are reported once.
+        found = _flash_findings(tl)
+        row("Flash Frames", [(v, w, t) for v, w, t, _ in found])
+        for *_, fix in found:
+            if fix and fix not in fixes:
+                fixes.append(fix)
 
     if run_all or "gaps" in checks:
         detected_gaps = _detect_gaps(tl)
-        gap_count = len(detected_gaps)
-        for g in detected_gaps:
-            issues.append(f"- [WARNING] Gap: {g.duration_frames}f at {g.timecode}")
+        row("Gaps", [("WARN", str(g.timecode), f"Gap: {g.duration_frames}f") for g in detected_gaps])
+        if detected_gaps:
+            fixes.append("Gaps: `edit · fill_gaps` closes them.")
 
     if run_all or "duplicates" in checks:
-        dup_groups = _detect_duplicate_groups(tl)
-        for group in dup_groups:
-            duplicate_count += group.count
-            issues.append(
-                f"- [INFO] Duplicate source: {group.source_name} ({group.count} uses)"
-            )
+        overlaps, reused = [], []
+        for group in _detect_duplicate_groups(tl, include_connected=True):
+            uses = [c.get("timecode") for c in group.clips if c.get("timecode")]
+            overlap = _overlap(group)
+            if overlap:
+                lo, hi = overlap
+                span = _fr(hi, fps) - _fr(lo, fps)
+                # where the shared FRAMES play, not where the clips start
+                overlaps.append(("WARN", ", ".join(_overlap_plays(group, lo, hi, fps)),
+                                 f"Same frames used twice: {group.source_name} source "
+                                 f"{_proofs().timecode(Fraction(lo).limit_denominator(100000), fps)}–"
+                                 f"{_proofs().timecode(Fraction(hi).limit_denominator(100000), fps)} · {span}f "
+                                 f"({', '.join(c['name'] for c in group.clips)})"))
+            else:
+                reused.append(("INFO", ", ".join(uses),
+                               f"Source used {group.count} times, different ranges: {group.source_name}"))
+        row("Duplicate frames", overlaps)
+        row("Reused source", reused)
 
-    error_weight = 10
-    warning_weight = 3
-    info_weight = 1
-    errors = len([i for i in issues if "[ERROR]" in i])
-    warnings = len([i for i in issues if "[WARNING]" in i])
-    infos = len([i for i in issues if "[INFO]" in i])
-    penalty = (errors * error_weight) + (warnings * warning_weight) + (infos * info_weight)
-    health_score = max(0, 100 - penalty)
+    if run_all or "handles" in checks:
+        handles = _handle_findings(tl)
+        bad = [h for h in handles if h[0] != "PASS"]
+        detail = [f"{w} {t}" for _, w, t in handles]
+        rows.append((next((v for v in ("FAIL", "WARN", "INFO") if v in [h[0] for h in handles]), "PASS"),
+                     "Transition handles", len(bad), [f"{len(handles)} checked"] + detail))
+        issues.extend((v, w, t, "Transition handles") for v, w, t in bad)
+        if any(v == "FAIL" for v, _, _ in handles):
+            fixes.append("Transition handles: shorten the transition to the media there is, or trim each "
+                         "clip by its shortfall (Final Cut refuses the import otherwise).")
 
+    if run_all or "offline" in checks:
+        offline = _offline_findings(tl)
+        row("Offline media", offline)
+        if offline:
+            fixes.append("Offline media: `deliver · relink_media` points the clips at the files where they are now.")
+
+    if run_all or "formats" in checks:
+        formats = _format_findings(tl)
+        if formats is None:
+            rows.append(("INFO", "Frame rate and size", "—", ["not measured: ffprobe is not installed"]))
+        else:
+            row("Frame rate and size", formats)
+    return rows, issues, fixes
+
+
+def _tally(issues) -> dict:
+    return {v: sum(1 for i in issues if i[0] == v) for v in ("FAIL", "WARN", "INFO")}
+
+
+def _tally_text(issues) -> str:
+    """"1 FAIL, 2 WARN, 1 INFO", counted from the issues found."""
+    t = _tally(issues)
+    return f"{t['FAIL']} FAIL, {t['WARN']} WARN, {t['INFO']} INFO"
+
+
+def _verdict(issues) -> str:
+    t = _tally(issues)
+    return "FAIL" if t["FAIL"] else "WARN" if t["WARN"] else "PASS"
+
+
+async def handle_validate_timeline(arguments: dict) -> Sequence[TextContent]:
+    project, tl = _require_timeline(arguments["filepath"])
+    rows, issues, fixes = _diagnose(tl, arguments.get("checks", ["all"]))
+
+    # FAIL costs 10, WARN 3; INFO is information and costs nothing. Only the
+    # checks that ran count, and they are named.
+    errors = sum(1 for i in issues if i[0] == "FAIL")
+    warnings = sum(1 for i in issues if i[0] == "WARN")
+    health_score = max(0, 100 - errors * 10 - warnings * 3)
+
+    def where(times: list) -> str:
+        return "—" if not times else "; ".join(times)
+
+    # the verdict leads: a score alone reads as passing while a FAIL stands
     result = f"""# Timeline Validation: {tl.name}
 
-## Health Score: {health_score}%
+## Verdict: {_verdict(issues)} · {_tally_text(issues)}
+
+**Health Score**: {health_score}% from the {len(rows)} checks below (each FAIL -10, each WARN -3, INFO 0)
 
 ## Summary
-| Check | Count | Status |
-|-------|-------|--------|
-| Flash Frames | {flash_count} | {'PASS' if flash_count == 0 else 'FAIL'} |
-| Gaps | {gap_count} | {'PASS' if gap_count == 0 else 'WARN'} |
-| Duplicate Sources | {duplicate_count} | {'PASS' if duplicate_count == 0 else 'INFO'} |
+| Result | Check | Found | Where |
+|--------|-------|-------|-------|
+""" + "\n".join(f"| {VERDICT[v]} | {name} | {found} | {where(at)} |" for v, name, found, at in rows) + f"""
+
+Not checked: {NOT_CHECKED}.
 
 ## Issues ({len(issues)})
 """
     if issues:
-        result += "\n".join(issues[:20])
+        result += "| Result | Where | Issue |\n|--------|-------|-------|\n"
+        result += "\n".join(f"| {VERDICT[v]} | {at} | {what} |" for v, at, what, _check in issues[:20])
         if len(issues) > 20:
             result += f"\n... and {len(issues) - 20} more issues"
     else:
         result += "_No issues found!_"
 
     if tl.is_gap_based:
-        # The gap and duplicate checks walk the spine, which here is empty by
-        # design. Without this line a 100 % reads as a clean bill for an edit
-        # the checks never looked at (issue #23).
+        # The gap check walks the spine, which here is empty by design.
+        # Without this line a 100 % reads as a clean bill for an edit the
+        # check never looked at (issue #23).
         result += (
             f"\n\n> **Gap-based primary storyline**: the spine holds only gaps and the "
             f"{len(tl.connected_clips)} connected clips carry the edit. Flash frames were "
-            f"checked on the connected clips; the gap and duplicate-source checks apply to "
+            f"checked on the connected clips and on the picture; the gap check applies to "
             f"the spine and did not evaluate them."
         )
 
-    result += "\n\n*Use `fix_flash_frames` and `fill_gaps` to automatically resolve issues.*"
+    if fixes:
+        result += "\n\n## Fix\n" + "\n".join(f"- {line}" for line in fixes)
     return _text_result(result)
 
 
@@ -3029,7 +3479,7 @@ async def handle_import_beat_markers(arguments: dict) -> Sequence[TextContent]:
     modifier.save(output_path)
 
     skipped_note = (
-        f"- **Skipped**: {skipped_count} beat(s) beyond the timeline end "
+        f"- **Skipped**: {plural(skipped_count, 'beat')} beyond the timeline end "
         f"({format_duration(timeline_end)})\n" if skipped_count else ""
     )
     return _text_result(f"""# Beat Markers Imported
@@ -3210,7 +3660,7 @@ def _format_snap_report(
     if connected['audio_lane_clips']:
         lines += [
             "",
-            f"_{connected['audio_lane_clips']} clip(s) on negative (audio) lanes "
+            f"_{plural(connected['audio_lane_clips'], 'clip')} on negative (audio) lanes "
             "were left alone — that is the track the beat grid came from. "
             "Pass `include_audio_lanes` to snap them too._",
         ]
@@ -3680,7 +4130,7 @@ async def handle_list_fcp_libraries(arguments: dict) -> Sequence[TextContent]:
 
     lines = [f"Open libraries in Final Cut Pro ({len(libraries)}):", ""]
     for lib in libraries:
-        lines.append(f"📚 {lib['name']}")
+        lines.append(f"Library: {lib['name']}")
         for event in lib["events"]:
             lines.append(f"  └─ {event['name']}")
             for proj in event["projects"]:
@@ -4276,7 +4726,7 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
     # pass it back as expected_sha256 on the next call without a round trip.
     hashes = _written_hashes(written)
     if hashes:
-        result = _text_result(_with_hashes(result[0].text, hashes))
+        result = _with_text(result, _with_hashes(result[0].text, hashes))
     # Autopush lives HERE, on the same seam, so every write handler gets it
     # without knowing: whatever this request wrote as FCPXML is pushed.
     # push_to_fcp is the push; it is not pushed again.
@@ -4285,10 +4735,17 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
             _maybe_autopush(p) for p in written if p.endswith((".fcpxml", ".fcpxmld"))
         )
         if pushed:
-            result = _text_result(result[0].text + pushed)
+            result = _with_text(result, result[0].text + pushed)
     if action in GATED_ACTIONS and arguments.get("confirm_unreviewed") is True:
-        result = _text_result(result[0].text + _UNREVIEWED_NOTE)
+        result = _with_text(result, result[0].text + _UNREVIEWED_NOTE)
     return result
+
+
+def _with_text(result, text: str) -> list:
+    """The result with its leading text replaced and everything after it kept:
+    the proof tools answer with image blocks and resource links after the
+    text, and a write's hash footer must not drop them (0.32)."""
+    return _text_result(text) + list(result[1:])
 
 
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:

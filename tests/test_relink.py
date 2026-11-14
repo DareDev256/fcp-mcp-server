@@ -112,7 +112,7 @@ async def test_handler_relink(project_file):
         "replace": "/Volumes/NewDrive",
     })
     text = result[0].text
-    assert "Relinked 2 media reference(s)" in text
+    assert "Relinked 2 media references" in text
     assert "_relinked" in text
 
 

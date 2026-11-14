@@ -1,20 +1,34 @@
 """The preview tool group — the loop's eyes.
 
-Five actions, one job: let the operator evaluate an edit without opening Final
-Cut Pro. preview_check is the important one — it reads the SOURCE MEDIA, so a
-fix is confirmed from an image rather than from re-parsing our own output.
+Five actions, one job: let the operator (and the model, which takes no video)
+evaluate an edit without opening Final Cut Pro. Since 0.32 every picture
+carries the edit's names, timecodes and cuts, drawn by the server
+(fcpxml/proofs.py), and comes back as an MCP image block as well as a path.
+preview_check is the important one — it reads the SOURCE MEDIA, so a fix is
+confirmed from an image rather than from re-parsing our own output.
 """
 
+import base64
+import re
 import subprocess
 from fractions import Fraction
 from pathlib import Path
 
-from fcpxml import filtergraph, journal, render, visual
+from fcpxml import filtergraph, journal, proofs, render
+from fcpxml import raster as rs
+from fcpxml.words import plural
 from tools._common import parse_project, text_result
 
 CMUX_PREVIEW = Path.home() / ".claude" / "hooks" / "cmux-image-preview.mjs"
 
-TIMELINE_BAR_WIDTH = 56
+TIMELINE_WIDTH = 64          # characters of the text timeline's track area
+IMAGE_BLOCKS_MAX = 4         # sheet pages returned inline; the rest by path
+# One image block's bytes at most. The vision docs (platform.claude.com/docs/
+# en/build-with-claude/vision, "Request limits", read 2026-11-13) allow 10 MB
+# base64 per image on the Claude API and 5 MB on Bedrock; tool results travel
+# through hosts with their own budgets, so a block stays far under both. A
+# PNG over this goes inline as a light JPEG (the PNG stays at its path).
+IMAGE_BLOCK_MAX_BYTES = 1_500_000
 
 
 def _open_beside_terminal(paths: list) -> None:
@@ -33,6 +47,33 @@ def _open_beside_terminal(paths: list) -> None:
         )
     except (OSError, subprocess.TimeoutExpired):
         pass
+
+
+def image_block(picture):
+    """An MCP image block for a Raster, under IMAGE_BLOCK_MAX_BYTES: the PNG
+    when it fits, else a light JPEG (no chroma subsampling), else None."""
+    from mcp.types import ImageContent
+
+    if picture is None:
+        return None
+    for fmt, mime, quality in (("png", "image/png", 0), ("jpg", "image/jpeg", 2), ("jpg", "image/jpeg", 4)):
+        data = picture.encode(fmt) if fmt == "png" else picture.encode(fmt, quality)
+        if data and len(data) <= IMAGE_BLOCK_MAX_BYTES:
+            return ImageContent(type="image", data=base64.b64encode(data).decode("ascii"), mimeType=mime)
+    return None
+
+
+def resource_link(path: str, mime: str, name: str):
+    from mcp.types import ResourceLink
+
+    return ResourceLink(type="resource_link", name=name, uri=Path(path).resolve().as_uri(), mimeType=mime)
+
+
+def _with_images(text: str, pictures: list) -> list:
+    blocks = [b for b in (image_block(p) for p in pictures) if b is not None]
+    if len(blocks) < len([p for p in pictures if p is not None]):
+        text += "\n(An image was over the inline size cap and is returned by path only.)"
+    return text_result(text) + blocks
 
 
 def _seconds(value, field: str) -> Fraction:
@@ -72,7 +113,7 @@ def _describe(result: dict) -> str:
     if result.get("error"):
         lines.append(f"Preview not rendered: {result['error']}")
     else:
-        lines.append(f"Rendered: {result['path']}")
+        lines.append(f"Rendered: {result['path']} ({result.get('size', '')})".replace(" ()", ""))
         expected, duration = result.get("expected"), result.get("duration")
         if duration is not None and expected is not None:
             lines.append(
@@ -102,6 +143,12 @@ def _describe(result: dict) -> str:
         lines.append(f"Substituted: {note}")
     if result.get("skipped"):
         lines.append("Skipped (media missing): " + ", ".join(result["skipped"]))
+    if result.get("burned"):
+        lines.append(f"Burned-in copy (timecode, clip names, lane badges; after the lane check): {result['burned']}")
+    elif result.get("burn_error"):
+        lines.append(f"No burned-in copy: {result['burn_error']}")
+    if result.get("poster"):
+        lines.append(f"Poster frame: {result['poster']}")
     return "\n".join(lines)
 
 
@@ -110,53 +157,65 @@ async def handle_preview_render(args: dict):
     if timeline is None:
         return text_result(message)
     try:
-        height = int(args.get("height", 480))
+        height = int(args.get("height", render.DEFAULT_HEIGHT))
     except (TypeError, ValueError):
         return text_result(f"height must be an integer, got {args.get('height')!r}")
 
     result = render.render_proxy(
-        timeline, out_path=args.get("output_path"), height=height
+        timeline, out_path=args.get("output_path"), height=height,
+        burn_in=bool(args.get("burn_in", False)),
     )
-    if result.get("path"):
-        # The proxy lands in the private cache, never under the project's
-        # anchor, so it never passes _validate_output_path. This note is the
-        # only way the render reaches the ledger — and the review gate.
-        journal.note_output(result["path"])
-        _open_beside_terminal([result["path"]])
-    return text_result(_describe(result))
+    if not result.get("path"):
+        return text_result(_describe(result))
+    # The proxy lands in the private cache, never under the project's
+    # anchor, so it never passes _validate_output_path. This note is the
+    # only way the render reaches the ledger — and the review gate.
+    journal.note_output(result["path"])
+    shown = result.get("burned") or result["path"]
+    _open_beside_terminal([shown])
+    reply = text_result(_describe(result))
+    poster = rs.load(result["poster"]) if result.get("poster") else None
+    block = image_block(poster)
+    if block is not None:
+        reply.append(block)
+    reply.append(resource_link(shown, "video/mp4", Path(shown).name))
+    return reply
 
 
 async def handle_preview_sheet(args: dict):
     timeline, message = _timeline_or_message(args.get("filepath"))
     if timeline is None:
         return text_result(message)
+    layout = args.get("layout", "desktop")
+    if layout not in proofs.LAYOUTS:
+        return text_result(f"layout must be one of {', '.join(proofs.LAYOUTS)}, got {layout!r}")
 
     graph = filtergraph.compile_timeline(timeline)
-    out_dir = render.cache_dir()
-    written, skipped = [], []
-    clips = (s for s in graph.segments if s.lane == 0 and s.kind == "clip")
-    for index, segment in enumerate(clips):
-        if segment.missing:
-            skipped.append(segment.label)
-            continue
-        target = str(out_dir / f"sheet_{index:04d}.png")
-        # Mid-clip, so the frame is representative rather than a fade-in.
-        # file_time, not src_in: the source time is on the asset's clock
-        # (a camera's timecode), and a still has no clock at all.
-        frame = render.render_frame(
-            segment.source, segment.file_time(segment.duration / 2), target
-        )
-        (written if frame else skipped).append(frame or segment.label)
-
-    if written:
-        _open_beside_terminal(written)
-    lines = [f"Contact sheet: {len(written)} frames, one per spine cut."]
-    if skipped:
-        lines.append("No frame for: " + ", ".join(skipped))
+    sheet = proofs.contact_sheet(timeline, graph, render.cache_dir(), layout=layout,
+                                 filepath=str(args.get("filepath")))
+    if not sheet["pages"]:
+        return text_result("No contact sheet: ffmpeg is not on PATH, or the timeline has no clips.")
+    _open_beside_terminal(sheet["pages"])
+    cells = sheet["cells"]
+    fps = getattr(timeline, "frame_rate", 24) or 24
+    lines = [f"Contact sheet ({layout}): {proofs.counts_label(timeline)} on {plural(len(sheet['pages']), 'page')}, "
+             f"{sheet['per_page']} cells a page."]
+    lines += [f"Page {i + 1}: {p}" for i, p in enumerate(sheet["pages"])]
+    nominal = proofs.nominal_fps(fps)
+    lines.append("Clips: " + "; ".join(
+        f"#{c.index}{f' L{c.lane}' if c.lane else ''} {c.name} rec {proofs.frames_timecode(c.start, nominal)} "
+        f"{proofs.length_label(c.frames)}" + (" (media missing)" if c.missing else "") for c in cells))
     lines += _crossfade_line(graph.transitions)
     for note in graph.substitutions:
         lines.append(f"Substituted: {note}")
-    return text_result("\n".join(lines))
+    if sheet["problems"]:
+        lines.append("Legibility: " + "; ".join(sheet["problems"]))
+    return _with_images("\n".join(lines), sheet["rasters"][:IMAGE_BLOCKS_MAX])
+
+
+def _source_fps(source: str):
+    info = render.probe_source(source) if Path(source).is_file() else None
+    return getattr(info, "fps", None) or 24
 
 
 async def handle_preview_frame(args: dict):
@@ -169,14 +228,29 @@ async def handle_preview_frame(args: dict):
         return text_result(str(exc))
 
     target = str(render.cache_dir() / "frame.png")
-    written = render.render_frame(source, position, target)
+    # the frame the timecode names (ffmpeg returns the first frame at or
+    # after the seek, so seek a quarter frame before that frame's start)
+    rate = proofs.rational_fps(_source_fps(source)) if Path(source).is_file() else None
+    seek = position
+    if rate:
+        k = int(position * rate + Fraction(1, 2))
+        seek = max(Fraction(0), Fraction(k) / rate - 1 / (4 * rate))
+    written = render.render_frame(source, seek, target)
     if not written:
         return text_result(
             f"No frame extracted from {source}. Check the file exists and that "
             "ffmpeg is on PATH."
         )
+    picture = rs.load(written)
+    text = f"Frame at {at}s: {written}"
+    if args.get("burn") and picture is not None:
+        fps = _source_fps(source)
+        lines = proofs.frame_lines(source, position, fps)
+        proofs.burn_chip(picture, lines)
+        picture.save(written)
+        text += f" (burned in: {''.join(t for t, _ in lines[0])})"
     _open_beside_terminal([written])
-    return text_result(f"Frame at {at}s: {written}")
+    return _with_images(text, [proofs.fit_for_model(picture)])
 
 
 async def handle_preview_check(args: dict):
@@ -187,49 +261,59 @@ async def handle_preview_check(args: dict):
             "preview_check requires 'source', 'start' and 'end' (seconds)."
         )
     target = str(render.cache_dir() / "check.png")
+    kept = None
+    if args.get("filepath"):
+        timeline, message = _timeline_or_message(args.get("filepath"))
+        if timeline is None:
+            return text_result(message)
+        kept = proofs.kept_ranges(filtergraph.compile_timeline(timeline), source) or None
     try:
-        written = visual.visual_check(
-            source, _seconds(start, "start"), _seconds(end, "end"), target,
-            frames=int(args.get("frames", 8)),
+        cut = _seconds(args["cut"], "cut") if args.get("cut") is not None else None
+        result = proofs.visual_check(
+            source, _seconds(start, "start"), _seconds(end, "end"), target, cut=cut,
+            frames=int(args.get("frames", proofs.CHECK_FRAMES)), fps=_source_fps(source), kept=kept,
         )
     except (ValueError, TypeError) as exc:
         return text_result(str(exc))
-    if not written:
+    if not result.get("path"):
         return text_result(
             f"No visual check produced for {source}. Check the file exists and "
             "that ffmpeg is on PATH."
         )
-    _open_beside_terminal([written])
-    return text_result(
-        f"Filmstrip + waveform for {source} [{start}s - {end}s]: {written}\n"
-        "Read from the media, not from the XML."
-    )
+    _open_beside_terminal([result["path"]])
+    fps = _source_fps(source)
+    nominal = proofs.nominal_fps(fps)
+
+    def span(a, b) -> str:
+        """One range convention everywhere: in–out, the out-point exclusive, with its length."""
+        a, b = Fraction(a), Fraction(b)
+        length = int(b * nominal + Fraction(1, 2)) - int(a * nominal + Fraction(1, 2))
+        return f"{proofs.timecode(a, fps)}–{proofs.timecode(b, fps)} · {proofs.length_label(length)}"
+
+    lines = [f"Filmstrip + waveform for {source}, src {span(_seconds(start, 'start'), _seconds(end, 'end'))} "
+             f"(out-points exclusive): {result['path']}",
+             "Read from the media, not from the XML."]
+    if not result["audio"]:
+        lines.append("No audio in this source: no waveform.")
+    elif result["spans"]:
+        lines.append("Silence (at or under " f"{result['threshold_db']:g} dBFS, {float(proofs.SILENCE_MIN):.1f}s or longer): "
+                     + ", ".join(span(a, b) for a, b in result["spans"]))
+    if result.get("removed"):
+        lines.append("Removed by the edit: " + ", ".join(span(a, b) for a, b in result["removed"]))
+    if result.get("pair"):
+        # the picture's font has no en dash; the text says its ranges one way
+        lines += [re.sub(r"(\d\d:\d\d:\d\d:\d\d)-(?=\d\d:)", "\\1–", t) for t in result["pair"]["lines"]]
+    if result["problems"]:
+        lines.append("Legibility: " + "; ".join(result["problems"]))
+    return _with_images("\n".join(lines), [result["raster"]])
 
 
 async def handle_preview_timeline(args: dict):
     timeline, message = _timeline_or_message(args.get("filepath"))
     if timeline is None:
         return text_result(message)
-
     graph = filtergraph.compile_timeline(timeline)
-    total = float(graph.total)
-    lines = [f"{getattr(timeline, 'name', 'timeline')} — {total:.2f}s"]
-    if total <= 0:
-        lines.append("(empty timeline)")
-        return text_result("\n".join(lines))
-
-    for segment in graph.segments:
-        if segment.lane != 0:
-            continue
-        left = int(float(segment.tl_in) / total * TIMELINE_BAR_WIDTH)
-        span = max(1, int(float(segment.duration) / total * TIMELINE_BAR_WIDTH))
-        bar = " " * left + ("." if segment.kind == "gap" else "#") * span
-        flag = "  [MEDIA MISSING]" if segment.missing else ""
-        lines.append(f"{bar:<{TIMELINE_BAR_WIDTH}} {segment.label}{flag}")
-    lines += _crossfade_line(graph.transitions)
-    for note in graph.substitutions:
-        lines.append(f"Substituted: {note}")
-    return text_result("\n".join(lines))
+    return text_result(proofs.text_timeline(timeline, graph, TIMELINE_WIDTH, filepath=args.get("filepath") or ""))
 
 
 ACTIONS = {
@@ -241,8 +325,8 @@ ACTIONS = {
 }
 
 DESCRIPTION = (
-    "See the edit without opening Final Cut Pro. Render a proxy video of the "
-    "timeline, a contact sheet of every cut, a single frame, or a "
-    "filmstrip-plus-waveform check read from the SOURCE MEDIA rather than from "
-    "the XML. Run preview_check to confirm a fix actually landed."
+    "See the edit without opening Final Cut Pro; pictures come back inline: a "
+    "720p proxy (burn_in), a labelled sheet of every clip (layout: phone), a "
+    "frame (burn), or a filmstrip+waveform check of the SOURCE MEDIA (cut; "
+    "filepath: what the edit removed). Confirms a fix."
 )

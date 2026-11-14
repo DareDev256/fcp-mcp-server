@@ -39,13 +39,18 @@ def scenes_cached(media_path: str, backend: str, threshold, min_scene_len: float
                 "cuts": [s for s, _ in scenes[1:]],
                 "scenes": scenes,
                 "duration": scenes[-1][1],
+                # the score of the cut that STARTS each scene (none for the first)
+                "scores": [r["payload"].get("score") for r in rows[1:]],
+                "threshold": rows[0]["payload"].get("threshold"),
             }
         result = detect_scenes(media_path, backend=backend, threshold=threshold, min_scene_len=min_scene_len)
         if result is not None and result["scenes"]:
+            scores = [None] + list(result.get("scores") or [None] * (len(result["scenes"]) - 1))
             ix.put_analysis(
                 media_path, kind,
-                [{"start": a, "end": b, "payload": {"backend": result["backend"]}}
-                 for a, b in result["scenes"]],
+                [{"start": a, "end": b, "payload": {"backend": result["backend"], "score": sc,
+                                                    "threshold": result.get("threshold")}}
+                 for (a, b), sc in zip(result["scenes"], scores)],
             )
         return result
 
@@ -62,11 +67,14 @@ def _args(args: dict):
     return backend, threshold, min_scene_len
 
 
-async def _cuts_per_clip(tl, args: dict):
-    """[(clip, source_cuts_inside_used_window, backend)] plus skipped rows."""
+async def _cuts_per_clip(tl, args: dict, details: dict | None = None):
+    """[(clip, source_cuts_inside_used_window, backend)] plus skipped rows;
+    ``details`` (when given) receives each clip's full detector result
+    (scores, threshold) keyed by ``id(clip)``."""
     backend, threshold, min_scene_len = _args(args)
     clip_filter = args.get("clip_name")
     cache: dict = {}
+    details = details if details is not None else {}
     found: list[tuple] = []
     skipped: list[tuple[str, str]] = []
     clips = tl.media_clips()
@@ -92,6 +100,7 @@ async def _cuts_per_clip(tl, args: dict):
         src_end = src_start + Fraction(clip.duration._exact_seconds)
         inside = [c for c in result["cuts"] if src_start < Fraction(c).limit_denominator(1_000_000) < src_end]
         found.append((clip, inside, result["backend"]))
+        details[id(clip)] = result
     return found, skipped
 
 
@@ -121,25 +130,56 @@ def _report_header(title: str, found, skipped) -> str:
 
 async def handle_detect_scenes(args: dict):
     _, tl = parse_project(args["filepath"])
-    found, skipped = await _cuts_per_clip(tl, args)
+    details: dict = {}
+    found, skipped = await _cuts_per_clip(tl, args, details)
     srv = _common.tools.server_module()
     out = _report_header("Scene Detection", found, skipped)
-    rows = []
+    rows, strip = [], []
+    scenes_seen, threshold, backend_used = [], None, ""
     for clip, cuts, backend in found:
+        result = details.get(id(clip)) or {}
+        scores = dict(zip(result.get("cuts") or [], result.get("scores") or []))
+        threshold = result.get("threshold", threshold)
+        backend_used = backend
+        src0 = file_in_point(clip)
+        src1 = src0 + Fraction(clip.duration._exact_seconds)
+        bounds = [src0] + [Fraction(c).limit_denominator(1_000_000) for c in cuts] + [src1]
+        rec0 = _timeline_seconds(clip, float(src0))
+        origin0 = Fraction(str(getattr(tl, "origin_seconds", 0) or 0)).limit_denominator(1_000_000)
+        scenes_seen += [(rec0 - origin0 + (a - src0), rec0 - origin0 + (b - src0)) for a, b in zip(bounds, bounds[1:])]
         for c in cuts:
             # Shown on the asset's clock, as Final Cut shows source timecode;
             # matched and placed in file time (media_intel.file_in_point).
             asset_start = Fraction(clip.source_start._exact_seconds) if clip.source_start else Fraction(0)
             shown = Fraction(c).limit_denominator(1_000_000) + (asset_start - file_in_point(clip))
             rows.append([clip.name, f"{float(shown):.3f}s", _fmt(_timeline_seconds(clip, c))])
+            # the strip's timecode is the timeline's from its first frame, as
+            # the contact sheet and the app show it (an 01:00:00:00 start removed)
+            origin = Fraction(str(getattr(tl, "origin_seconds", 0) or 0)).limit_denominator(1_000_000)
+            strip.append((clip.name, media_src_to_path(clip.media_path or ""),
+                          Fraction(c).limit_denominator(1_000_000), _timeline_seconds(clip, c) - origin,
+                          scores.get(c)))
+    pictures = []
     if rows:
         out += "\n## Cuts\n" + srv._markdown_table(["Clip", "Source time", "Timeline time"], rows) + "\n"
+        # 0.32: the frame before and the frame after every cut, labelled, so
+        # a cut can be judged from a picture, not only from its time.
+        from fcpxml import proofs, render
+        from tools.preview import IMAGE_BLOCKS_MAX, _with_images
+
+        sheet = proofs.scene_strip(strip, render.cache_dir(), getattr(tl, "frame_rate", 24) or 24,
+                                   scenes=scenes_seen, threshold=threshold, backend=backend_used)
+        if sheet["pages"]:
+            out += "\n## Before and after each cut\n" + "\n".join(f"- {p}" for p in sheet["pages"]) + "\n"
+            pictures = sheet["rasters"][:IMAGE_BLOCKS_MAX]
         out += "\n*Next: `scenes_to_markers` to mark them, or `scenes_split` to cut the clips there.*"
     if not found and not skipped:
         avail = backends_available()
         out += "\nNo clips with reachable media. Backends: " + ", ".join(
             f"{k}={'yes' if v else 'no'}" for k, v in avail.items()
         )
+    if pictures:
+        return _with_images(out, pictures)
     return text_result(out)
 
 

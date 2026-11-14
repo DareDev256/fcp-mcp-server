@@ -16,6 +16,7 @@ from fcpxml import find as _find
 from fcpxml import index as _index
 from fcpxml import journal
 from fcpxml.media_intel import media_src_to_path
+from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 from tools import media as _media
 from tools._common import parse_project, text_result
@@ -144,7 +145,7 @@ async def handle_undo(args: dict) -> list:
     moved = journal.undo(filepath, n)
     if not moved:
         return text_result("Nothing to undo.")
-    lines = [f"**Undid {len(moved)} operation(s)** — nothing was deleted:"]
+    lines = [f"**Undid {plural(len(moved), 'operation')}** — nothing was deleted:"]
     for e in moved:
         lines.append(f"- {e['undid']}: {Path(e['output']['path']).name} moved to {e['moved_to']}")
     return text_result("\n".join(lines))

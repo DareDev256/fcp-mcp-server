@@ -18,6 +18,7 @@ from mcp.types import TextContent
 
 from fcpxml.export import DaVinciExporter
 from fcpxml.templates import ClipSpec, apply_template, list_templates
+from fcpxml.words import plural
 from fcpxml.writer import list_effects
 from tools import _common
 
@@ -185,20 +186,20 @@ async def handle_relink_media(arguments: dict) -> Sequence[TextContent]:
 
     lines = [
         f"{'Would relink' if dry_run else 'Relinked'} "
-        f"{result['relinked']} media reference(s) "
-        f"across {result['total_assets']} asset(s):",
+        f"{plural(result['relinked'], 'media reference')} "
+        f"across {plural(result['total_assets'], 'asset')}:",
         "",
     ]
     missing = 0
     for change in result["changes"]:
-        mark = "✓" if change["target_exists"] else "⚠ target missing"
+        mark = "✓" if change["target_exists"] else "\u26a0\ufe0e target missing"
         if not change["target_exists"]:
             missing += 1
         lines.append(f"  {change['asset']}: {change['new']}  [{mark}]")
     if missing:
         lines.append("")
         lines.append(
-            f"⚠ {missing} new path(s) do not exist on this machine — "
+            f"\u26a0\ufe0e {plural(missing, 'new path')} {'does' if missing == 1 else 'do'} not exist on this machine — "
             f"FCP will show those clips as missing until the media is present."
         )
     lines.append("")

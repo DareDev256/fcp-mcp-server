@@ -152,7 +152,7 @@ class TestHandlers:
 
     async def test_analyze_timeline_counts_connected_and_says_why(self, project):
         text = (await server.handle_analyze_timeline({"filepath": project[0]}))[0].text
-        assert "**Connected Clips**: 3" in text
+        assert "**Clips**: 0 clips + 3 connected" in text
         assert "gap-based" in text.lower()
 
     async def test_validate_timeline_does_not_claim_a_clean_bill_on_zero_clips(self, project):

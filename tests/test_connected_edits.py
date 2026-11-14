@@ -562,4 +562,4 @@ class TestDetectorsSeeLanes:
         # check never looked at.
         text = _run(server.handle_detect_gaps({"filepath": str(MUSIC_VIDEO)}))[0].text
         assert "primary storyline" in text
-        assert "8 connected clip(s) across 3 lane(s) were not checked" in text
+        assert "8 connected clips across 3 lanes were not checked" in text
