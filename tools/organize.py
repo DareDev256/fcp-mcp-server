@@ -46,7 +46,7 @@ def _write(srv, filepath: str, m: FCPXMLModifier, args: dict) -> str:
 
 
 def _nothing(desc: str, clips) -> list:
-    return text_result(f"No clips matched: {len(clips)} clips for {desc}. Nothing written.")
+    return text_result(f"No clips matched: {plural(len(clips), 'clip')} for {desc}. Nothing written.")
 
 
 async def handle_organize_keywords(args: dict) -> list:
@@ -61,7 +61,7 @@ async def handle_organize_keywords(args: dict) -> list:
     out = _write(srv, filepath, m, args)
     return text_result(
         f"**Keywords {mode}**: {', '.join(str(k) for k in keywords)}\n"
-        f"Selection: {desc} — {len(clips)} clips, {touched} changed.\n"
+        f"Selection: {desc} — {plural(len(clips), 'clip')}, {touched} changed.\n"
         f"Written: {out}"
     )
 
@@ -76,7 +76,7 @@ async def handle_organize_rate(args: dict) -> list:
     m.bulk_rating(clips, rating)
     out = _write(srv, filepath, m, args)
     verb = "Rating cleared" if rating == "clear" else f"Rated {rating}"
-    return text_result(f"**{verb}**: {desc} — {len(clips)} clips.\nWritten: {out}")
+    return text_result(f"**{verb}**: {desc} — {plural(len(clips), 'clip')}.\nWritten: {out}")
 
 
 async def handle_organize_roles(args: dict) -> list:
@@ -90,7 +90,7 @@ async def handle_organize_roles(args: dict) -> list:
     m.bulk_roles(clips, audio_role=audio_role, video_role=video_role)
     out = _write(srv, filepath, m, args)
     roles = ", ".join(f"{k}={v}" for k, v in (("audio", audio_role), ("video", video_role)) if v)
-    return text_result(f"**Roles set**: {roles}\nSelection: {desc} — {len(clips)} clips.\nWritten: {out}")
+    return text_result(f"**Roles set**: {roles}\nSelection: {desc} — {plural(len(clips), 'clip')}.\nWritten: {out}")
 
 
 def _age(ts: float) -> str:
@@ -229,7 +229,7 @@ async def handle_organize_auto(args: dict) -> list:
     for name, words, _ in proposals:
         touched += m.bulk_keywords(m.select_clips(clip_name=name), words, "add")
     written = _write(srv, filepath, m, args)
-    return text_result(out + f"\nApplied to {touched} clips.\nWritten: {written}")
+    return text_result(out + f"\nApplied to {plural(touched, 'clip')}.\nWritten: {written}")
 
 
 ACTIONS = {

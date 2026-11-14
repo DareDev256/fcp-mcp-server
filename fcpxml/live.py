@@ -58,6 +58,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from fcpxml.words import noun
 
+from .words import plural
+
 _OSASCRIPT_TIMEOUT_SECONDS = 120  # FCP cold-launch + import can be slow
 _FCP_BUNDLE_ID = "com.apple.FinalCut"
 
@@ -273,7 +275,7 @@ def resolve_library_target(library_location: Optional[str] = None) -> str:
 
     names = "\n".join(f"  - {lib['name']}  →  {lib['file']}" for lib in libs)
     raise RuntimeError(
-        f"{len(libs)} libraries are open and none was named, so the import "
+        f"{plural(len(libs), 'library', 'libraries')} are open and none was named, so the import "
         f"target is ambiguous. AppleScript orders `libraries` by internal "
         f"application order, not by which one is frontmost, so guessing here "
         f"would pick the wrong library some of the time. Pass one of:\n"

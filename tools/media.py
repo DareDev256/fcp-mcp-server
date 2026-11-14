@@ -46,6 +46,7 @@ from fcpxml.transcribe import (
     merge_ranges,
     segments_to_srt,
 )
+from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 from tools import _common
 
@@ -123,7 +124,7 @@ async def handle_detect_media_silence(arguments: dict) -> Sequence[TextContent]:
             continue
         if media_path not in probe_cache:
             if len(probe_cache) >= max_media_probes:
-                skipped.append((clip.name, f"probe cap reached ({max_media_probes} media files)"))
+                skipped.append((clip.name, f"probe cap reached ({plural(max_media_probes, 'media file')})"))
                 continue
             probe_cache[media_path] = _silence_cached(media_path, noise_db, min_silence)
         silences = probe_cache[media_path]
@@ -201,7 +202,7 @@ async def handle_remove_media_silence(arguments: dict) -> Sequence[TextContent]:
             continue
         if media_path not in probe_cache:
             if len(probe_cache) >= max_media_probes:
-                skipped.append((name, f"probe cap reached ({max_media_probes} media files)"))
+                skipped.append((name, f"probe cap reached ({plural(max_media_probes, 'media file')})"))
                 continue
             probe_cache[media_path] = _silence_cached(media_path, noise_db, min_silence)
         silences = probe_cache[media_path]
@@ -418,7 +419,7 @@ def _cut_transcript_spans(modifier, clip_filter, model, language, padding, spans
             continue
         if media_path not in cache:
             if len(cache) >= TRANSCRIBE_MAX_MEDIA:
-                skipped.append((name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
+                skipped.append((name, f"transcription cap reached ({plural(TRANSCRIBE_MAX_MEDIA, 'media file')})"))
                 continue
             cache[media_path] = _load_or_transcribe(media_path, model, language, backend)
         data, reason = cache[media_path]
@@ -517,7 +518,7 @@ async def handle_transcribe_media(arguments: dict) -> Sequence[TextContent]:
         if media_path in done:
             continue
         if len(done) >= TRANSCRIBE_MAX_MEDIA:
-            skipped.append((clip.name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
+            skipped.append((clip.name, f"transcription cap reached ({plural(TRANSCRIBE_MAX_MEDIA, 'media file')})"))
             continue
         data, reason = _load_or_transcribe(media_path, model, language, backend)
         done[media_path] = data
@@ -641,7 +642,7 @@ async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
         if media_path in sources:
             continue
         if len(sources) >= TRANSCRIBE_MAX_MEDIA:
-            skipped.append((clip.name, f"transcription cap reached ({TRANSCRIBE_MAX_MEDIA} media files)"))
+            skipped.append((clip.name, f"transcription cap reached ({plural(TRANSCRIBE_MAX_MEDIA, 'media file')})"))
             continue
         data, reason = _load_or_transcribe(media_path, model, language, backend)
         if data is None:
@@ -669,7 +670,7 @@ async def handle_transcript_pack(arguments: dict) -> Sequence[TextContent]:
         "# Transcript Pack\n\n"
         f"- **Sources**: {len(sources)}\n"
         f"- **Utterances**: {sum(1 for ln in full.splitlines() if ln.startswith('['))}\n"
-        f"- **Size**: {size} bytes"
+        f"- **Size**: {plural(size, 'byte')}"
         + (f" (shown truncated to {_tpack.PACK_LIMIT_BYTES})" if size > _tpack.PACK_LIMIT_BYTES else "")
         + "\n"
     )

@@ -20,6 +20,7 @@ from .rational import (
     rational_fps,
     tick_timebase,
 )
+from .words import plural
 
 # ============================================================================
 # ENUMS
@@ -78,7 +79,7 @@ class MarkerType(Enum):
             raise ValueError("Marker type contains invalid control characters")
         if len(value) > _MAX_MARKER_TYPE_LENGTH:
             raise ValueError(
-                f"Marker type exceeds maximum length ({_MAX_MARKER_TYPE_LENGTH} chars)"
+                f"Marker type exceeds maximum length ({plural(_MAX_MARKER_TYPE_LENGTH, 'char')})"
             )
         lowered = value.strip().lower()
         if not lowered:
@@ -697,6 +698,10 @@ class Clip:
     effects: Tuple[str, ...] = ()
     # <adjust-volume amount="-6dB">, in dB; None when the clip has none.
     volume_db: Optional[float] = None
+    # enabled="0": the clip is in the cut but not in the picture or the
+    # sound. On the primary storyline it still takes its time (black,
+    # silent), as Final Cut plays it.
+    enabled: bool = True
 
     @property
     def end(self) -> Timecode:
@@ -763,6 +768,8 @@ class ConnectedClip:
     transform: Optional[Transform] = None
     effects: Tuple[str, ...] = ()
     volume_db: Optional[float] = None
+    # enabled="0": listed, not seen and not heard (see Clip.enabled).
+    enabled: bool = True
 
     @property
     def duration_seconds(self) -> float:
@@ -778,7 +785,7 @@ class ConnectedClip:
         """
         return Clip(
             name=self.name,
-            start=self.timeline_start if self.timeline_start is not None else self.offset,
+            start=timeline_position(self),
             duration=self.duration,
             source_start=self.source_start,
             media_path=self.media_path,
@@ -790,7 +797,29 @@ class ConnectedClip:
             transform=self.transform,
             effects=self.effects,
             volume_db=self.volume_db,
+            enabled=self.enabled,
         )
+
+
+def timeline_position(item: Any) -> Optional[Timecode]:
+    """Where a clip plays on the sequence clock, for any clip the model holds.
+
+    A spine :class:`Clip` carries it on ``start``. A :class:`ConnectedClip`
+    carries it on ``timeline_start``, which the parser resolves as parent
+    position + (offset - parent start), plus a connected storyline's own
+    clock for a clip inside one. Its raw ``offset`` is on the PARENT's clock
+    and is used only for a hand-built connected clip with no
+    ``timeline_start``. Every reader that places a connected clip (the render
+    graph, the exports, ``as_clip``) goes through here.
+    """
+    if hasattr(item, "timeline_start"):
+        resolved = getattr(item, "timeline_start", None)
+        if resolved is not None:
+            return resolved
+        offset = getattr(item, "offset", None)
+        if offset is not None:
+            return offset
+    return getattr(item, "start", None)
 
 
 @dataclass
@@ -830,6 +859,31 @@ class Transition:
     # centres a transition on its cut by default, but the document says where
     # it really begins (its own ``offset``); None means "assume centred".
     lead: Optional[Timecode] = None
+    # 0 on the primary storyline; N inside a connected storyline on lane N.
+    lane: int = 0
+
+
+@dataclass
+class ConnectedStoryline:
+    """A connected (secondary) storyline: ``<spine lane="N" offset="...">``.
+
+    Apple's DTD has no ``<storyline>`` element: a connected storyline is a
+    ``<spine>`` anchored to a spine clip or a gap like a connected clip. Its
+    ``offset`` is on the parent's clock (which starts at the parent's
+    ``start``); its items' offsets are on its OWN clock, which starts at 0.
+    ``start`` is where that 0 falls on the timeline. Its clips are also in
+    ``Timeline.connected_clips`` (so every reader sees them); the gaps and
+    transitions between them live only here, so a reader can account for
+    every item. ``skipped`` names any item the parser does not read.
+    """
+    lane: int
+    start: Timecode
+    duration: Timecode
+    parent_clip_name: str = ""
+    clips: List[ConnectedClip] = field(default_factory=list)
+    gaps: List[Tuple[Timecode, Timecode]] = field(default_factory=list)  # (timeline start, duration)
+    transitions: List[Transition] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -846,6 +900,7 @@ class Timeline:
     markers: List[Marker] = field(default_factory=list)
     connected_clips: List[ConnectedClip] = field(default_factory=list)
     compound_clips: List[CompoundClip] = field(default_factory=list)
+    storylines: List[ConnectedStoryline] = field(default_factory=list)
 
     @property
     def total_clips(self) -> int:

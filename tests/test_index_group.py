@@ -84,5 +84,5 @@ class TestClear:
         monkeypatch.setattr(server, "detect_silence", lambda p, **kw: [])
         await server.handle_detect_media_silence({"filepath": filepath})
         text = await _call("index_clear", {})
-        assert "1 media rows dropped" in text
+        assert "1 media row dropped" in text
         assert "**Media rows**: 0" in await _call("index_status", {})

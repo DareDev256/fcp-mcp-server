@@ -13,6 +13,7 @@ from fcpxml import index as _index
 from fcpxml import progress as _progress
 from fcpxml.media_intel import file_in_point, media_src_to_path
 from fcpxml.scenes import BACKENDS, backends_available, detect_scenes
+from fcpxml.words import plural
 from tools import _common
 from tools._common import parse_project, text_result
 
@@ -89,7 +90,7 @@ async def _cuts_per_clip(tl, args: dict, details: dict | None = None):
             continue
         if media_path not in cache:
             if len(cache) >= MAX_SCENE_MEDIA:
-                skipped.append((clip.name, f"probe cap reached ({MAX_SCENE_MEDIA} media files)"))
+                skipped.append((clip.name, f"probe cap reached ({plural(MAX_SCENE_MEDIA, 'media file')})"))
                 continue
             cache[media_path] = scenes_cached(media_path, backend, threshold, min_scene_len)
         result = cache[media_path]
@@ -199,7 +200,7 @@ async def handle_scenes_to_markers(args: dict):
     added = modifier.batch_add_markers(markers=markers) if markers else []
     modifier.save(output_path)
     out = _report_header("Scene Markers", found, skipped)
-    out += f"\nAdded {len(added)} markers.\n\nSaved to: {output_path}"
+    out += f"\nAdded {plural(len(added), 'marker')}.\n\nSaved to: {output_path}"
     return text_result(out)
 
 
@@ -223,7 +224,7 @@ async def handle_scenes_split(args: dict):
         split_clips += 1
     modifier.save(output_path)
     out = _report_header("Scene Split", found, skipped)
-    out += f"\nSplit {split_clips} clips into {pieces} pieces.\n\nSaved to: {output_path}"
+    out += f"\nSplit {plural(split_clips, 'clip')} into {plural(pieces, 'piece')}.\n\nSaved to: {output_path}"
     return text_result(out)
 
 

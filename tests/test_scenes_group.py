@@ -120,7 +120,7 @@ class TestMarkers:
 class TestSplit:
     async def test_split_yields_one_more_piece_than_cuts(self, project, detector):
         text = await _call("scenes_split", {"filepath": project[0]})
-        assert "Split 1 clips into 3 pieces" in text
+        assert "Split 1 clip into 3 pieces" in text
         out = text.split("Saved to: ")[1].splitlines()[0].strip()
         tl = FCPXMLParser().parse_file(out).primary_timeline
         takes = [c for c in tl.clips if c.name == "take"]

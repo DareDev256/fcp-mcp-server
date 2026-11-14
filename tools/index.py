@@ -12,6 +12,7 @@ from fcpxml import index as _index
 from fcpxml import progress as _progress
 from fcpxml.media_intel import media_src_to_path
 from fcpxml.render import probe_duration
+from fcpxml.words import plural
 from tools import _common
 from tools import media as _media
 from tools._common import parse_project, text_result
@@ -100,7 +101,7 @@ async def handle_index_build(args: dict):
     if missing:
         out += "\n## Missing media\n" + "\n".join(f"- {m}" for m in missing) + "\n"
     if capped:
-        out += f"\n*{len(capped)} more sources not indexed (cap {MAX_BUILD_MEDIA} per call).*\n"
+        out += f"\n*{plural(len(capped), 'more source')} not indexed (cap {MAX_BUILD_MEDIA} per call).*\n"
     return text_result(out)
 
 
@@ -111,7 +112,7 @@ async def handle_index_clear(args: dict):
     with ix:
         before = ix.stats()["media"]
         ix.clear()
-    return text_result(f"Index cleared: {before} media rows dropped. Nothing is lost — it is a cache.")
+    return text_result(f"Index cleared: {plural(before, 'media row')} dropped. Nothing is lost — it is a cache.")
 
 
 ACTIONS = {

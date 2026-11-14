@@ -102,7 +102,7 @@ async def handle_create_compound_clip(arguments: dict) -> Sequence[TextContent]:
     modifier.create_compound_clip(clip_ids, name)
     modifier.save(output_path)
     return srv._text_result((
-        f"Created compound clip '{name}' from {len(clip_ids)} clips.\n"
+        f"Created compound clip '{name}' from {plural(len(clip_ids), 'clip')}.\n"
         f"Saved to: `{output_path}`"
     ))
 
@@ -114,7 +114,7 @@ async def handle_flatten_compound_clip(arguments: dict) -> Sequence[TextContent]
     extracted = modifier.flatten_compound_clip(ref_clip_id)
     modifier.save(output_path)
     return srv._text_result((
-        f"Flattened compound clip '{ref_clip_id}' into {len(extracted)} clips.\n"
+        f"Flattened compound clip '{ref_clip_id}' into {plural(len(extracted), 'clip')}.\n"
         f"Saved to: `{output_path}`"
     ))
 
@@ -157,7 +157,7 @@ async def handle_apply_template(arguments: dict) -> Sequence[TextContent]:
 
     result_path = apply_template(template_name, clips_map, output_path, fps)
     return srv._text_result((
-        f"Applied template '{template_name}' with {len(clips_map)} clips.\n"
+        f"Applied template '{template_name}' with {plural(len(clips_map), 'clip')}.\n"
         f"Saved to: `{result_path}`"
     ))
 
@@ -181,7 +181,7 @@ async def handle_relink_media(arguments: dict) -> Sequence[TextContent]:
     if not result["relinked"]:
         return srv._text_result(
             f"No media paths matched prefix '{arguments['find']}' "
-            f"({result['total_assets']} assets scanned). Nothing to relink."
+            f"({plural(result['total_assets'], 'asset')} scanned). Nothing to relink."
         )
 
     lines = [

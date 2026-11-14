@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import palette
+from .words import plural
 
 FONTS = Path(__file__).with_name("fonts")
 FFMPEG_TIMEOUT_SECONDS = 120
@@ -419,14 +420,14 @@ def legibility_problems(r: Raster, delivered_scale: float = 1.0, cells: int = 0)
         out.append(f"long edge {long_edge} px (at most {LONG_EDGE_MAX})")
     tokens = visual_tokens(r.width, r.height)
     if tokens > VISUAL_TOKENS_MAX:
-        out.append(f"{tokens} visual tokens (at most {VISUAL_TOKENS_MAX}): it would be downscaled")
+        out.append(f"{plural(tokens, 'visual token')} (at most {VISUAL_TOKENS_MAX}): it would be downscaled")
     for run in r.runs:
         shown = run.face.cap_height * delivered_scale
         if shown < GLYPH_MIN:
             out.append(f"{run.text!r} has {shown:.1f} px letters delivered (at least {GLYPH_MIN})")
             break
     if cells > CELLS_MAX:
-        out.append(f"{cells} cells on one page (at most {CELLS_MAX})")
+        out.append(f"{plural(cells, 'cell')} on one page (at most {CELLS_MAX})")
     return out
 
 

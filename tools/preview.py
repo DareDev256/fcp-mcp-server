@@ -199,7 +199,7 @@ async def handle_preview_sheet(args: dict):
     cells = sheet["cells"]
     fps = getattr(timeline, "frame_rate", 24) or 24
     lines = [f"Contact sheet ({layout}): {proofs.counts_label(timeline)} on {plural(len(sheet['pages']), 'page')}, "
-             f"{sheet['per_page']} cells a page."]
+             f"{plural(sheet['per_page'], 'cell')} a page."]
     lines += [f"Page {i + 1}: {p}" for i, p in enumerate(sheet["pages"])]
     nominal = proofs.nominal_fps(fps)
     lines.append("Clips: " + "; ".join(
