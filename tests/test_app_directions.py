@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -161,3 +162,79 @@ def test_a_storyline_name_is_cut_in_the_middle_and_keeps_its_ending(browser):
 def _hex(css: str) -> str:
     r, g, b = (int(v) for v in re.findall(r"\d+", css)[:3])
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# ---- pass 2: the gym fixture (real media), the flash, the ruler's zero, A's picture
+
+GYM_BUILDER = Path(__file__).resolve().parent.parent / "demo" / "fixtures" / "gym_session.py"
+
+
+@pytest.fixture(scope="module")
+def gym(tmp_path_factory):
+    """Built in its own process: the builder drives the server's handlers with
+    asyncio.run, which cannot run inside Playwright's sync loop."""
+    import shutil
+    import subprocess
+    import sys
+
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg/ffprobe not installed")
+    out = tmp_path_factory.mktemp("gym")
+    env = dict(os.environ, FCP_MCP_JOURNAL="off", FCP_MCP_INDEX="off", PYTHONDONTWRITEBYTECODE="1")
+    subprocess.run([sys.executable, str(GYM_BUILDER), str(out)], check=True, capture_output=True, env=env, timeout=600)
+    edited = out / "edited.fcpxml"
+    return {"edited": edited, "timeline": FCPXMLParser().parse_file(str(edited)).timelines[0]}
+
+
+def _frames(t) -> int:
+    return int(t.frames)
+
+
+def test_the_payload_carries_the_picture_flash(gym):
+    """Bench (L1) ends one frame before Press starts: one frame of Squat. The
+    payload says so, read from the parsed clips, as diagnose fails it."""
+    tl = gym["timeline"]
+    lane = tl.connected_clips[0]
+    at = _frames(lane.timeline_start) + _frames(lane.duration)
+    press = next(c for c in tl.clips if c.name == "Press")
+    payload = timeline_app.build_payload(tl)
+    (flash,) = payload["flashes"]
+    assert flash["start"] == f"{Fraction(at, 24).numerator}/{Fraction(at, 24).denominator}"
+    assert flash["frames"] == _frames(press.start) - at == 1 and flash["verdict"] == "FAIL"
+    assert flash["shows"] == "Squat" and flash["between"] == ["Bench (L1)", "Press"]
+
+
+GYM_FACTS = r"""() => {
+  const sc = document.getElementById('scroller').getBoundingClientRect();
+  const vis = (e) => { const s = getComputedStyle(e); return s.visibility !== 'hidden' && s.display !== 'none'; };
+  const fl = document.querySelector('#canvas .flash'), fb = fl.getBoundingClientRect();
+  const zero = [...document.querySelectorAll('#canvas .tick')].find(t => t.textContent === '00:00:00:00');
+  const flag = document.querySelector('#canvas .flag');
+  return { flash: { inView: fb.right > sc.left && fb.left < sc.right, width: fb.width, height: fb.height,
+                    colour: getComputedStyle(fl).backgroundColor },
+           flag: flag && !flag.classList.contains('unfit') ? flag.textContent : null,
+           zero: !!zero && vis(zero) && !zero.classList.contains('unfit') && !zero.classList.contains('under-playhead'),
+           pictures: [...document.querySelectorAll('#canvas .lane:not(.linked) .clip')].map(c => c.classList.contains('has-thumb')),
+           overflow: document.getElementById('scroller').scrollWidth - document.getElementById('scroller').clientWidth };
+}"""
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("direction", ["a", "b"])
+def test_the_flash_is_red_the_ruler_starts_at_zero_and_every_clip_has_a_picture(browser, gym, direction, width):
+    from tools import view
+
+    payload = timeline_app.build_payload(gym["timeline"], thumbnail=view._thumbnail, head_thumbs=True)
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme="dark")
+    try:
+        page.set_content(timeline_app.render_page_html(payload, direction=direction))
+        page.wait_for_timeout(100)
+        facts = page.evaluate(GYM_FACTS)
+    finally:
+        page.close()
+    assert facts["flash"]["inView"] and facts["flash"]["width"] >= 2 and facts["flash"]["height"] > 40, facts
+    assert _hex(facts["flash"]["colour"]) == palette.dark("danger").lower()
+    assert facts["flag"] == "flash 1f"
+    assert facts["zero"], "00:00:00:00 is hidden"
+    assert all(facts["pictures"]) and len(facts["pictures"]) == 7  # A has a picture in its thin clips too
+    assert facts["overflow"] <= 1  # the 30 s cut fits: nothing scrolls sideways

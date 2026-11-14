@@ -186,14 +186,17 @@ def build_payload(
     thumbnail: Optional[ThumbnailFn] = None,
     transcript: Optional[TranscriptFn] = None,
     waveform: Optional[WaveformFn] = None,
+    head_thumbs: bool = False,
 ) -> dict:
     """The JSON the app draws from. Pure: every side effect is injected.
 
     ``thumbnail(media_path, source_seconds)`` returns a data URI or None;
     ``transcript(media_path)`` returns a cached transcript dict or None;
     ``waveform(media_path, file_start, duration)`` returns levels 0-100 for
-    an audio clip (0.33 directions draw it), or None. None is ever called
-    more than the bounds above allow.
+    a clip with sound (0.33 directions draw it), or None. None is ever
+    called more than the bounds above allow. ``head_thumbs`` adds each
+    clip's FIRST frame as ``thumb_in`` (direction A shows it at the clip's
+    head, as Resolve's edit page does).
     """
     origin = _origin(timeline)
     duration = _frac(timeline.duration)
@@ -258,7 +261,10 @@ def build_payload(
             "words": words,
             "thumb": _thumb(media, file_src + dur / 2) if media else None,
         }
-        if waveform is not None and media and row["kind"] == "audio":
+        if head_thumbs and media and row["kind"] != "audio":
+            row["thumb_in"] = _thumb(media, file_src)
+        sound = row["kind"] == "audio" or bool(getattr(getattr(item, "media", None), "has_audio", False))
+        if waveform is not None and media and sound:
             levels = waveform(media, file_src, dur)
             if levels:
                 row["wave"] = [max(0, min(100, int(v))) for v in levels[:MAX_WAVE_POINTS]]
@@ -314,10 +320,34 @@ def build_payload(
         "gaps": gaps,
         "markers": _marker_rows(timeline.markers, origin),
         "transitions": [
-            {"name": t.name, "start": rational(_frac(t.start) - origin), "duration": rational(t.duration)}
+            {"name": t.name, "start": rational(_frac(t.start) - origin), "duration": rational(t.duration),
+             "lead": rational(t.lead) if getattr(t, "lead", None) is not None else None}
             for t in timeline.transitions
         ],
+        "flashes": _picture_flashes(timeline),
     }
+
+
+def _picture_flashes(timeline) -> list:
+    """Runs shorter than six frames in the composited PICTURE (connected
+    clips included), the reading diagnose fails on: a 1f run is a FAIL (the
+    0.33 directions draw it red), up to 5f a WARN. Pure: the filtergraph is
+    compiled, nothing is rendered. [] when the timeline cannot be compiled."""
+    try:
+        from . import filtergraph as _fg
+        from . import proofs as _pf
+
+        runs = _pf.picture_runs(_fg.compile_timeline(timeline))
+    except Exception:  # noqa: BLE001 - the payload never fails over a QC reading
+        return []
+    out = []
+    for i, (a, b, layers) in enumerate(runs):
+        if b - a < 6 and layers and 0 < i < len(runs) - 1:
+            out.append({"start": rational(Fraction(a, _fg.FPS)), "duration": rational(Fraction(b - a, _fg.FPS)),
+                        "frames": b - a, "verdict": "FAIL" if b - a < 2 else "WARN",
+                        "shows": _pf.picture_name(layers),
+                        "between": [_pf.picture_name(runs[i - 1][2]), _pf.picture_name(runs[i + 1][2])]})
+    return out
 
 
 def wrap_payload(summary: str, payload: dict) -> str:
@@ -539,10 +569,16 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   [data-direction] .mlabel .mg.chapter { height: 11px; top: 2px; clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); }
   [data-direction] .mlabel .mg.todo { background: transparent; border: 2px solid var(--accent); }
   [data-direction] .mlabel .mg.completed { border: 2px solid var(--accent); }
-  [data-direction] .tick { top: auto; bottom: 0; height: 15px; padding-left: 4px; font: 11px/15px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* a time starts 8 px right of its tick, clear of the playhead head, so 00:00:00:00 shows with the playhead at 0 */
+  [data-direction] .tick { top: auto; bottom: 0; height: 15px; padding-left: 8px; font: 11px/15px ui-monospace, SFMono-Regular, Menlo, monospace; }
   [data-direction] .ftick { position: absolute; bottom: 0; width: 0; height: 4px; border-left: 1px solid var(--line-strong); }
   [data-direction] .ftick.sec { height: 7px; }
   [data-direction] .clip { justify-content: flex-start; }
+  [data-direction] .clip .label { z-index: 3; }  /* a name reads over the dissolve box on its cut */
+  [data-direction] .clip .label.tight { padding-left: 2px; padding-right: 2px; }
+  /* a rail name sits over the flash sliver (it is on the panel colour); the playhead over all */
+  [data-direction] .rail { z-index: 5; }
+  [data-direction] .playhead { z-index: 6; }
   [data-direction] .clip .stripe { position: absolute; left: 0; right: 0; z-index: 1; }
   [data-direction] .clip .wave { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; }
   [data-direction] .clip .wave path { fill: var(--mute); }
@@ -556,6 +592,15 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   [data-direction] .rail.below .rl { top: 0; bottom: auto; height: 16px; }
   [data-direction] .rail.below .rl.r1 { top: 0; height: 31px; padding-top: 15px; }
   [data-direction] .gap { color: var(--mute); }
+  /* The dissolve: a box over the cut, as long as the transition. */
+  [data-direction] .trans { position: absolute; z-index: 2; border: 1px solid var(--line-strong); pointer-events: none;
+    background: linear-gradient(to bottom right, var(--raised-2) 0 49%, var(--line-strong) 49% 51%, var(--raised-2) 51% 100%); }
+  /* A flash in the picture is a failure: red, the only red on the timeline. */
+  [data-direction] .flash { position: absolute; bottom: 0; z-index: 4; background: var(--danger); pointer-events: none; }
+  [data-direction] .flag { position: absolute; z-index: 1; font-size: 11px; line-height: 14px; font-weight: 600; white-space: nowrap;
+    color: var(--danger); padding-right: 6px; border-right: 2px solid var(--danger); }
+  [data-direction] .flag.row1 { top: 15px; }
+  [data-direction] .flag.unfit { color: transparent; }
 
   /* A: dense. Thin lanes, small mono labels, a timecode ruler with frame
      ticks, a 3 px role stripe on the clip's top edge (palette greys: picture
@@ -563,7 +608,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   [data-direction="a"] #overview { height: 26px; }
   [data-direction="a"] .ruler { height: 50px; }
   [data-direction="a"] .markers { top: 50px; }
-  [data-direction="a"] .playhead { top: 34px; }
+  [data-direction="a"] .playhead { top: 27px; }
   [data-direction="a"] .lane { height: 52px; }
   [data-direction="a"] .lane.audio { height: 60px; }
   [data-direction="a"] .lane-tag { width: 40px; padding: 6px 0 0 8px; font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -574,6 +619,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   [data-direction="a"] .clip .stripe { top: 0; height: 3px; background: var(--ink); }
   [data-direction="a"] .clip.k-audio .stripe { background: var(--mute); }
   [data-direction="a"] .clip .wave { height: 34px; }
+  /* A picture at the head of every video clip, as Resolve's edit page shows one. */
+  [data-direction="a"] .clip.has-thumb .thumbs { top: 3px; right: auto; opacity: 1; background-repeat: no-repeat; background-size: cover;
+    border-right: 1px solid var(--line-strong); }
+  [data-direction="a"] .clip.has-thumb .label { color: var(--on-media); background: var(--shade); align-self: flex-start;
+    padding: 2px 4px; margin: 4px 0 0 2px; border-radius: 2px; }
+  [data-direction="a"] .lane.linked .clip .wave { height: 40px; }
   [data-direction="a"] #panel { margin-top: 8px; gap: 8px; }
   [data-direction="a"] .card { padding: 8px 10px; min-height: 0; }
   @media (min-width: 760px) { [data-direction="a"] dl { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); } }
@@ -585,9 +636,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   [data-direction="b"] #overview { height: 34px; border-radius: 8px; }
   [data-direction="b"] .ruler { height: 52px; }
   [data-direction="b"] .markers { top: 52px; }
-  [data-direction="b"] .playhead { top: 36px; }
+  [data-direction="b"] .playhead { top: 29px; }
   [data-direction="b"] .lane { height: 84px; border-bottom: 0; z-index: 1; }
-  [data-direction="b"] .lane.spine { height: 40px; }
+  [data-direction="b"] .lane.spine.gaponly { height: 40px; }
   [data-direction="b"] .lane.audio { height: 64px; }
   [data-direction="b"] .lane-tag { visibility: hidden; width: 16px; padding: 0; border-right: 0; background: transparent; }
   [data-direction="b"] .clip { top: 4px; bottom: 4px; border-radius: 7px; }
@@ -602,9 +653,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   [data-direction="b"] .clip .stripe.role-music { background: var(--role-music); }
   [data-direction="b"] .clip .stripe.role-effects { background: var(--role-effects); }
   [data-direction="b"] .clip .wave { height: 40px; bottom: 4px; }
+  /* A clip with picture AND sound: the filmstrip over the sound, as Final Cut draws it. */
+  [data-direction="b"] .clip.has-thumb.has-wave .thumbs { bottom: 22px; }
+  [data-direction="b"] .clip.has-thumb .wave { height: 18px; bottom: 4px; background: var(--panel); }
   [data-direction="b"] .lane.spine .gap { top: 8px; bottom: 8px; border: 1px solid var(--line-strong); border-radius: 7px;
     background: var(--raised); padding: 4px 8px; font-size: 11px; }
-  [data-direction="b"] .rail { z-index: 1; }  /* a connection line passes behind a rail name */
+  /* (B: a connection line passes behind a rail name too: the rail is above it) */
   [data-direction="b"] .conn { position: absolute; width: 0; border-left: 1px solid var(--mute); z-index: 0; pointer-events: none; }
   [data-direction="b"] .conn::after { content: ""; position: absolute; left: -3px; width: 5px; height: 5px; border-radius: 50%;
     background: var(--mute); }
@@ -1120,7 +1174,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var m = $("meter"); if (!m) { m = el("span"); m.id = "meter"; document.body.appendChild(m); }
     m.className = "meter " + kind; m.textContent = s; return m.getBoundingClientRect().width;
   }
-  var PAD = { a: 10, b: 16 };
+  var PAD = { a: 10, b: 16 }, TIGHT = { a: 6, b: 8 };  // label padding + borders: normal, and for a narrow clip
   // The name, whole, or cut in the middle so its ending survives ("SHOT…A 1"),
   // keeping at least KEEP_MIN of its characters; null when even that won't fit.
   function middleFit(name, room, kind) {
@@ -1137,9 +1191,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   function insideName(c) {
     var wpx = w(frac(c.duration)) - 1;
     if (wpx < LABEL_MIN) return null;
-    var room = wpx - PAD[DIR];
-    if (c.lane) return textW(c.name, "label") <= room ? { text: c.name, kept: c.name.length } : null;
-    return middleFit(c.name, room, "label");
+    var full = textW(c.name, "label");
+    if (full <= wpx - PAD[DIR]) return { text: c.name, kept: c.name.length };
+    // a whole short name with tighter padding beats a cut one ("Be…ch" is wider than "Bench")
+    if (full <= wpx - TIGHT[DIR]) return { text: c.name, kept: c.name.length, tight: true };
+    if (c.lane) return null;
+    return middleFit(c.name, wpx - PAD[DIR], "label");
   }
   function roleOf(c) {
     var r = String(c.role || "").split(".")[0].toLowerCase();
@@ -1163,16 +1220,24 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     return holder.firstChild;
   }
   function clipElDir(c) {
-    var thumbed = DIR === "b" && !!(c.thumb && c.thumb.indexOf("data:image/") === 0);
-    var e = el("div", "clip k-" + c.kind + (thumbed ? " has-thumb" : "") + (state.sel === c.id ? " selected" : ""));
+    var linked = !!c.__linked, pic = linked ? null : DIR === "a" ? (c.thumb_in || c.thumb) : c.thumb;
+    var thumbed = !!(pic && pic.indexOf("data:image/") === 0);
+    var wave = (c.wave && c.wave.length && (linked || c.kind === "audio" || DIR === "b")) ? c.wave : null;
+    var e = el("div", "clip k-" + (linked ? "audio" : c.kind) + (thumbed ? " has-thumb" : "") + (wave ? " has-wave" : "") +
+                (state.sel === c.id ? " selected" : ""));
     e.style.left = x(frac(c.start)) + "px"; e.style.width = Math.max(3, w(frac(c.duration)) - 1) + "px";
     e.title = c.name + " · " + secOfSeconds(frac(c.duration)); e.__c = c;
-    if (thumbed) e.appendChild(thumbsOf(c));
-    if (c.wave && c.wave.length) e.appendChild(waveEl(c.wave));
+    if (thumbed) {
+      var th = thumbsOf({ thumb: pic });
+      // A: one frame at the head, as wide as the clip is tall at 16:9 (all of a narrower clip)
+      if (DIR === "a") th.style.width = Math.min(parseFloat(e.style.width), 44 * 16 / 9) + "px";
+      e.appendChild(th);
+    }
+    if (wave) e.appendChild(waveEl(wave));
     e.appendChild(el("div", "stripe role-" + roleOf(c)));
-    (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; e.appendChild(mk); });
-    var name = insideName(c);
-    if (name) { var lab = el("div", "label", name.text); lab.dataset.kept = String(name.kept); e.appendChild(lab); }
+    if (!linked) (c.markers || []).forEach(function (m) { var mk = el("div", "mk"); mk.style.left = w(frac(m.start) - frac(c.start)) + "px"; mk.title = m.name; e.appendChild(mk); });
+    var name = linked ? middleFit(c.name, w(frac(c.duration)) - 1 - PAD[DIR], "label") : insideName(c);
+    if (name) { var lab = el("div", "label" + (name.tight ? " tight" : ""), name.text); lab.dataset.kept = String(name.kept); e.appendChild(lab); }
     e.addEventListener("click", function (ev) { ev.stopPropagation(); select(c.id); state.playhead = frac(c.start); placePlayhead(); });
     return e;
   }
@@ -1205,6 +1270,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var step = niceStep(dur, width - GUTTER), nom = p.nominal_fps || 24, perSec = nom / (frac(p.fps) || 24);
     for (var S = 0; S * perSec <= dur + 1e-9; S += step) {
       var t = S * perSec, k = el("div", "tick", tcOf(t)); k.style.left = x(t) + "px"; k.__key = "t:" + S; ruler.appendChild(k);
+      // a time whose label would run past the end is not drawn: no sideways scroll for a label
+      if (k.offsetLeft + k.offsetWidth > width - 2) ruler.removeChild(k);
     }
     var fpx = state.pps * perSec / nom, gapPx = DIR === "a" ? 4 : 6;
     var sub = [1, 2, 3, 4, 6, 8, 12, 24, 48, 120, 240, 600, 1440].filter(function (n) { return n * fpx >= gapPx; })[0] || 1440;
@@ -1236,19 +1303,37 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       lanes.splice(at < 0 ? lanes.length : at, 0, { lane: 0, kind: "spine", clips: [] });
     }
     var rows = {};
+    var hasSpine = lanes.some(function (l) { return l.lane === 0 && l.clips.length; });
+    // A: the storyline's sound on its own row under it (A1), as Resolve links a
+    // clip's audio under its picture; the waveform is the clip's own
+    var linkedRow = DIR === "a" && lanes.some(function (l) { return l.lane === 0 && l.clips.some(function (id) { return (byId[id].wave || []).length; }); }) ? 1 : 0;
     lanes.forEach(function (lane) {
       var here = lane.clips.map(function (id) { return byId[id]; });
       var rail = lane.lane ? railFor(here.filter(function (c) { return !insideName(c); }), lane.lane) : null;
       if (rail && lane.lane > 0) canvas.appendChild(rail);
-      var row = el("div", "lane " + lane.kind + (lane.lane < 0 ? " below" : "")); row.dataset.lane = String(lane.lane);
-      var tag = lane.lane > 0 ? "V" + lane.lane : lane.lane < 0 ? "A" + (-lane.lane) : "";
+      var row = el("div", "lane " + lane.kind + (lane.lane < 0 ? " below" : "") + (lane.lane === 0 && !lane.clips.length ? " gaponly" : ""));
+      row.dataset.lane = String(lane.lane);
+      // Resolve's names: the storyline is V1 when there is one, lanes above it V2...
+      var up = hasSpine ? 1 : 0, tag = lane.lane > 0 ? "V" + (lane.lane + up) : lane.lane < 0 ? "A" + (-lane.lane + linkedRow) : (hasSpine ? "V1" : "");
       row.appendChild(el("span", "lane-tag", DIR === "a" ? tag : ""));
       if (lane.kind === "spine") p.gaps.forEach(function (g) {
         var ge = el("div", "gap", (DIR === "b" ? "Gap " : "gap ") + secOfSeconds(frac(g.duration)));
         ge.style.left = x(frac(g.start)) + "px"; ge.style.width = Math.max(2, w(frac(g.duration))) + "px"; row.appendChild(ge);
       });
       here.forEach(function (c) { row.appendChild(clipElDir(c)); });
+      if (lane.lane === 0) (p.transitions || []).forEach(function (t) {
+        var lead = t.lead != null ? frac(t.lead) : frac(t.duration) / 2, tr = el("div", "trans");
+        tr.style.left = x(frac(t.start) - lead) + "px"; tr.style.width = Math.max(3, w(frac(t.duration))) + "px";
+        tr.style.top = "6px"; tr.style.bottom = "6px"; tr.title = (t.name || "transition") + " · " + secOfSeconds(frac(t.duration));
+        row.appendChild(tr);
+      });
       canvas.appendChild(row); rows[lane.lane] = row;
+      if (lane.lane === 0 && linkedRow) {
+        var a1 = el("div", "lane audio linked"); a1.dataset.lane = "linked";
+        a1.appendChild(el("span", "lane-tag", "A1"));
+        here.forEach(function (c) { if ((c.wave || []).length) a1.appendChild(clipElDir(Object.assign({}, c, { __linked: true }))); });
+        canvas.appendChild(a1);
+      }
       if (rail && lane.lane < 0) canvas.appendChild(rail);
     });
     var marks = el("div", "markers");
@@ -1266,11 +1351,37 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
         canvas.appendChild(line);
       });
     }
+    drawFlashes(ruler, canvas);
     var ph = el("div", "playhead"); ph.id = "playhead"; ph.appendChild(el("div", "phead")); canvas.appendChild(ph);
     var rg = el("div", "range"); rg.id = "range"; rg.hidden = true; canvas.appendChild(rg);
     placePlayhead();
     fitLabels();
     drawOverview();
+  }
+  // A flash in the picture (diagnose's FAIL): a red sliver down the tracks,
+  // never thinner than 2 px, and a red flag on the ruler, right-aligned to it
+  // on the first marker row with room, so the marker one frame later keeps
+  // its name. A WARN (2-5f) is drawn in grey: red means failure only.
+  function drawFlashes(ruler, canvas) {
+    var top = ruler.offsetHeight;
+    (state.payload.flashes || []).forEach(function (f) {
+      var fail = f.verdict === "FAIL", sl = el("div", "flash");
+      sl.style.left = x(frac(f.start)) + "px"; sl.style.width = Math.max(2, w(frac(f.duration))) + "px";
+      sl.style.top = top + "px"; if (!fail) sl.style.background = "var(--mute)";
+      sl.title = "flash " + f.frames + "f " + tcOf(frac(f.start)) + ": " + f.shows + " between " + f.between.join(" and ");
+      canvas.appendChild(sl);
+      var tag = el("div", "flag", "flash " + f.frames + "f"); if (!fail) { tag.style.color = "var(--mute)"; tag.style.borderColor = "var(--mute)"; }
+      tag.title = sl.title; ruler.appendChild(tag);
+      var right = x(frac(f.start)), wpx = tag.offsetWidth, left = right - wpx;
+      var free = function (row) {
+        return ![].some.call(ruler.querySelectorAll(".mlabel" + (row ? ".row1" : ":not(.row1)") + ":not(.unfit)"), function (m) {
+          var a = m.offsetLeft, b = a + m.offsetWidth; return a < right + 2 && left - 4 < b; });
+      };
+      var row = free(0) ? 0 : free(1) ? 1 : -1;
+      tag.style.left = left + "px";
+      if (row === 1) tag.classList.add("row1");
+      if (row < 0) tag.classList.add("unfit");
+    });
   }
   // The whole cut, always: every lane as a thin row, the markers, and a box
   // round the part the tracks show. A click there scrolls the tracks to it.
@@ -1296,6 +1407,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     });
     var named = p.markers.slice(); p.clips.forEach(function (c) { (c.markers || []).forEach(function (m) { named.push(m); }); });
     named.forEach(function (m) { var o = el("div", "om"); o.style.left = sx(frac(m.start)) + "px"; ov.appendChild(o); });
+    (p.flashes || []).forEach(function (f) {
+      if (f.verdict !== "FAIL") return;
+      var o = el("div", "om"); o.style.left = sx(frac(f.start)) + "px"; o.style.width = "2px"; o.style.background = "var(--danger)"; ov.appendChild(o);
+    });
     var box = el("div", "ov"); box.id = "ovbox"; ov.appendChild(box);
     syncOverview();
   }
