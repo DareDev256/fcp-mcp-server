@@ -39,8 +39,8 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   0-17.6 s), else the whole cut; and when the median picture clip would then
   be under 16 px it zooms in to a 64 px median from the region's start and
   scrolls (the interview at 430 and 390). Measured median picture clip at
-  open (1440 / 430 / 390): gym 219.3 / 58.5 / 51.8 px, music video 296.2 /
-  79.3 / 70.2, interview 29.4 / 63.0 / 63.0. Zoom + and - zoom from there.
+  open (1440 / 430 / 390): gym 218.9 / 58.5 / 51.8 px, music video 295.7 /
+  79.3 / 70.2, interview 29.3 / 63.0 / 63.0. Zoom + and - zoom from there.
   The page never scrolls sideways. A connected lane with nothing in the part
   in view collapses to a thin rule. (Round 3 opened on the whole cut at
   every width; the first build on a 44 px median clip.)
@@ -58,7 +58,7 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   over its head or tail), or not at all: no name rows, no leaders, no scrim
   pills, never an ellipsis (round 3 hung names on rows with leaders, which
   the critics could not match to their clips). Over a picture the name is
-  white with a 1 px black outline and a soft shadow, which reads over a
+  white with a 2 px black outline and a soft shadow, which reads over a
   white frame. The hint strip counts the names the part in view shows:
   "7 of 7 names shown" (gym at 1440), "2 of 58 names shown · tap or zoom"
   (interview at 1440), "4 of 58" (interview at 390), "8 of 8" and "5 of 8"
@@ -69,7 +69,8 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   cyan there (round 4), a length or a source time is not. The playhead
   snaps to a cut within 8 px.
 - **Lane tags (round 4).** On a desktop (a track 1,000 px or wider) every lane
-  carries a grey tag in a 64 px gutter, sticky as the tracks scroll:
+  carries a grey tag in a gutter 64 px wide (wider if its widest tag needs
+  it in the font drawn: CI's Linux font does), sticky as the tracks scroll:
   "Storyline", "Lane 1", "Lane −1". A phone keeps its 16 px gutter.
 - **The playhead is on top of everything (round 4).** Its head sits in the
   ruler's tick band under the times, so it never cuts a time and
@@ -301,7 +302,8 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   stems); transitions with no glyph unless their whole name fits (red with
   the bow-tie always drawn, with an opaque slab); titles' text 4.5:1 on the
   Titles colour in both themes (red in the mute grey); lane tags at 1440
-  only, grey, whole in the gutter (red on a phone, in cyan, missing); and a
+  only, grey, whole in the gutter, which grows for a wider tag (red on a
+  phone, at a fixed 64 px with a wider tag, in cyan, missing); and a
   collision check over every drawn primitive (text runs line by line,
   marker glyphs, brackets and their ticks, frame and time ticks, the flash
   and its flag, a transition's overlay, each stem's visible parts and its
@@ -311,10 +313,11 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   check said 0 (red with a name row and leader put back, and with names
   given no inset). `tests/test_palette.py`: one set of role colours in both
   themes (red with round 3's light set); a name over a picture has its
-  outline on all eight sides (red with a soft shadow only).
+  outline out to 2 px on every side (red with a soft shadow only).
   `tests/test_app_labels.py`: over a pure white frame, 95% or more of the
-  pixels just outside a name's glyphs read 4.5:1 against it (97% measured;
-  red without the halo).
+  pixels just outside a name's glyphs read 4.5:1 against it (100% on
+  macOS with the 2 px outline; a 1 px outline read 97% there and 76% on
+  CI's Linux; red without the halo).
 - `tests/test_app_glance.py` (0.34, replaces `tests/test_app_directions.py`;
   CI's `rendered-labels` job): the three fixtures (the 32 s gym cut, the
   164 s music video with three markers on its gap, the 18-minute interview)
