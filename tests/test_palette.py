@@ -237,7 +237,7 @@ def test_the_fill_rule_can_go_red():
 
 def halo_rule(html: str) -> list[str]:
     """0.34 round 4 took the scrim pill from a name over a picture: its halo
-    is a 1 px outline of the halo token on all eight sides plus soft shadows
+    is a 2 px outline of the halo token on every side plus a soft shadow
     (tests/test_app_labels.py measures it over a white frame). What is
     missing from that rule."""
     rule = re.search(r"\.clip\.has-thumb \.label \{([^}]*)\}", html)
@@ -247,8 +247,10 @@ def halo_rule(html: str) -> list[str]:
     if not shadow:
         return ["no halo"]
     parts = [p.split() for p in shadow.group(1).replace("\n", " ").split(",")]
-    offsets = {(p[0], p[1]) for p in parts if len(p) == 4 and p[2] == "0" and p[3] == "var(--halo)"}
-    need = {(x, y) for x in ("1px", "-1px", "0") for y in ("1px", "-1px", "0")} - {("0", "0")}
+    px = lambda v: float(v[:-2] if v.endswith("px") else v)  # noqa: E731
+    offsets = {(px(p[0]), px(p[1])) for p in parts if len(p) == 4 and px(p[2]) == 0 and p[3] == "var(--halo)"}
+    # a 2 px outline: every offset out to two pixels (round 4 on CI's Linux: one pixel read 76%)
+    need = {(x, y) for x in range(-2, 3) for y in range(-2, 3)} - {(0, 0)}
     out = [f"no outline at {x} {y}" for x, y in sorted(need - offsets)]
     if palette.dark("halo") != "#000000" or palette.light("halo") != "#000000":
         out.append("the halo is not black in both themes")

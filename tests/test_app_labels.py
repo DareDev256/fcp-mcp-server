@@ -290,12 +290,18 @@ def halo_coverage(browser, html: str) -> float:
             if 0 <= x + dx < w and 0 <= y + dy < h and (x + dx, y + dy) not in glyph}
     if not glyph or not ring:
         return 0.0
-    dark = sum(1 for x, y in ring if palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % px[x, y]) >= 4.5)
-    return dark / len(ring)
+    bad = [px[x, y] for x, y in ring if palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % px[x, y]) < 4.5]
+    HALO_SEEN.update(size=(w, h), glyph=len(glyph), ring=len(ring), bad=sorted(set(bad))[:12])
+    return 1 - len(bad) / len(ring)
+
+
+HALO_SEEN: dict = {}  # what the last measurement saw, for the failure message
 
 
 def test_a_label_over_a_white_frame_reads_at_4_5_to_1(browser):
-    assert halo_coverage(browser, timeline_app.render_app_html()) >= 0.95
+    """(A 1 px outline read 97% here on macOS and 76% on CI's Linux; the
+    2 px outline reads 100% on macOS.)"""
+    assert halo_coverage(browser, timeline_app.render_app_html()) >= 0.95, HALO_SEEN
 
 
 def test_the_halo_check_goes_red_without_the_halo(browser):

@@ -592,8 +592,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   /* A lane's grey tag in the gutter (desktop): sticky, so it stays as the
      tracks scroll; clips pass under it, and a name that would go under it
      hides (fitLabels() measures from the gutter's edge). */
+  .lane .ltag, .meter.ltag { font: 600 11px/14px ui-sans-serif, system-ui, -apple-system, sans-serif; }
   .lane .ltag { position: sticky; left: 0; z-index: 8; display: flex; align-items: center; width: 60px; height: 100%;
-    padding-left: 8px; font: 600 11px/14px ui-sans-serif, system-ui, -apple-system, sans-serif; color: var(--mute);
+    padding-left: 8px; color: var(--mute);
     background: var(--panel); border-right: 1px solid var(--line); white-space: nowrap; pointer-events: none; }
   /* a connected lane with nothing in view: a thin rule */
   .lane.collapsed { height: 8px; border-top: 1px dashed var(--line); }
@@ -643,13 +644,14 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .clip .label, .meter.label { font: 600 11px/14px ui-sans-serif, system-ui, -apple-system, sans-serif; }
   .clip .label { position: absolute; top: 0; left: 0; max-width: 100%; z-index: 7; padding: 3px 6px;
     white-space: nowrap; overflow: hidden; color: var(--ink); }
-  /* Over a picture the name is white with a 1 px black outline and a soft
-     shadow (the halo token): it reads over a white frame
-     (tests/test_app_labels.py measures it), and covers no picture. */
+  /* Over a picture the name is white with a 2 px black outline and a soft
+     shadow (the halo token): it reads over a white frame on any font
+     rasteriser (tests/test_app_labels.py measures it; a 1 px outline read
+     97% on macOS and 76% on CI's Linux), and covers no picture. */
   .clip.has-thumb .label { color: var(--on-media);
-    text-shadow: 1px 0 0 var(--halo), -1px 0 0 var(--halo), 0 1px 0 var(--halo), 0 -1px 0 var(--halo),
-      1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
-      0 0 2px var(--halo), 0 0 2px var(--halo), 0 0 4px var(--halo); }
+    text-shadow: 1px 0px 0 var(--halo), -1px 0px 0 var(--halo), 0px 1px 0 var(--halo), 0px -1px 0 var(--halo), 1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
+      -2px -2px 0 var(--halo), -2px -1px 0 var(--halo), -2px 0px 0 var(--halo), -2px 1px 0 var(--halo), -2px 2px 0 var(--halo), -1px -2px 0 var(--halo), -1px 2px 0 var(--halo), 0px -2px 0 var(--halo), 0px 2px 0 var(--halo), 1px -2px 0 var(--halo), 1px 2px 0 var(--halo), 2px -2px 0 var(--halo), 2px -1px 0 var(--halo), 2px 0px 0 var(--halo), 2px 1px 0 var(--halo), 2px 2px 0 var(--halo),
+      0 0 3px var(--halo); }
   .clip.k-title .label { color: var(--on-media); }
   .clip.has-thumb .off-tag { color: var(--on-media); }
   .meter { position: absolute; left: -9999px; top: 0; visibility: hidden; white-space: nowrap; }
@@ -678,9 +680,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .trans .bow path { fill: var(--on-media); }
   .trans .tn { position: absolute; left: 22px; top: 3px; font: 600 11px/14px ui-sans-serif, system-ui, -apple-system, sans-serif;
     white-space: nowrap; color: var(--on-media);
-    text-shadow: 1px 0 0 var(--halo), -1px 0 0 var(--halo), 0 1px 0 var(--halo), 0 -1px 0 var(--halo),
-      1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
-      0 0 2px var(--halo), 0 0 2px var(--halo), 0 0 4px var(--halo); }
+    text-shadow: 1px 0px 0 var(--halo), -1px 0px 0 var(--halo), 0px 1px 0 var(--halo), 0px -1px 0 var(--halo), 1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
+      -2px -2px 0 var(--halo), -2px -1px 0 var(--halo), -2px 0px 0 var(--halo), -2px 1px 0 var(--halo), -2px 2px 0 var(--halo), -1px -2px 0 var(--halo), -1px 2px 0 var(--halo), 0px -2px 0 var(--halo), 0px 2px 0 var(--halo), 1px -2px 0 var(--halo), 1px 2px 0 var(--halo), 2px -2px 0 var(--halo), 2px -1px 0 var(--halo), 2px 0px 0 var(--halo), 2px 1px 0 var(--halo), 2px 2px 0 var(--halo),
+      0 0 3px var(--halo); }
   /* A flash in the picture is a failure: red, the only red on the timeline,
      from under the ruler's marker rows (FLASH_TOP) down through the tracks. */
   .flash { position: absolute; top: 32px; z-index: 4; background: var(--danger); pointer-events: none; }
@@ -762,8 +764,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // of the view. A flash line starts FLASH_TOP px down the ruler, under the
   // two marker rows.
   var SNAP_PX = 8, GUTTER = 16, MIN_PPS = 0.01, INSET = 6, BORDER = 1, FLASH_TOP = 32;
-  // The lane tags (round 4, item 10): a GUTTER_WIDE px gutter of grey lane
-  // names on a desktop (a track WIDE_AT px or wider); a phone keeps 16 px.
+  // The lane tags (round 4, item 10): a gutter of grey lane names on a
+  // desktop (a track WIDE_AT px or wider), GUTTER_WIDE px or as wide as its
+  // widest tag needs in the font it is drawn in (CI's Linux font is wider);
+  // a phone keeps 16 px.
   var GUTTER_PHONE = GUTTER, GUTTER_WIDE = 64, WIDE_AT = 1000;
   var MIN_W = 6, TRANS_MIN = 14, FIT_SHARE = 0.25, FIT_PAD = 0.1, MEDIAN_MIN = 16, MEDIAN_ZOOM = 64, SPLIT = 0.25;
 
@@ -1096,8 +1100,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // then under MEDIAN_MIN px (44 cuts on a phone) the track zooms in to a
   // MEDIAN_ZOOM px median from the region's start, and scrolls. The overview
   // always holds the whole cut. Zoom + and - zoom from here.
+  function tagRoom() {
+    var names = [laneName(0)].concat(state.payload.lanes.map(function (l) { return laneName(l.lane); }));
+    return Math.ceil(Math.max.apply(null, names.map(function (n) { return textW(n, "ltag"); }))) + 8 + 8;
+  }
   function fit() {
-    GUTTER = $("scroller").clientWidth >= WIDE_AT ? GUTTER_WIDE : GUTTER_PHONE;
+    GUTTER = $("scroller").clientWidth >= WIDE_AT ? Math.max(GUTTER_WIDE, tagRoom()) : GUTTER_PHONE;
     var R = fitRegion(), med = median(pictures().map(function (c) { return frac(c.duration); }));
     var room = $("scroller").clientWidth - GUTTER - 24;
     state.pps = Math.max(MIN_PPS, room / Math.max(1e-6, R[1] - R[0]));
@@ -1297,7 +1305,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
                     (lane.lane === 0 && !lane.clips.length ? " gaponly" : ""));
       row.dataset.lane = String(lane.lane);
       // its grey tag in the gutter, sticky as the tracks scroll (desktop only)
-      if (GUTTER > GUTTER_PHONE) row.appendChild(el("div", "ltag", laneName(lane.lane)));
+      if (GUTTER > GUTTER_PHONE) { var tag = el("div", "ltag", laneName(lane.lane)); tag.style.width = (GUTTER - 4) + "px"; row.appendChild(tag); }
       if (lane.lane === 0) p.gaps.forEach(function (g) {
         var ge = el("div", "gap"); ge.appendChild(el("span", "gl", "Gap " + tcLen(frac(g.duration)))); ge.title = "gap " + g.duration + " s";
         ge.style.left = x(frac(g.start)) + "px"; ge.style.width = Math.max(2, w(frac(g.duration))) + "px"; row.appendChild(ge);

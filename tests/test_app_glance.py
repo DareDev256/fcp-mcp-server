@@ -1542,16 +1542,18 @@ LANE_TAGS = r"""() => { const sc = document.getElementById('scroller').getBoundi
   return { gutter: window.__fcpApp.gutter, lanes: [...document.querySelectorAll('#canvas .lane:not(.collapsed)')].map(l => {
     const t = l.querySelector('.ltag'); if (!t) return { lane: l.dataset.lane, tag: null };
     const r = document.createRange(); r.selectNodeContents(t); const b = r.getBoundingClientRect();
-    return { lane: l.dataset.lane, tag: t.textContent, colour: getComputedStyle(t).color, left: b.left - sc.left, right: b.right - sc.left }; }) }; }"""
+    return { lane: l.dataset.lane, tag: t.textContent, colour: getComputedStyle(t).color, left: b.left - sc.left, right: b.right - sc.left,
+             box: t.getBoundingClientRect().right - sc.left }; }) }; }"""
 
 
 def lane_tag_problems(facts: dict, width: int, scheme: str = "dark") -> list[str]:
     """Item 10 (round 4): at 1440 every lane in view carries its grey tag
-    (Storyline, Lane 1, Lane -1...) whole inside a 64 px gutter; a phone
-    keeps its 16 px gutter and no tags."""
+    (Storyline, Lane 1, Lane -1...) whole inside a gutter of 64 px, or as
+    wide as its widest tag needs in the font drawn (CI's Linux font ran
+    "Storyline" past 64 px); a phone keeps its 16 px gutter and no tags."""
     out = []
     wide = width >= 1000
-    if facts["gutter"] != (64 if wide else 16):
+    if (facts["gutter"] < 64) if wide else (facts["gutter"] != 16):
         out.append(f"a {facts['gutter']} px gutter at {width}")
     mute = (palette.dark if scheme == "dark" else palette.light)("mute").upper()
     for lane in facts["lanes"]:
@@ -1566,8 +1568,8 @@ def lane_tag_problems(facts: dict, width: int, scheme: str = "dark") -> list[str
             continue
         if _hex(lane["colour"]) != mute:
             out.append(f"lane {n}'s tag is {_hex(lane['colour'])}, not the grey")
-        if lane["left"] < 1 or lane["right"] > facts["gutter"] - 4:
-            out.append(f"lane {n}'s tag runs {lane['left']:.1f}-{lane['right']:.1f} px, the gutter is {facts['gutter']} px")
+        if lane["left"] < 1 or lane["right"] > facts["gutter"] - 4 or lane["box"] > facts["gutter"]:
+            out.append(f"lane {n}'s tag runs {lane['left']:.1f}-{lane['right']:.1f} px (box to {lane['box']:.1f}), the gutter is {facts['gutter']} px")
     return out
 
 
@@ -1582,14 +1584,26 @@ def test_lanes_are_tagged_in_a_gutter_at_1440(browser, payloads, fixture, width,
 
 @pytest.mark.parametrize("old,new,width", [
     ("var GUTTER_PHONE = GUTTER, GUTTER_WIDE = 64, WIDE_AT = 1000;", "var GUTTER_PHONE = GUTTER, GUTTER_WIDE = 64, WIDE_AT = 0;", 390),
+    # a 64 px gutter whatever the font (CI's Linux font ran "Storyline" past it); a wide name stands in for that font here
+    ("Math.max(GUTTER_WIDE, tagRoom())", "GUTTER_WIDE", 1440),
     ("background: var(--panel); border-right: 1px solid var(--line); white-space: nowrap; pointer-events: none; }",
      "background: var(--panel); border-right: 1px solid var(--line); white-space: nowrap; pointer-events: none; color: var(--accent); }", 1440),
-    ('if (GUTTER > GUTTER_PHONE) row.appendChild(el("div", "ltag", laneName(lane.lane)));', "", 1440),
-], ids=["tags-on-a-phone", "cyan-tags", "no-tags"])
+    ('if (GUTTER > GUTTER_PHONE) { var tag = el("div", "ltag", laneName(lane.lane));', "if (false) { var tag;", 1440),
+], ids=["tags-on-a-phone", "fixed-64", "cyan-tags", "no-tags"])
 def test_the_lane_tag_gate_goes_red(browser, payloads, old, new, width):
     html = timeline_app.render_page_html(payloads["music-video"])
     assert html.count(old) == 1
-    assert lane_tag_problems(_eval(browser, html.replace(old, new), width, LANE_TAGS), width)
+    broken = html.replace(old, new)
+    if new == "GUTTER_WIDE":  # the storyline's tag as wide as CI's font drew "Storyline": the gutter grows, or it runs past
+        wide = 'return n === 0 ? "Storyline" :'
+        assert broken.count(wide) == 1 and html.count(wide) == 1
+        broken, html = (h.replace(wide, 'return n === 0 ? "The storyline" :') for h in (broken, html))
+        def runs(h):
+            f = _eval(browser, h, width, LANE_TAGS)
+            return [lane["tag"] for lane in f["lanes"] if lane["tag"] and (lane["right"] > f["gutter"] - 4 or lane["box"] > f["gutter"])]
+        assert runs(html) == [] and runs(broken), (runs(html), runs(broken))
+        return
+    assert lane_tag_problems(_eval(browser, broken, width, LANE_TAGS), width)
 
 
 # ---------------------------------------------------------------------------
