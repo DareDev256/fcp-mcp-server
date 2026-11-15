@@ -258,12 +258,13 @@ def _white_thumb() -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def halo_coverage(browser, html: str) -> float:
+def halo_coverage(browser, html: str, dpr: int = 1) -> float:
     """Render a clip whose thumbnail is pure white, draw its name in pure red
     (so its glyphs can be found), and measure the ring of pixels just outside
     the glyphs: the share of them that the white name reads against at 4.5:1
     or better. 0.34 round 4 took the scrim pill away: the name's halo (a 1 px
     black outline and a soft shadow) is what makes it read over a picture."""
+    import base64
     import io
 
     from PIL import Image
@@ -273,7 +274,7 @@ def halo_coverage(browser, html: str) -> float:
     p = copy.deepcopy(_payload("sample.fcpxml"))
     for c in p["clips"]:
         c["thumb"] = _white_thumb()
-    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page = browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=dpr)
     try:
         page.set_content(html)
         page.evaluate("p => window.__fcpApp.setPayload(p)", p)
@@ -293,8 +294,11 @@ def halo_coverage(browser, html: str) -> float:
             if 0 <= x + dx < w and 0 <= y + dy < h and (x + dx, y + dy) not in glyph}
     if not glyph or not ring:
         return 0.0
-    bad = [px[x, y] for x, y in ring if palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % px[x, y]) < 4.5]
-    HALO_SEEN.update(size=(w, h), glyph=len(glyph), ring=len(ring), bad=sorted(set(bad))[:12])
+    bad = [(x, y) for x, y in ring if palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % px[x, y]) < 4.5]
+    out = io.BytesIO()
+    shot.save(out, "PNG")
+    HALO_SEEN.update(size=(w, h), glyph=len(glyph), ring=len(ring), bad=[(x, y, px[x, y]) for x, y in bad][:30],
+                     png=base64.b64encode(out.getvalue()).decode())
     return 1 - len(bad) / len(ring)
 
 
@@ -304,7 +308,9 @@ HALO_SEEN: dict = {}  # what the last measurement saw, for the failure message
 def test_a_label_over_a_white_frame_reads_at_4_5_to_1(browser):
     """(A 1 px outline read 97% here on macOS and 76% on CI's Linux; the
     2 px outline reads 100% on macOS.)"""
-    assert halo_coverage(browser, timeline_app.render_app_html()) >= 0.95, HALO_SEEN
+    one = halo_coverage(browser, timeline_app.render_app_html())
+    seen = dict(HALO_SEEN)
+    assert one >= 0.95, (seen, "at 2x:", halo_coverage(browser, timeline_app.render_app_html(), 2))
 
 
 def test_the_halo_check_goes_red_without_the_halo(browser):
