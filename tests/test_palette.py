@@ -118,8 +118,26 @@ def test_tokens_are_grey_or_cyan_or_red():
             elif name in palette.DANGER_TOKENS:
                 hue = _hue_degrees(value)
                 assert hue <= 10 or hue >= 350, (name, value)
+            elif name in palette.ROLE_TOKENS:
+                continue  # held to stripes below
             else:
                 assert palette.is_neutral(value), (name, value)
+
+
+ROLE_USE = re.compile(r"var\(--role-[a-z]+\)")
+
+
+def role_uses_off_stripe(text: str) -> list:
+    """Lines that paint with a role colour anywhere but a clip's role stripe
+    (0.33 direction B: Final Cut's role colours, stripes only)."""
+    return [line.strip() for line in text.splitlines() if ROLE_USE.search(line) and ".stripe.role-" not in line]
+
+
+def test_role_colours_paint_stripes_only():
+    text = (REPO / "fcpxml" / "timeline_app.py").read_text(encoding="utf-8")
+    assert ROLE_USE.search(text)
+    assert role_uses_off_stripe(text) == []
+    assert role_uses_off_stripe("  .clip .label { color: var(--role-music); }")
 
 
 FAILURE_ONLY = ("fcpxml/proofs.py", "fcpxml/raster.py", "tools/preview.py", "tools/scenes.py")
@@ -156,7 +174,7 @@ def test_neutral_tokens_are_exact_greys():
     """0.32: the panels were blue-tinted near-black (#121216, #1C1C22) and
     read as off-black beside the true-black ground. A neutral is r == g == b."""
     for name, pair in palette.TOKENS.items():
-        if name in palette.ACCENT_HUE_TOKENS or name in palette.DANGER_TOKENS:
+        if name in palette.ACCENT_HUE_TOKENS or name in palette.DANGER_TOKENS or name in palette.ROLE_TOKENS:
             continue
         for value in pair:
             r, g, b = palette.rgb(value)[:3]
