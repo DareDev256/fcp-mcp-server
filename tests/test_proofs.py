@@ -1524,7 +1524,10 @@ def test_diagnose_checks_handles_offline_media_and_formats_and_says_what_it_does
     assert "WARN" in sizes
     assert "640x360 in a 1920x1080 sequence (scaled up 3x" in text
     assert "Not checked: loudness, true peak, black or frozen frames" in text
-    assert "from the 7 checks below" in text
+    # 0.33: the eighth check reads each file's own clock (#45); the gym
+    # media has no timecode track and its assets start at 0s, so it passes.
+    assert "PASS" in next(r for r in text.splitlines() if "| Media clock |" in r)
+    assert "from the 8 checks below" in text
     lines = text.splitlines()
     head_i = next(i for i, r in enumerate(lines) if r.startswith("| Result | Check |"))
     assert lines[head_i] == "| Result | Check | Found | Where |"

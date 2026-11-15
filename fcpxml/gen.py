@@ -662,10 +662,16 @@ def insert_generated(
         raise ValueError("lane must be non-zero: a generated clip hangs off the spine, it does not replace it")
     frame = modifier._sequence_frame_duration()
     snapped_at = (at // frame) * frame
-    frames = int(min(duration, probe["duration"]) // frame)
+    # The file's own clock (#45): generated media has no timecode track and
+    # starts at 0s, but a file that does carry one is played from it.
+    from .media_clock import read_clock
+    clock = read_clock(str(media_path))
+    clip_start = clock.clip_start(Fraction(0), frame)
+    available = clock.origin + Fraction(probe["duration"]) - clip_start
+    frames = int(min(duration, available) // frame)
     if frames < 1:
         raise ValueError(
-            f"Nothing to insert: {float(min(duration, probe['duration'])):.3f}s is under one frame "
+            f"Nothing to insert: {float(min(duration, available)):.3f}s is under one frame "
             f"of the sequence ({frame})."
         )
     clip_duration = frames * frame
@@ -682,6 +688,7 @@ def insert_generated(
         # In the MEDIA's timebase: a 30 fps file's length is a count of its
         # own frames, whatever the sequence runs at.
         duration=format_seconds(probe["duration"], media_frame),
+        start=clock.start_attr,
         has_video="1", has_audio="1" if probe["has_audio"] else "0",
     )
     asset.set("format", fmt_id)
@@ -696,7 +703,7 @@ def insert_generated(
     clip.set("ref", asset_id)
     clip.set("offset", format_seconds(offset_attr, frame))
     clip.set("name", _sanitize_xml_value(name, 512))
-    clip.set("start", "0s")
+    clip.set("start", format_seconds(clip_start, frame))
     clip.set("duration", format_seconds(clip_duration, frame))
     clip.set("lane", str(lane))
     clip.set("videoRole", GENERATED_ROLE)

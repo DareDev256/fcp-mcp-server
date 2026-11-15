@@ -24,6 +24,7 @@ from fcpxml.filtergraph import (
     graph_to_args,
     placement,
 )
+from fcpxml.media_clock import clock_from_probe
 
 logger = logging.getLogger(__name__)
 
@@ -136,13 +137,17 @@ def probe_source(path: str) -> Optional[SourceInfo]:
 def stream_facts(path: str) -> Optional[dict]:
     """A media file's picture and sound as diagnose and inspect report them:
     {"fps": Fraction or None, "width", "height", "channels", "sample_rate",
-    "duration": Fraction or None}. None when the file or ffprobe is absent."""
+    "duration": Fraction or None, "clock": MediaClock}. None when the file or
+    ffprobe is absent. ``clock`` is where Final Cut starts the file
+    (fcpxml.media_clock), read from the same probe."""
     if shutil.which("ffprobe") is None or not Path(path).is_file():
         return None
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:stream=codec_type,width,height,r_frame_rate,sample_rate,channels",
+             "format=duration,format_name:format_tags=timecode,time_reference"
+             ":stream=codec_type,codec_tag_string,width,height,r_frame_rate,avg_frame_rate,sample_rate,channels"
+             ":stream_tags=timecode",
              "-of", "json", str(path)],
             capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS,
         )
@@ -172,6 +177,7 @@ def stream_facts(path: str) -> Optional[dict]:
         "channels": int(audio["channels"]) if audio and audio.get("channels") else 0,
         "sample_rate": int(audio["sample_rate"]) if audio and audio.get("sample_rate") else None,
         "duration": duration,
+        "clock": clock_from_probe(data),
     }
 
 

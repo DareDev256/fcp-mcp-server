@@ -91,7 +91,9 @@ async def handle_add_audio(arguments: dict) -> Sequence[TextContent]:
         action = "Added music bed spanning full timeline"
 
     modifier.save(output_path)
-    return srv._text_result(f"{action}\nSaved to: `{output_path}`")
+    from fcpxml.media_clock import clock_lines
+    notes = "".join(f"\n{line}" for line in clock_lines(getattr(modifier, "media_clocks", [])))
+    return srv._text_result(f"{action}{notes}\nSaved to: `{output_path}`")
 
 
 async def handle_create_compound_clip(arguments: dict) -> Sequence[TextContent]:
@@ -155,9 +157,13 @@ async def handle_apply_template(arguments: dict) -> Sequence[TextContent]:
                 duration=spec_data.get("duration"),
             )
 
-    result_path = apply_template(template_name, clips_map, output_path, fps)
+    clocks: list = []
+    result_path = apply_template(template_name, clips_map, output_path, fps, clocks=clocks)
+    from fcpxml.media_clock import clock_lines
+    notes = "".join(f"{line}\n" for line in clock_lines(clocks))
     return srv._text_result((
         f"Applied template '{template_name}' with {plural(len(clips_map), 'clip')}.\n"
+        f"{notes}"
         f"Saved to: `{result_path}`"
     ))
 

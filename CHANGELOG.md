@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+Rides with 0.34 (the look letter). Merged onto 0.33.0 on 2026-11-14.
+
 ### Fixed
 - **Clips in a connected storyline were silently dropped.** Until now, every
   clip in a connected storyline from a real Final Cut export was missing from
@@ -171,6 +173,126 @@
 - An effect switched off (`<filter-video enabled="0">`) is still listed
   among what the proxy cannot draw.
 - `analysis-marker` and `hidden-clip-marker` are not parsed on any host.
+
+## [0.33.0] - 2026-11-14
+
+Every clip the server AUTHORS goes on its file's own clock, and footage made
+anywhere comes in by its path. Reported in #45 against 0.32.0 (Final Cut Pro
+12.4, macOS 27.0.1): `import_edl_json` on an iPhone clip with a 18:03:22:05
+timecode track wrote `<asset start="0s">` and clips at their file times,
+Final Cut put the asset on the file's timecode clock, every range fell before
+the media began, and the import was an empty timeline with no warning.
+`validate_timeline` passed it. The write-side twin of 0.29.0, which taught
+the media tools to READ the asset clock.
+
+Measured on the issue's shape (a 30 fps `.mov` whose `tmcd` track starts at
+18:03:22:05, ranges 1-2 s and 3-4 s): 0.32.0 wrote the asset at `0s` and the
+clips at `1s` and `3s`; 0.33.0 writes `1950065/30s`, `1950095/30s` and
+`1950155/30s`, the form the reporter hand-edited and imported with both
+ranges playing. The same mistake was in every writer that makes a clip, so
+they are fixed together. Two fresh-context reviews found more, and all of it
+is in this release: gen's insert, `FCPXMLWriter`, replies that said nothing,
+a `2997/100` rate, and a `src` clip that ended between frames.
+
+A minor version because these operations' output changes on timecoded media.
+
+**Not verified in Final Cut on this machine.** The 30 fps case is the
+reporter's own Final Cut import. The 29.97 / 23.976 / drop-frame arithmetic
+follows SMPTE and the rule this codebase already reads by (a label counts
+nominal frames, each lasting the real frame duration: 01:00:00:00 at 29.97
+non-drop is 3603.6 s), and has not been imported into Final Cut yet.
+
+### Fixed (existing outputs moved)
+- **`import_edl_json`** reads each source's clock from the file and writes
+  `<asset start>` on it, with every range placed from there. Only a QuickTime
+  timecode track (`tmcd`) sets it. A QuickTime-family file whose timecode is
+  elsewhere starts at 0 in Final Cut: Sony XAVC `.mp4` keeps it in an `rtmd`
+  track that ffprobe prints all the same (the reporter imported one three
+  ways; Final Cut's own export of a real library writes all 35 of its
+  Sony-named `C0xxx.MP4` clips at `start="0s"`). A timecode in any other
+  container (MXF, Matroska) and a broadcast WAV time reference are written at
+  0s and reported as not determined, because how Final Cut clocks them is not
+  verified. The reply names each clock it wrote ("On its timecode clock:
+  IMG_1968.mov starts at 18:03:22:05 (30 fps), so <asset start> is
+  1950065/30s"), every timecode it did not use, and every file whose clock was
+  not read, with the reason and what that risks in Final Cut.
+- **`apply_template`, `add_audio` / `add_music_bed` with a `src`, and `gen`'s
+  insert** write a new asset on its file's clock and start its clip there; the
+  template and audio replies name the clocks the same way.
+- **`insert_clip`, `add_connected_clip` and `add_audio_clip` on an existing
+  asset** start the clip exactly at `<asset start>`, the value Final Cut
+  wrote. They wrote `start="0s"` whatever the asset's clock, so on any camera
+  clip Final Cut exported (`<asset start="3600s">`) the new clip asked for an
+  hour of media before the file and imported empty. An `in_point` before the
+  asset's clock begins is refused with its file-time equivalent ("2s into the
+  file is 3602s") instead of written. `add_audio_clip`'s length clamp measures
+  the asset on its own clock (it read a 3600s start as 3590s past the end).
+- **`FCPXMLWriter.write_project`** keeps each parsed asset's clock (it rebuilt
+  every asset at `0s`, so a parsed camera clip came back an hour early) and
+  writes the media URL in Final Cut's form.
+- **Media URLs** are written the way Final Cut writes them, percent-encoded
+  (`file:///Volumes/%E7%B4%A0%E6%9D%90%20Day%201/...`): `import_edl_json`
+  wrote `file://` plus the raw path, and `apply_template` / `add_audio` wrote
+  a bare path, so a folder with a space or Chinese in its name was not a URL.
+  A literal `%` in a file name is encoded too (`%25`).
+- **A clip's source start off the sequence's frame grid is read exactly.**
+  The parser held it as whole sequence frames, rounded down, so a clip at the
+  head of a 29.97 drop-frame asset in a 30p sequence (`107999892/30000s`) read
+  0.03 s before its file began, and the preview, silence and transcript tools
+  looked there. `Timecode` carries the written value (`exact`, not compared:
+  equality is still about frames).
+- **Drop-frame labels.** A typed `01:00:00;00` at 29.97 is 107892 frames
+  (`TimeValue.from_timecode` counted 108000, 3.6 s late an hour), and
+  `Timecode.to_smpte` prints a Timecode marked drop-frame by the drop-frame
+  count. Nothing yet marks a timecode drop-frame from a DF sequence
+  (`tcFormat="DF"`), so replies about a DF project still print non-drop
+  labels. A label that drop-frame skips (`00:01:00;00`) is refused. A timecode track
+  rate written as `2997/100` is read as 30000/1001, so drop-frame applies and
+  the origin lands on Final Cut's timebase (`107999892/30000s`).
+- A clip on a NEW asset starts on the sequence's frame grid, as the in-point
+  always did. Where a file's clock is not on that grid (29.97 drop-frame in a
+  30p cut) it moves by under a frame, and only later: never before the file
+  begins.
+
+### Added
+- **`insert_clip` and `add_connected_clip` take a `src`**: a media file made
+  anywhere (a camera, a generator, a download) comes in by its path as a new
+  asset, probed for its length, rate and size (a matching `<format>` is
+  reused), on its own timecode clock, with the clock named in the reply. The
+  same file twice is one asset. A file brought in whole is floored to whole
+  sequence frames (its start stays exact), so the clips after it stay on the
+  grid, and the clip carries the file's format. A missing file, or one with
+  no picture ffprobe can read, is refused (a sound file goes to
+  `add_audio`), and so is a `src` given with an `asset_id` or `asset_name`.
+- **`validate_timeline` checks the media clock** (its eighth check, run with
+  `formats`; inspect's Diagnose line counts it). FAIL when an asset's `start`
+  differs from its file's timecode track by half a frame or more: the #45 file
+  fails it. WARN when a QuickTime file with no timecode track is written on a
+  clock other than 0. Other containers are not judged. Measured from the same
+  ffprobe call as frame rate and size (one probe per file); reported as not
+  measured without ffprobe.
+- `fcpxml/media_clock.py`: the rule in one place (`read_clock`,
+  `clock_from_probe`, drop-frame-aware `smpte_frames` / `smpte_label`,
+  `media_url`, `clock_lines`).
+
+### Upgrading
+Tools that take a `src` now run ffprobe on it (30 s timeout). A typed
+drop-frame label that does not exist is refused instead of read as non-drop.
+
+### Tests
+`tests/test_media_clock.py` (62): the issue's repro; every writer read back
+through the parser to the same file frames with and without a timecode track
+at 30, 29.97 NDF, 29.97 DF and 23.976; NTSC in a film sequence; a 25 fps
+clock off the 30p grid never snapped before the file; Sony, Matroska, MXF and
+broadcast WAV timecode found and not used; a `2997/100` rate; missing media
+and no ffprobe; a Chinese folder with a space round-tripped and DTD-valid;
+the template, insert, connected, audio, gen and `FCPXMLWriter` paths; `src`
+on insert and connected clips (one asset per file, whole frames, the file's
+format; refused when missing, picture-less or given with an asset); exact
+source starts; drop-frame labels read and printed as the same frame across
+28,000+ frame counts at 29.97 and 59.94; the validator's FAIL, WARN, PASS,
+not-judged and not-measured rows, and one probe per file. 41 mutations, each
+red.
 
 ## [0.32.0] - 2026-11-13
 

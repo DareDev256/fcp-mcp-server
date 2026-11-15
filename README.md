@@ -606,8 +606,10 @@ connected clip ending one frame before the next cut leaves a frame of the
 spine showing) and offers the fix the media allows first, with its cost;
 splits duplicate frames (WARN, with the record ranges where the shared
 frames play) from a reused source (INFO); checks transition handles against
-the real media, offline media, and each source's frame rate and size
-against the sequence (a 3x upscale is a WARN); names what it does not check
+the real media, offline media, each source's frame rate and size
+against the sequence (a 3x upscale is a WARN), and each asset's clock against
+its file's timecode track (an asset Final Cut would put on another clock is a
+FAIL: its clips import empty, #45); names what it does not check
 (loudness, true peak, black or frozen frames, audio sync); counts only the
 checks that ran; and prints a fix only for what failed, as the grouped call
 that runs it. **`analyze_timeline`** gives edits and cuts per minute apart,
@@ -789,7 +791,7 @@ still callable directly with `FCP_MCP_LEGACY_TOOLS=1`.
 `import_beat_markers` · `snap_to_beats`
 
 #### Import — 3 tools
-`import_srt_markers` · `import_transcript_markers` (supports SMPTE `HH:MM:SS:FF` with frame-accurate placement) · `import_edl_json` (video-use `{sources, ranges, grade?}` → FCPXML; `ranges[].source` is a key into `sources`, not a path — *v0.17.0*)
+`import_srt_markers` · `import_transcript_markers` (supports SMPTE `HH:MM:SS:FF` with frame-accurate placement) · `import_edl_json` (video-use `{sources, ranges, grade?}` → FCPXML; `ranges[].source` is a key into `sources`, not a path — *v0.17.0*; each source on its file's timecode clock — *v0.33.0*)
 
 #### v0.6.0 — Audio, Compound, Templates, Effects — 6 tools
 `list_effects` · `add_audio` · `create_compound_clip` · `flatten_compound_clip` · `list_templates` · `apply_template`
@@ -1196,6 +1198,7 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **The proxy has sound** — `preview_render` mixes the timeline's audio on the same clock as the picture — *v0.30.0*
 - [x] **Front door** — one palette (true black, one cyan, red only for failure), the GitHub card and PyPI page rebuilt from scripts, current prices with their sources, a schema budget held by a test — *v0.31.0*
 - [x] **Proof you can read** — every preview picture labelled by the server and returned inline: a contact sheet with cut numbers and timecodes, a check with a ruler and named silences, a 720p proxy with burn-in, a before/after strip per cut; `preview://` is the app — *v0.32.0*
+- [x] **Media clock** — every authored asset and clip on its file's own timecode clock (`tmcd`), so an iPhone ProRes or camera clip no longer imports empty; `validate_timeline` checks it; `insert_clip` / `add_connected_clip` bring any file in by `src` (#45) — *v0.33.0*
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written
 - [ ] Audio sync detection
@@ -1208,6 +1211,7 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 | Issue | Impact | Workaround |
 |-------|--------|------------|
 | **Still images crash FCP** | PNG/JPEG assets referenced directly in FCPXML crash Final Cut Pro on import (`addAssetClip` null pointer). Confirmed across multiple format configurations, dimension matching, and element types. | Convert stills to short MOVs before referencing: `ffmpeg -loop 1 -i image.png -c:v libx264 -t 2 -pix_fmt yuv420p -r 24 output.mov`. This is an FCP limitation, not an FCPXML spec issue. |
+| **An authored timeline imports empty on timecoded media (0.32.0 and earlier)** | `import_edl_json`, `apply_template` and `add_audio` with a `src` wrote every new asset at `start="0s"`, and `insert_clip` / `add_connected_clip` / `add_audio_clip` started a new clip at `0s` whatever its asset's clock. Final Cut puts an asset on its file's timecode track (an iPhone ProRes or camera `.mov`), so the clips asked for media before the file began and Final Cut showed them empty, with no warning (#45). | Fixed in v0.33.0 — upgrade. On an old install, author from media without a timecode track, or set `<asset start>` to the file's timecode and add it to each clip's `start`; 0.33's `validate_timeline` names the value per file. |
 | **A multicam edit reads as an empty project (0.22.1 and earlier)** | FCP exports connected-clip multicam edits as a spine of gaps with `mc-clip`/`caption` in lanes; the parser dropped both, so `list_clips` was empty, `validate_timeline` scored 100 % and the media tools opened nothing. | Fixed in v0.23.0 — upgrade. On an old install, `list_connected_clips` still shows nothing for these; there is no in-version workaround. |
 | **"Connection closed" on a PyPI install of 0.19.2–0.21.0** | `tools/` was missing from the published package, so the server raised `ModuleNotFoundError` at import, before it could answer `initialize`. The MCP client reports only "Connection closed". A git checkout never showed it. | Fixed in v0.21.1 — upgrade (`uvx` picks it up on the next run; `pip install -U fcp-mcp-server` otherwise). The publish workflow now installs the built wheel into a clean venv and runs `initialize` + `tools/list` before anything ships. |
 

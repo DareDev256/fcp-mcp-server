@@ -66,7 +66,7 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.32.0"
+__version__ = "0.33.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -1429,6 +1429,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "filepath": {"type": "string", "description": "Path to FCPXML file"},
                     "asset_id": {"type": "string", "description": "Asset reference ID (e.g., 'r3')"},
                     "asset_name": {"type": "string", "description": "Asset name (alternative to asset_id)"},
+                    "src": {"type": "string", "description": "A media file to bring in instead (placed on its own timecode clock)"},
                     "position": {"type": "string", "description": "'start', 'end', timecode, or 'after:clip_name'"},
                     "duration": {"type": "string", "description": "Clip duration (if not using in/out points)"},
                     "in_point": {"type": "string", "description": "Source in-point for subclip"},
@@ -1659,6 +1660,7 @@ def _legacy_tool_list() -> list[Tool]:
                     "parent_clip_id": {"type": "string", "description": "Name/ID of the clip to attach to"},
                     "asset_id": {"type": "string", "description": "Asset reference ID"},
                     "asset_name": {"type": "string", "description": "Asset name (alternative to asset_id)"},
+                    "src": {"type": "string", "description": "A media file to bring in instead (placed on its own timecode clock)"},
                     "offset": {"type": "string", "default": "0s", "description": "Position relative to parent clip start"},
                     "duration": {"type": "string", "description": "Duration (default: full asset)"},
                     "lane": {"type": "integer", "default": 1, "description": "Lane number (positive=above, negative=below)"},
@@ -2375,7 +2377,7 @@ def _audio_lines(tl, filepath: str) -> str:
 
 SHORT_CHECK = {"Flash Frames": "flash", "Gaps": "gap", "Offline media": "offline",
                "Transition handles": "handles", "Duplicate frames": "duplicate frames",
-               "Frame rate and size": "format"}
+               "Frame rate and size": "format", "Media clock": "clock"}
 
 
 def _diagnose_line(tl) -> str:
@@ -2840,11 +2842,14 @@ async def handle_insert_clip(arguments: dict) -> Sequence[TextContent]:
         in_point=arguments.get("in_point"),
         out_point=arguments.get("out_point"),
         ripple=arguments.get("ripple", True),
+        src=arguments.get("src"),
     )
     modifier.save(output_path)
     clip_name = new_clip.get('name', 'Unknown')
     pos = arguments["position"]
-    return _text_result(f"Inserted '{clip_name}' at position '{pos}'\n\nSaved to: {output_path}")
+    from fcpxml.media_clock import clock_lines
+    notes = "".join(f"\n{line}" for line in clock_lines(modifier.media_clocks))
+    return _text_result(f"Inserted '{clip_name}' at position '{pos}'{notes}\n\nSaved to: {output_path}")
 
 
 # ----- BATCH FIX HANDLERS -----
@@ -3109,21 +3114,27 @@ def _offline_findings(tl):
     return out
 
 
-def _format_findings(tl):
+def _format_findings(tl, probes=None):
     """[(verdict, where, text)] per media file: a frame rate that differs
     from the sequence's is retimed by Final Cut (WARN); a picture size that
-    differs is scaled (INFO). Measured with ffprobe; None when it is absent."""
+    differs is scaled (INFO). Measured with ffprobe; None when it is absent.
+    *probes* ({path: stream_facts}) is shared with _clock_findings, so a
+    diagnose run probes each file once."""
     from fcpxml import render as _render
 
     if shutil.which("ffprobe") is None:
         return None
     seq_fps = Fraction(str(tl.frame_rate)).limit_denominator(1001)
-    out, seen, sizes = [], {}, {}
+    out, seen, sizes = [], set(), {}
+    probes = {} if probes is None else probes
     for c in tl.all_clips():
         path = media_src_to_path(getattr(c, "media_path", "") or "")
         if not path or path in seen or not Path(path).is_file():
             continue
-        facts = seen[path] = _render.stream_facts(path)
+        seen.add(path)
+        if path not in probes:
+            probes[path] = _render.stream_facts(path)
+        facts = probes[path]
         if not facts:
             continue
         name = Path(path).name
@@ -3144,6 +3155,56 @@ def _format_findings(tl):
 
 
 UPSCALE_WARN = Fraction(3, 2)  # a source the conform scales up more than this is a WARN
+
+
+def _clock_findings(tl, probes=None):
+    """[(verdict, where, text)] per media file whose <asset start> is not the
+    clock Final Cut gives the file. Final Cut starts a file at its QuickTime
+    timecode track (tmcd), or at 0 without one, whatever the document says; a
+    clip written on another clock asks for frames the file does not have at
+    that time, and imports empty with no warning (#45). FAIL when the file has
+    a timecode track that disagrees by half a frame or more; WARN when a
+    QuickTime file with no track is written on a clock that is not 0 (Final
+    Cut ignores a Sony XAVC timecode, for one). Other containers (MXF, BWF)
+    are not judged: their clock in Final Cut is not verified. Measured with
+    ffprobe, sharing *probes* with _format_findings; None when absent."""
+    from fcpxml import render as _render
+
+    if shutil.which("ffprobe") is None:
+        return None
+    probes = {} if probes is None else probes
+    out, seen = [], set()
+    for c in tl.all_clips():
+        media = getattr(c, "media", None)
+        path = media_src_to_path(getattr(c, "media_path", "") or "")
+        if media is None or media.still or not path or path in seen or not Path(path).is_file():
+            continue
+        seen.add(path)
+        if path not in probes:
+            probes[path] = _render.stream_facts(path)
+        clock = (probes[path] or {}).get("clock")
+        if clock is None:
+            continue
+        name, written = Path(path).name, Fraction(media.origin)
+        where = format_timecode(c.start)
+        if clock.source == "tmcd":
+            if abs(written - clock.origin) * clock.rate >= Fraction(1, 2):
+                out.append(("FAIL", where,
+                            f"{name}: <asset start> is {_seconds_attr(written)} but the file's timecode "
+                            f"track starts at {clock.timecode} ({clock.start_attr}); Final Cut plays it on "
+                            f"its own clock, so these clips import empty or on the wrong frames"))
+        elif clock.source in ("none", "ignored") and clock.quicktime and written != 0:
+            why = ("its timecode is outside a QuickTime timecode track, which Final Cut does not use"
+                   if clock.source == "ignored" else "the file has no QuickTime timecode track")
+            out.append(("WARN", where,
+                        f"{name}: <asset start> is {_seconds_attr(written)} but {why}, so Final Cut "
+                        f"starts it at 0s; if these clips import empty, this is why"))
+    return out
+
+
+def _seconds_attr(value: Fraction) -> str:
+    from fcpxml.rational import format_exact_seconds
+    return format_exact_seconds(Fraction(value))
 
 
 NOT_CHECKED = "loudness, true peak, black or frozen frames, audio sync"
@@ -3239,11 +3300,21 @@ def _diagnose(tl, checks=("all",)) -> tuple:
             fixes.append("Offline media: `deliver · relink_media` points the clips at the files where they are now.")
 
     if run_all or "formats" in checks:
-        formats = _format_findings(tl)
+        probes: dict = {}
+        formats = _format_findings(tl, probes)
         if formats is None:
             rows.append(("INFO", "Frame rate and size", "—", ["not measured: ffprobe is not installed"]))
         else:
             row("Frame rate and size", formats)
+        clocks = _clock_findings(tl, probes)
+        if clocks is None:
+            rows.append(("INFO", "Media clock", "—", ["not measured: ffprobe is not installed"]))
+        else:
+            row("Media clock", clocks)
+            if any(v == "FAIL" for v, _, _ in clocks):
+                fixes.append("Media clock: write each asset's start as its file's timecode (shown above) and move "
+                             "its clips' starts by the same amount; `generate · import_edl_json` and the edit "
+                             "tools write it that way.")
     return rows, issues, fixes
 
 
@@ -3871,10 +3942,14 @@ async def handle_add_connected_clip(arguments: dict) -> Sequence[TextContent]:
         offset=arguments.get("offset", "0s"),
         duration=arguments.get("duration"),
         lane=arguments.get("lane", 1),
+        src=arguments.get("src"),
     )
     modifier.save(output_path)
+    from fcpxml.media_clock import clock_lines
+    notes = "".join(f"{line}\n" for line in clock_lines(modifier.media_clocks))
     return _text_result((
-        f"Connected clip added to '{arguments['parent_clip_id']}' on lane {arguments.get('lane', 1)}\n\n"
+        f"Connected clip added to '{arguments['parent_clip_id']}' on lane {arguments.get('lane', 1)}\n"
+        f"{notes}\n"
         f"Saved to: `{output_path}`"
     ))
 
@@ -4204,7 +4279,7 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
     """
     import json
 
-    from fcpxml.edl import EDLValidationError, edl_to_fcpxml
+    from fcpxml.edl import EDLValidationError, clock_lines, edl_to_fcpxml
 
     filepath = arguments.get("filepath")
     if not filepath:
@@ -4243,6 +4318,7 @@ async def handle_import_edl_json(arguments: dict) -> Sequence[TextContent]:
             "it; relink in FCP or with deliver.relink_media): "
             + ", ".join(result["missing"])
         )
+    lines.extend(clock_lines(result["clocks"]))
     lines.append(
         "Preview it with preview.preview_render, or import with "
         "deliver.push_to_fcp."

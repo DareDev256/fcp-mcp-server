@@ -33,6 +33,8 @@ NOT_A_COUNT = {
     ("media.py", "verb"),             # "{verb} the matched phrases"
     ("writer.py", "effect_name"),     # "no {effect_name} that fits"
     ("view.py", "on_clips"),          # "3 markers (2 on clips)": a share of a count already written out
+    ("media_clock.py", "name"),       # "{name} starts at 18:03:22:05": a file name, "starts" a verb
+    ("media_clock.py", "clock.start_attr"),  # "is 1950065/30s and its clips": a time, "its" possessive
 }
 WORDS_AFTER_VALUE = re.compile(r"^ ([a-z][a-z-]*(?: [a-z][a-z-]*){0,2})")
 

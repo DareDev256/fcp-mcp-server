@@ -93,6 +93,20 @@ class FCPXMLParser:
         """
         return Timecode.from_rational(elem.get(attr, default), self.frame_rate)
 
+    def _source_tc(self, elem: ET.Element) -> Timecode:
+        """A clip's ``start`` (its source in-point), keeping the value as
+        written when it is not a whole sequence frame: a clip at the head of
+        a 29.97 drop-frame asset in a 30p sequence starts at 107999892/30000s,
+        and the frame floor read it 0.03s before its file began (0.33)."""
+        tc = self._tc(elem, 'start')
+        try:
+            written = parse_seconds(elem.get('start', '0s'))
+        except ValueError:
+            return tc
+        if written != tc._exact_seconds:
+            tc.exact = written
+        return tc
+
     def parse_file(self, filepath: str) -> Project:
         """Parse an FCPXML file and return a Project object.
 
@@ -423,7 +437,7 @@ class FCPXMLParser:
         """Parse a clip element."""
         name = self._name_for(elem, 'Untitled Clip')
         duration = self._tc(elem, 'duration')
-        source_start = self._tc(elem, 'start')
+        source_start = self._source_tc(elem)
         media_path = self._media_path_for(elem)
 
         conform, transform, effects = self._picture_of(elem)
@@ -730,7 +744,7 @@ class FCPXMLParser:
         clock: where it plays, and its offset restated on the parent's clock.
         """
         duration = self._tc(elem, 'duration')
-        start = self._tc(elem, 'start')
+        start = self._source_tc(elem)
         offset = self._tc(elem, 'offset')
         if parent_clock_offset is not None:
             offset = Timecode(

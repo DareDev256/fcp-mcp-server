@@ -1082,6 +1082,9 @@ class FCPXMLModifier:
         self.tree = safe_parse(fcpxml_path)
         self.root = self.tree.getroot()
         self.fps = self._detect_fps()
+        # Every asset this modifier authored from a media path, with the clock
+        # it was written on ({"source", "clock"}): handlers report them (#45).
+        self.media_clocks: list = []
         self._build_resource_index()
         self._build_clip_index()
 
@@ -1620,19 +1623,34 @@ class FCPXMLModifier:
         add_connected_clip, and add_audio_clip:
 
         1. If *in_point* and *out_point* are given → subclip range.
-        2. Else if *duration* is given → explicit duration, source start = 0.
-        3. Else → full asset duration, source start = 0.
+        2. Else if *duration* is given → explicit duration from the asset's start.
+        3. Else → full asset duration from the asset's start.
+
+        A clip's ``start`` is on its ASSET's clock, which begins at
+        ``<asset start>``: a camera clip with 01:00:00:00 timecode begins at
+        3600s, and a clip written at 0s asks for an hour of media before the
+        file starts. Final Cut shows it empty (the write-side twin of #45),
+        so a clip with no in-point starts where its asset does, and an
+        in-point before that is refused rather than guessed at.
 
         Returns:
             ``(clip_duration, source_start)`` TimeValue pair.
         """
+        origin = self._parse_time(asset.get('start') or '0s')
         if in_point and out_point:
             in_time = self._parse_time(in_point)
             out_time = self._parse_time(out_point)
+            if in_time < origin:
+                raise ValueError(
+                    f"in_point {in_point} is before asset '{asset.get('name', '')}' begins: "
+                    f"its clock starts at {asset.get('start')} (the file's timecode). "
+                    f"In- and out-points are on the asset's clock, as Final Cut writes a "
+                    f"clip's start; {in_point} into the file is {(origin + in_time).to_fcpxml()}."
+                )
             return out_time - in_time, in_time
         if duration:
-            return self._parse_time(duration), TimeValue.zero()
-        return self._parse_time(asset.get('duration', '0s')), TimeValue.zero()
+            return self._parse_time(duration), origin
+        return self._parse_time(asset.get('duration', '0s')), origin
 
     def _make_asset_clip(
         self,
@@ -1755,6 +1773,82 @@ class FCPXMLModifier:
                 if res_data.get('name') == asset_name:
                     return res_data, res_id
         raise ValueError(f"Asset not found: {asset_id or asset_name}")
+
+    def _asset_from_src(self, src: str) -> tuple:
+        """A new ``<asset>`` for the media file at *src*, on its own clock.
+
+        For footage made anywhere (a camera, a generator, a download): its
+        length, rate and size are probed (the format is reused when one
+        matches), its ``<asset start>`` is its timecode track's
+        (``media_clock``), and its URL is the form Final Cut writes. Refuses
+        a file that is missing or has no picture ffprobe can read: an asset
+        whose length or rate was guessed is a clip Final Cut conforms wrong.
+
+        Returns:
+            ``(asset_dict, asset_id)``, like :meth:`_resolve_asset`.
+        """
+        from .gen import _ensure_format, probe_media
+        from .media_clock import media_url, read_clock
+        from .media_intel import media_src_to_path
+        from .rational import format_seconds
+
+        path = media_src_to_path(src)
+        for asset_id, asset in self.resources.items():
+            # The same file again is the same asset: one <asset> per file.
+            if asset.get('src') and media_src_to_path(asset['src']) == path:
+                return asset, asset_id
+        if not Path(path).is_file():
+            raise ValueError(f"src not found: {path}")
+        probe = probe_media(path)
+        if probe is None:
+            raise ValueError(
+                f"{Path(path).name}: no picture ffprobe could read (is ffprobe installed?). "
+                "For a sound file, use add_audio with src."
+            )
+        resources = self.root.find('.//resources')
+        if resources is None:
+            raise ValueError("No <resources> element found in FCPXML")
+        fmt_id = _ensure_format(resources, probe)
+        asset_id = self._unique_resource_id(resources, 'r_src1')
+        clock = read_clock(path)
+        self.media_clocks.append({"source": path, "clock": clock})
+        duration = format_seconds(probe["duration"], 1 / probe["fps"])
+        element = _create_asset_element(
+            resources, asset_id, Path(path).stem, media_url(path),
+            duration=duration, start=clock.start_attr,
+            has_video="1", has_audio="1" if probe["has_audio"] else "0",
+        )
+        element.set('format', fmt_id)
+        asset = {'id': asset_id, 'name': Path(path).stem, 'src': media_url(path),
+                 'start': clock.start_attr, 'duration': duration, 'element': element}
+        self.resources[asset_id] = asset
+        return asset, asset_id
+
+    def _asset_for(self, asset_id, asset_name, src) -> tuple:
+        """The asset a new clip plays: an existing one by id or name, or a new
+        one from *src*. Both at once is refused rather than one silently
+        dropped. Returns ``(asset, asset_id, from_src)``."""
+        if src and (asset_id or asset_name):
+            raise ValueError("Give src or asset_id/asset_name, not both: src brings in a new file, "
+                             "asset_id and asset_name pick one already in the project.")
+        if src:
+            asset, asset_id = self._asset_from_src(src)
+            return asset, asset_id, True
+        asset, asset_id = self._resolve_asset(asset_id, asset_name)
+        return asset, asset_id, False
+
+    def _whole_frames(self, duration: 'TimeValue') -> 'TimeValue':
+        """*duration* floored to whole frames of the sequence. A clip that runs
+        a file's own length (29.97 media in a 23.976 cut) ends between frames
+        and pushes every later spine item off the grid, as gen's insert
+        already avoids."""
+        frame = self._sequence_frame_duration()
+        frames = Fraction(duration.numerator, duration.denominator) // frame
+        if frames < 1:
+            raise ValueError(f"The file is shorter than one frame of the sequence ({frame}s).")
+        whole = frames * frame
+        return TimeValue(frames * frame.numerator, frame.denominator) if whole.denominator != 1 \
+            else TimeValue(whole.numerator, 1)
 
     @staticmethod
     def _unique_resource_id(resources: ET.Element, prefix: str) -> str:
@@ -3231,7 +3325,8 @@ class FCPXMLModifier:
         duration: Optional[str] = None,
         in_point: Optional[str] = None,
         out_point: Optional[str] = None,
-        ripple: bool = True
+        ripple: bool = True,
+        src: Optional[str] = None,
     ) -> ET.Element:
         """
         Insert a library clip onto the timeline.
@@ -3244,14 +3339,18 @@ class FCPXMLModifier:
             in_point: Source in-point for subclip
             out_point: Source out-point for subclip
             ripple: Whether to shift subsequent clips
+            src: A media file to bring in as a new asset (on its own clock)
+                when neither asset_id nor asset_name is given
 
         Returns:
             The created clip element
         """
-        asset, asset_id = self._resolve_asset(asset_id, asset_name)
+        asset, asset_id, from_src = self._asset_for(asset_id, asset_name, src)
         clip_duration, source_start = self._resolve_clip_duration(
             asset, duration, in_point, out_point
         )
+        if from_src and not duration and not (in_point and out_point):
+            clip_duration = self._whole_frames(clip_duration)
 
         # Get spine and calculate insert position
         spine = self._get_spine()
@@ -3260,11 +3359,14 @@ class FCPXMLModifier:
             position, spine_children
         )
 
-        # Build extra attrs — include format from first available format
+        # Build extra attrs — include format from first available format,
+        # or the file's own when it came in by src (as gen's insert does)
         extra: dict[str, str] = {}
         for fmt_id in self.formats:
             extra['format'] = fmt_id
             break
+        if from_src and asset['element'].get('format'):
+            extra['format'] = asset['element'].get('format')
 
         new_clip = self._make_asset_clip(
             asset_id, asset.get('name', 'Untitled'),
@@ -3297,6 +3399,7 @@ class FCPXMLModifier:
         offset: str = "0s",
         duration: Optional[str] = None,
         lane: int = 1,
+        src: Optional[str] = None,
     ) -> ET.Element:
         """Add a connected clip (B-roll, title, audio) to an existing timeline clip.
 
@@ -3307,13 +3410,18 @@ class FCPXMLModifier:
             offset: Position relative to parent clip start
             duration: Duration of connected clip (default: full asset)
             lane: Lane number (positive=above, negative=below)
+            src: A media file to bring in as a new asset (on its own clock)
+                when neither asset_id nor asset_name is given: B-roll made
+                anywhere, a generator's output included
 
         Returns:
             The created connected clip element
         """
         parent = self._require_clip(parent_clip_id)
-        asset, asset_id = self._resolve_asset(asset_id, asset_name)
+        asset, asset_id, from_src = self._asset_for(asset_id, asset_name, src)
         clip_duration, source_start = self._resolve_clip_duration(asset, duration)
+        if from_src and not duration:
+            clip_duration = self._whole_frames(clip_duration)
 
         new_clip = self._make_asset_clip(
             asset_id, asset.get('name', 'Untitled'),
@@ -3390,9 +3498,15 @@ class FCPXMLModifier:
                 asset_duration = f"{round(probed['duration'] * rate)}/{rate}s"
             else:
                 asset_duration = duration or "0s"
+            # The file's own clock (#45): a timecode track moves the asset.
+            from .media_clock import media_url, read_clock
+            from .media_intel import media_src_to_path
+            clock = read_clock(media_src_to_path(src))
+            self.media_clocks.append({"source": media_src_to_path(src), "clock": clock})
             asset_elem = _create_asset_element(
-                resources, asset_id, Path(src).stem, src,
+                resources, asset_id, Path(src).stem, media_url(src),
                 duration=asset_duration,
+                start=clock.start_attr,
                 has_video="0", has_audio="1",
             )
             if probed:
@@ -3402,6 +3516,7 @@ class FCPXMLModifier:
             asset = {
                 'id': asset_id,
                 'name': Path(src).stem,
+                'start': clock.start_attr,
                 'duration': asset_duration,
                 'element': asset_elem,
             }
@@ -3411,10 +3526,12 @@ class FCPXMLModifier:
 
         clip_duration, source_start = self._resolve_clip_duration(asset, duration)
 
-        # Clamp so the clip never claims more media than the asset contains
+        # Clamp so the clip never claims more media than the asset contains.
+        # The asset ends at its start plus its duration, on its own clock.
         asset_duration_tv = self._parse_time(asset.get('duration', '0s'))
         if asset_duration_tv > TimeValue.zero():
-            available = asset_duration_tv - source_start
+            asset_end = self._parse_time(asset.get('start') or '0s') + asset_duration_tv
+            available = asset_end - source_start
             if available < TimeValue.zero():
                 raise ValueError(
                     f"Source start {source_start.to_fcpxml()} is beyond the end "
@@ -4079,10 +4196,23 @@ class FCPXMLWriter:
 
     def _add_clip(self, spine, clip, resources, resource_map):
         """Add a clip as an asset-clip element, creating its asset resource if needed."""
+        # The asset's clock: the parsed asset's own start when the model came
+        # from a document (a round trip keeps it), else the file's (#45).
+        from .media_clock import standard_attr
+        media = getattr(clip, 'media', None)
+        if media is not None:
+            origin_attr = standard_attr(media.origin)
+        elif clip.media_path:
+            from .media_clock import read_clock
+            from .media_intel import media_src_to_path
+            origin_attr = read_clock(media_src_to_path(clip.media_path)).start_attr
+        else:
+            origin_attr = "0s"
         if clip.media_path and clip.media_path not in resource_map:
+            from .media_clock import media_url
             asset_id = self._next_resource_id()
             ET.SubElement(resources, 'asset', id=asset_id, name=clip.name,
-                uid=self._generate_uid(), src=clip.media_path, start="0s",
+                uid=self._generate_uid(), src=media_url(clip.media_path), start=origin_attr,
                 duration=self._tc_to_rational(clip.duration), hasVideo="1", hasAudio="1")
             resource_map[clip.media_path] = asset_id
 
@@ -4090,7 +4220,9 @@ class FCPXMLWriter:
         format_id = resource_map.get('_format', 'r1')
         clip_elem = ET.SubElement(spine, 'asset-clip',
             ref=asset_id, offset=self._tc_to_rational(clip.start), name=clip.name,
-            start=self._tc_to_rational(clip.source_start) if clip.source_start else "0s",
+            start=(standard_attr(clip.source_start.exact)
+                   if clip.source_start and clip.source_start.exact is not None
+                   else self._tc_to_rational(clip.source_start) if clip.source_start else origin_attr),
             duration=self._tc_to_rational(clip.duration), format=format_id, tcFormat="NDF")
 
         for marker in clip.markers:
