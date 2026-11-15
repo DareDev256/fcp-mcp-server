@@ -508,6 +508,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; }
   header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .01em; }
   header .meta { color: var(--mute); font-variant-numeric: tabular-nums; }
+  header .meta .seg { white-space: nowrap; }
   header .tc { margin-left: auto; font: 600 14px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--accent); letter-spacing: .04em; }
   #empty { color: var(--mute); padding: 40px 0; text-align: center; }
@@ -540,9 +541,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .rec { color: var(--accent); font-variant-numeric: tabular-nums; }
   #strip .si { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; position: relative; }
   #strip .si .mg { position: relative; display: inline-block; margin-right: 6px; left: 0; top: 0; vertical-align: -1px; }
-  /* Its own stacking context: a connection line (z -1) sits behind every
-     clip; names are 7; the playhead (30) is on top of everything (0.34
-     round 4, the Fable ruling). */
+  /* Its own stacking context: a connection line (z 3) sits in front of the
+     clips it passes; names are 7; the playhead (30) is on top of everything
+     (0.34 round 4, the Fable ruling). */
   #canvas { position: relative; min-width: 100%; padding-bottom: 8px; isolation: isolate; }  /* the last lane never meets the border */
   /* The ruler, top to bottom: two marker rows (a glyph per kind, the name
      beside it), the timecode row, then the frame ticks in their own 8 px
@@ -574,8 +575,16 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .mg.standard { transform: rotate(45deg) scale(.82); }
   .mg.chapter { height: 11px; clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); }
   .mlabel .mg.chapter { top: 2px; }
+  /* to-do: the open square; completed: the square filled, a check cut out
+     of it (round 5: they differed by a 2 px dot). Both 10 px. */
+  .mg.todo, .mg.completed { width: 10px; height: 10px; }
+  .mlabel .mg.todo, .mlabel .mg.completed { left: -5px; top: 2px; }
   .mg.todo { background: transparent; border: 2px solid var(--accent); }
-  .mg.completed { border: 2px solid var(--accent); box-shadow: inset 0 0 0 1px var(--panel); }
+  .mg.completed::after { content: ""; position: absolute; left: 3px; top: 1px; width: 3px; height: 5px;
+    border: solid var(--panel); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  /* a transition in the marker rows: its bow-tie, then its name (round 5) */
+  .mg.bowtie { width: 10px; height: 8px; background: var(--ink); clip-path: polygon(0 0, 50% 50%, 100% 0, 100% 100%, 50% 50%, 0 100%); }
+  .mlabel .mg.bowtie { left: -5px; top: 3px; }
   /* A label that does not fit is hidden, never cut: its tick or clip stays,
      and the name is in the title tooltip and the strip. fitLabels() decides.
      A marker with no room for its name is in a bracketed run (placeMarkers()). */
@@ -677,7 +686,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
      (a glyph never shows without its name); a tap names it in the strip. */
   .trans { position: absolute; top: 4px; bottom: 4px; z-index: 5; border: 1px solid var(--on-media); border-radius: 4px;
     overflow: hidden; cursor: pointer; }
-  .trans .tbg { position: absolute; inset: 0; background: var(--shade); opacity: .45; }
+  .trans .tbg { position: absolute; inset: 0; background: var(--transition); }  /* filled, both themes (round 5) */
   .trans .bow { position: absolute; left: 6px; top: 6px; width: 12px; height: 9px; }
   .trans .bow path { fill: var(--on-media); }
   .trans .tn { position: absolute; left: 22px; top: 3px; font: 600 11px/14px ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -693,8 +702,9 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .flag.row1 { top: 17px; }
   /* The connection: a 2 px stem from a connected clip's edge to the
      storyline's edge, ending in its 6 px anchor dot there (drawConnections()),
-     behind every clip and name. */
-  .conn { position: absolute; width: 0; border-left: 2px solid var(--mute); z-index: -1; pointer-events: none; }
+     in front of the clips it passes and their role stripes (2), behind a
+     flash (4), a transition (5) and every name (7) (round 5). */
+  .conn { position: absolute; width: 0; border-left: 2px solid var(--mute); z-index: 3; pointer-events: none; }
   .conn::after { content: ""; position: absolute; left: -4px; width: 6px; height: 6px; border-radius: 50%; background: var(--mute); }
   .conn.down::after { bottom: 0; }
   .conn.up::after { top: 0; }
@@ -853,13 +863,26 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var spineN = p.clips.filter(function (c) { return !c.lane; }).length, connN = p.clips.length - spineN;
     // the clip count worded as every other output words it (proofs.counts_label);
     // a storyline that is one gap says so; the format never breaks inside
-    // "3840×2160 @ 23.98fps" (non-breaking spaces); the length is a timecode
+    // "3840×2160 @ 23.98fps" (non-breaking spaces); the length is a timecode.
+    // Round 5: whole segments wrap, each "·" kept to the segment before it by
+    // a non-breaking space, and a "·" left at a line's end is hidden.
     var lead = spineN === 0 && p.gap_based ? "gap spine" : spineN + (spineN === 1 ? " clip" : " clips");
-    $("meta").textContent = lead + " + " + connN + " connected · " + tcLen(frac(p.duration)) + " · " + p.width + "×" + p.height +
-      "\u00a0@\u00a0" + p.fps_label + "fps" + (p.gap_based ? " · gap-based storyline" : "");
-    $("meta").title = "length " + p.duration + " s";
-    fit(); draw(); openAtRegion(); updateSel(); showStrip();
+    var segs = [lead + " + " + connN + " connected", tcLen(frac(p.duration)),
+                p.width + "×" + p.height + "\u00a0@\u00a0" + p.fps_label + "fps"].concat(p.gap_based ? ["gap-based storyline"] : []);
+    var meta = $("meta"); meta.textContent = "";
+    segs.forEach(function (sg, i) { if (i) meta.appendChild(el("span", "sep", "\u00a0· ")); meta.appendChild(el("span", "seg", sg)); });
+    meta.title = "length " + p.duration + " s";
+    fit(); draw(); openAtRegion(); updateSel(); showStrip(); metaBreaks();
     if (before) animateFrom(before);
+  }
+
+  // A header "·" whose next segment starts a new line would dangle at the
+  // line's end: it is hidden (round 5).
+  function metaBreaks() {
+    [].forEach.call(document.querySelectorAll("#meta .sep"), function (sp) {
+      var nx = sp.nextElementSibling; sp.style.visibility = "";
+      if (nx && nx.getBoundingClientRect().top > sp.getBoundingClientRect().top + 2) sp.style.visibility = "hidden";
+    });
   }
 
   // ---- motion between payloads ------------------------------------------------
@@ -1180,7 +1203,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   }
   function glyphOf(type) {
     var t = String(type || "").toLowerCase();
-    return t === "chapter" ? "chapter" : (t === "todo" || t === "incomplete") ? "todo" : t === "completed" ? "completed" : "standard";
+    return t === "chapter" ? "chapter" : (t === "todo" || t === "incomplete") ? "todo" : t === "completed" ? "completed" :
+           t === "transition" ? "bowtie" : "standard";
   }
   function peakDb(levels) { var m = Math.max.apply(null, levels); return Math.round(m * 0.6 - 60); }
   // The sound in its own band under the filmstrip, as Final Cut draws it:
@@ -1283,6 +1307,19 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       lab.addEventListener("click", function (ev) { ev.stopPropagation(); state.playhead = frac(m.start); placePlayhead(); showStrip({ marks: [m] }); });
       return { m: m, el: lab, x: left, w: wpx, kind: g };
     });
+    // Each transition is named in the marker rows too (round 5): its bow-tie
+    // at the edit and "Cross Dissolve 0.5s", placed with the markers (whole,
+    // or in a run as theirs are), counted in the hint; a tap names it in the strip.
+    (p.transitions || []).forEach(function (t) {
+      var at = frac(t.start) - transLead(t) + frac(t.duration) / 2, left = x(at), name = transName(t) + " " + secsLabel(frac(t.duration));
+      var lab = el("div", "mlabel tlabel", name); lab.style.left = left + "px"; lab.title = name + " (transition)";
+      lab.insertBefore(el("span", "mg bowtie"), lab.firstChild); lab.dataset.kind = "transition"; lab.__key = "t:" + t.start + "@" + (t.lane || 0);
+      ruler.appendChild(lab);
+      var wpx = lab.offsetWidth; lab.dataset.w = String(wpx); lab.dataset.t = String(at); lab.dataset.trans = "1";
+      lab.addEventListener("click", function (ev) { ev.stopPropagation(); showStrip({ trans: t }); });
+      state.marks.push({ m: { name: name, start: String(at), type: "transition" }, el: lab, x: left, w: wpx, kind: "bowtie", trans: t });
+    });
+    state.marks.sort(function (a, b) { return a.x - b.x; });
     ruler.addEventListener("mousedown", rulerDown);
     var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
     var lanes = p.lanes.slice();
@@ -1340,9 +1377,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // storyline's edge, ending in its anchor dot ON that edge, outside the
   // storyline's clip (0.34 round 4: round 3's dot sat 4 px inside the
   // storyline, behind it, and never showed). The stem is INSET px into its
-  // clip, so the playhead at rest touches none; a stem that would run
+  // clip, or half its width when that is less, so the dot is always on its
+  // clip (round 5: a 6 px title's dot sat past it); a stem that would run
   // within a dot's width of another moves along its clip, so no two meet.
-  // Drawn behind every clip and name.
+  // Drawn in front of the clips it passes (round 5: a lane-2 stem hidden
+  // behind a lane-1 clip read as a second pin on it), one line from its
+  // clip to its single dot, moved along its clip clear of their names.
   function drawConnections() {
     var canvas = $("canvas"), s = state.rows && state.rows[0]; if (!s) return;
     canvas.querySelectorAll(".conn").forEach(function (c) { c.remove(); });
@@ -1354,16 +1394,27 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var top = hit ? hit.offsetTop : 4, h = hit ? hit.offsetHeight : s.offsetHeight - 8;
       return [s.offsetTop + top, s.offsetTop + top + h];
     };
-    var placed = [];
-    canvas.querySelectorAll(".lane:not(.collapsed) .clip:not(.ghost)").forEach(function (ce) {
+    var placed = [], all = [].slice.call(canvas.querySelectorAll(".lane:not(.collapsed) .clip:not(.ghost)"));
+    all.forEach(function (ce) {
       var lane = Number(ce.parentNode.dataset.lane); if (!lane) return;
-      var lx = ce.offsetLeft + INSET, last = ce.offsetLeft + ce.offsetWidth - 4;
+      var lx = ce.offsetLeft + Math.min(INSET, Math.max(0, ce.offsetWidth / 2 - 1)), last = ce.offsetLeft + ce.offsetWidth - 4;
       var ct = ce.parentNode.offsetTop + ce.offsetTop, cb = ct + ce.offsetHeight;
       var span = function () { var sp = edge(lx); return lane > 0 ? [cb, sp[0]] : [sp[1], ct]; };
       var ab = span();
+      // the names of the clips it passes in front of (a lane between it and the storyline)
+      var names = all.filter(function (o) { var ol = Number(o.parentNode.dataset.lane); return o !== ce && ol && (lane > 0 ? ol < lane && ol > 0 : ol > lane && ol < 0); })
+        .map(function (o) { var lb = o.querySelector(".label:not(.unfit)"); if (!lb) return null;
+          var r = document.createRange(); r.selectNodeContents(lb.firstChild); var b = r.getBoundingClientRect(), cr = $("canvas").getBoundingClientRect();
+          return [b.left - cr.left, b.right - cr.left, o.parentNode.offsetTop + o.offsetTop, o.parentNode.offsetTop + o.offsetTop + o.offsetHeight]; })
+        .filter(function (q) { return q; });
+      var hit = function () { return names.filter(function (q) { return lx + 2 > q[0] - 3 && lx < q[1] + 3 && q[2] < ab[1] && ab[0] < q[3]; })[0]; };
+      for (var k = 0, h = hit(); h && k < 4; k++, h = hit()) {
+        if (h[1] + 4 <= last) lx = h[1] + 4; else if (h[0] - 6 >= ce.offsetLeft + 1) lx = h[0] - 6; else break;
+        ab = span();
+      }
       while (placed.some(function (q) { return Math.abs(q.x - lx) < 8 && q.a < ab[1] && ab[0] < q.b; }) && lx + 8 <= last) { lx += 8; ab = span(); }
       placed.push({ x: lx, a: ab[0], b: ab[1] });
-      var line = el("div", "conn " + (lane > 0 ? "down" : "up"));
+      var line = el("div", "conn " + (lane > 0 ? "down" : "up")); line.dataset.for = ce.__c.id;
       line.style.left = lx + "px"; line.style.top = ab[0] + "px"; line.style.height = Math.max(6, ab[1] - ab[0]) + "px";
       canvas.appendChild(line);
     });
@@ -1396,10 +1447,14 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     return r.getBoundingClientRect();
   }
   // The hint strip's counted line (0.34 round 4): the clip names the part in
-  // view shows, of every clip in the cut ("13 of 44 names shown · tap or zoom").
+  // view shows, of every clip and transition in the cut ("4 of 58 names shown · tap or zoom").
   function countNames(left, right) {
-    var n = 0, total = state.payload.clips.length, c = $("count");
+    var n = 0, total = state.payload.clips.length + (state.payload.transitions || []).length, c = $("count");
     document.querySelectorAll("#canvas .lane:not(.collapsed) .clip:not(.ghost) .label:not(.unfit)").forEach(function (l) {
+      var b = textBox(l); if (b.width > 0 && b.left >= left - 0.5 && b.right <= right + 0.5) n++;
+    });
+    // a transition's name, in the marker rows (round 5)
+    document.querySelectorAll("#canvas .mlabel.tlabel:not(.gone)").forEach(function (l) {
       var b = textBox(l); if (b.width > 0 && b.left >= left - 0.5 && b.right <= right + 0.5) n++;
     });
     if (!c) return;
@@ -1416,6 +1471,11 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   // them); then every row is placed again. So only markers whose names
   // cannot all fit are bracketed, never one far from the rest, and no
   // marker in view is hidden (0.34 round 4).
+  // A run's chip: "3 markers", "1 transition", or "2 items" for both kinds.
+  function runLabel(marks) {
+    var n = marks.length, t = marks.filter(function (mk) { return mk.trans; }).length;
+    return n + (t === 0 ? (n === 1 ? " marker" : " markers") : t === n ? (n === 1 ? " transition" : " transitions") : " items");
+  }
   function placeMarkers(view, left, right) {
     var ruler = document.querySelector("#canvas .ruler"); if (!ruler || !state.marks) return;
     ruler.querySelectorAll(".mchip").forEach(function (c) { c.remove(); });
@@ -1425,17 +1485,17 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     state.marks.forEach(function (mk) {
       var at = x0 + mk.x;
       mk.el.classList.remove("row1", "gone", "clustered", "unfit", "crowded");
-      // in view when its glyph and its name are, as a ruler time is; until a
-      // scroll brings it whole it is not drawn (its overview tick shows it),
-      // and a marker before the cut's start never shows
-      if (!inView(at - 4, at + mk.w)) { mk.el.classList.add("gone", "unfit"); mk.state = "out"; return; }
+      // placed when its glyph is in view (a marker before the cut's start
+      // never shows); one whose name and run both cross the view's edge waits
+      // for a scroll (its overview tick shows it)
+      if (!inView(at - 5, at + 5)) { mk.el.classList.add("gone", "unfit"); mk.state = "out"; return; }
       live.push(mk);
     });
-    var chipW = function (n) { return Math.ceil(textW(n + (n === 1 ? " marker" : " markers"), "chip")); };
+    var chipW = function (marks) { return Math.ceil(textW(runLabel(marks), "chip")); };
     var boxOf = function (it) {
       var a = x0 + it.marks[0].x, b = x0 + it.marks[it.marks.length - 1].x;
-      if (!it.run) return [a - 4, a + it.marks[0].w];
-      var mid = (a + b) / 2, half = chipW(it.marks.length) / 2 + 1;
+      if (!it.run) return [a - 5, a + it.marks[0].w];
+      var mid = (a + b) / 2, half = chipW(it.marks) / 2 + 1;
       return [Math.min(a - 1, mid - half), Math.max(b + 1, mid + half)];
     };
     var items = live.map(function (mk) { return { marks: [mk] }; }), rows = [[], []], guard = 0;
@@ -1460,6 +1520,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       if (prev && reach(prev, f)) { prev.marks = prev.marks.concat(f.marks); prev.run = true; items.splice(fail, 1); }
       else if (next && reach(f, next)) { f.marks = f.marks.concat(next.marks); f.run = true; items.splice(fail + 1, 1); }
       else if (!f.run) f.run = true;  // alone, too far from either: its chip ("1 marker")
+      // a run that only the view's edge stops waits for a scroll
+      else if (!inView.apply(null, boxOf(f))) { f.marks.forEach(function (mk) { mk.el.classList.add("gone", "unfit"); mk.state = "out"; }); items.splice(fail, 1); }
       // last resort, never met on the fixtures: a run past SPLIT rather than a
       // marker lost (tests/test_app_glance.py reports the run as too wide)
       else if (prev) { prev.marks = prev.marks.concat(f.marks); prev.run = true; items.splice(fail, 1); }
@@ -1474,8 +1536,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       chip.style.left = a + "px"; chip.style.width = (b - a) + "px";
       chip.appendChild(el("div", "mb"));
       it.marks.forEach(function (mk) { var tk = el("div", "mt"); tk.style.left = (mk.x - a) + "px"; chip.appendChild(tk); });
-      chip.appendChild(el("div", "ct", n + (n === 1 ? " marker" : " markers")));
-      chip.dataset.count = String(n); chip.dataset.times = it.marks.map(function (mk) { return String(frac(mk.m.start)); }).join(",");
+      chip.appendChild(el("div", "ct", runLabel(it.marks)));
+      chip.dataset.count = String(n); chip.dataset.trans = String(it.marks.filter(function (mk) { return mk.trans; }).length); chip.dataset.times = it.marks.map(function (mk) { return String(frac(mk.m.start)); }).join(",");
       chip.title = it.marks.map(function (mk) { return mk.m.name + " " + tcOf(frac(mk.m.start)); }).join(" · ");
       it.marks.forEach(function (mk) { mk.el.classList.add("gone", "unfit", "crowded", "clustered"); mk.state = "clustered"; });
       var list = it.marks.map(function (mk) { return mk.m; });
@@ -1523,6 +1585,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       });
     });
     (state.marks || []).forEach(function (mk) {
+      if (mk.trans) return;  // the overview ticks markers only
       var o = el("div", "om"); o.style.left = Math.round(sx(frac(mk.m.start))) + "px"; o.title = mk.m.name + " " + tcOf(frac(mk.m.start)); ov.appendChild(o);
     });
     (p.flashes || []).forEach(function (f) {
@@ -1653,7 +1716,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var q = (c.words || []).map(function (w) { return w.w; }).join(" ").slice(0, 120) || c.name;
       callTool("find", { action: "find_shots", args: { filepath: file, query: q, limit: 8 } });
     }, !!c && ok);
-    var name = document.createElement("input"); name.type = "text"; name.placeholder = "marker name"; name.value = c ? c.name : "";
+    var name = document.createElement("input"); name.type = "text"; name.placeholder = "marker name"; name.value = "";  // never the clip's name (round 5)
     var mark = btn("Add marker at playhead", function () {
       edit("mark", { action: "add_marker", args: { filepath: file, timecode: tcOf(state.playhead), name: name.value || "marker", expected_sha256: p.file.sha256 } });
     }, ok, true);
@@ -1686,7 +1749,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   var drawnWidth = window.innerWidth;
   window.addEventListener("resize", function () {
     if (!state.payload || window.innerWidth === drawnWidth) return;
-    drawnWidth = window.innerWidth; fit(); draw(); openAtRegion();
+    drawnWidth = window.innerWidth; fit(); draw(); openAtRegion(); metaBreaks();
   });
   $("scroller").addEventListener("scroll", function () { fitLabels(); syncOverview(); });
   window.__fcpApp = { setPayload: setPayload, extract: extract, payloadOf: payloadOf, state: state, fitLabels: fitLabels,

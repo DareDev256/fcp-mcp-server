@@ -444,14 +444,16 @@ NAMES = r"""() => {
   const textBox = (e) => { const t = [...e.childNodes].filter(n => n.nodeType === 3), r = document.createRange();
     r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length); return r.getBoundingClientRect(); };
   const labels = [...document.querySelectorAll('#canvas .clip .label')].filter(l => getComputedStyle(l).visibility !== 'hidden' && !l.closest('.collapsed'));
-  const shown = labels.filter(l => { const b = textBox(l); return b.width > 0 && b.left >= left - 0.5 && b.right <= right + 0.5; });
+  const inView = (l) => { const b = textBox(l); return b.width > 0 && b.left >= left - 0.5 && b.right <= right + 0.5; };
+  // a clip's name inside it, and (round 5) a transition's in the marker rows
+  const shown = labels.filter(inView).concat([...document.querySelectorAll('#canvas .mlabel.tlabel')].filter(l => getComputedStyle(l).display !== 'none' && inView(l)));
   return {
     rows: document.querySelectorAll('#canvas .rail, #canvas .rl').length,
     labels: labels.map(l => { const c = l.closest('.clip'), cb = c.getBoundingClientRect(), b = textBox(l), cs = getComputedStyle(l);
       const cover = parseFloat(l.style.left || '0');
       return { name: c.__c.name, text: l.firstChild.textContent, size: cs.fontSize, bg: cs.backgroundColor, image: cs.backgroundImage,
                inLeft: b.left - cb.left - cover, inRight: cb.right - b.right }; }),
-    shown: shown.length, total: window.__fcpApp.state.payload.clips.length,
+    shown: shown.length, total: window.__fcpApp.state.payload.clips.length + (window.__fcpApp.state.payload.transitions || []).length,
     count: (document.getElementById('count') || {}).textContent || null };
 }"""
 
@@ -487,7 +489,8 @@ def test_names_are_inside_whole_or_absent_and_counted(browser, payloads, fixture
     # round 3's 12 px names
     (".clip .label, .meter.label { font: 600 11px/14px", ".clip .label, .meter.label { font: 600 12px/15px"),
     # a count of the storyline only (the brief's example was 44, the cut has 58 clips)
-    ("var n = 0, total = state.payload.clips.length,", "var n = 0, total = state.payload.clips.filter(function (c) { return !c.lane; }).length,"),
+    ("var n = 0, total = state.payload.clips.length + (state.payload.transitions || []).length,",
+     "var n = 0, total = state.payload.clips.filter(function (c) { return !c.lane; }).length,"),
     # round 3's scrim pill back
     ("  .clip .label { position: absolute; top: 0; left: 0; max-width: 100%; z-index: 7; padding: 3px 6px;",
      "  .clip .label { background: var(--raised); position: absolute; top: 0; left: 0; max-width: 100%; z-index: 7; padding: 3px 6px;"),
@@ -580,9 +583,11 @@ MARKS = r"""() => {
     if (!t.length) return null; r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length); return r.getBoundingClientRect(); };
   const seen = (e) => getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).display !== 'none' && getComputedStyle(e).color !== 'rgba(0, 0, 0, 0)';
   const widthOf = {}; document.querySelectorAll('#canvas .mlabel').forEach(m => { widthOf[m.dataset.t] = Number(m.dataset.w); });
-  // in view: its glyph and its name (as a ruler time: whole in view, or not drawn until a scroll)
-  const inView = [...document.querySelectorAll('#canvas .mlabel')].filter(m => {
-    const x = xOf(Number(m.dataset.t)); return x - 4 >= left - 4.5 && x + Number(m.dataset.w) <= right; }).length;
+  // every mark whose glyph and name are in view must be drawn (named or in a run); one whose
+  // glyph alone is in view may be (round 5: in a run), and nothing else is
+  const all = [...document.querySelectorAll('#canvas .mlabel')].map(m => ({ x: xOf(Number(m.dataset.t)), w: Number(m.dataset.w) }));
+  const inView = all.filter(m => m.x - 5 >= left - 4.5 && m.x + m.w <= right).length;
+  const glyphInView = all.filter(m => m.x - 5 >= left - 4.5 && m.x + 5 <= right).length;
   const named = [...document.querySelectorAll('#canvas .mlabel')].filter(seen).map(m => {
     const g = m.querySelector('.mg').getBoundingClientRect(), tb = textOf(m) || { left: 0, right: 0, width: 0 };
     return { text: m.textContent, title: m.title.replace(/ \([a-z]+\)$/, ''), gl: g.left, gr: g.right, tl: tb.left, tr: tb.right,
@@ -592,11 +597,11 @@ MARKS = r"""() => {
     const b = c.querySelector('.mb').getBoundingClientRect(), ct = textOf(c.querySelector('.ct')), times = c.dataset.times.split(',');
     return { text: c.querySelector('.ct').textContent, count: Number(c.dataset.count), listed: c.title.split(' · ').length,
              xs: times.map(t => xOf(Number(t))), ws: times.map(t => widthOf[t]), bl: b.left, br: b.right, tl: ct.left, tr: ct.right,
-             row: c.classList.contains('row1') ? 1 : 0 };
+             row: c.classList.contains('row1') ? 1 : 0, trans: Number(c.dataset.trans || 0) };
   });
   const flags = [...document.querySelectorAll('#canvas .flag')].filter(seen).map(f => { const b = f.getBoundingClientRect();
     return { l: b.left, r: b.right, row: f.classList.contains('row1') ? 1 : 0 }; });
-  return { named, chips, flags, inView, left, right, viewW: sc.right - left };
+  return { named, chips, flags, inView, glyphInView, left, right, viewW: sc.right - left };
 }"""
 
 
@@ -640,7 +645,10 @@ def marker_problems(facts: dict) -> list[str]:
         drawn += 1
     for c in facts["chips"]:
         n = c["count"]
-        if not (n == c["listed"] == len(c["xs"])) or c["text"] != f"{n} marker" + ("s" if n != 1 else ""):
+        t = c.get("trans", 0)
+        want = (f"{n} marker" + ("s" if n != 1 else "") if not t else
+                f"{n} transition" + ("s" if n != 1 else "") if t == n else f"{n} items")
+        if not (n == c["listed"] == len(c["xs"])) or c["text"] != want:
             out.append(f"chip {c['text']!r} lists {c['listed']} of {len(c['xs'])}")
         if abs(c["bl"] - (c["xs"][0] - 1)) > 1.5 or abs(c["br"] - (c["xs"][-1] + 1)) > 1.5:
             out.append(f"chip {c['text']!r}: its bracket {c['bl']:.1f}-{c['br']:.1f} is not its run {c['xs'][0]:.1f}-{c['xs'][-1]:.1f}")
@@ -653,8 +661,8 @@ def marker_problems(facts: dict) -> list[str]:
         if _could_name(list(zip(c["xs"], c["ws"])), others, facts["left"], facts["right"]):
             out.append(f"chip {c['text']!r} brackets markers whose names fit")
         drawn += n
-    if drawn != facts["inView"]:
-        out.append(f"{drawn} markers drawn, {facts['inView']} in view")
+    if not facts["inView"] <= drawn <= facts.get("glyphInView", drawn):
+        out.append(f"{drawn} markers drawn, {facts['inView']} whole in view, {facts.get('glyphInView')} with a glyph in view")
     return out
 
 
@@ -1296,24 +1304,38 @@ TRANS = r"""() => {
   const shown = (e) => !!e && getComputedStyle(e).visibility !== 'hidden';
   let nb = null; if (tn) { const r = document.createRange(); r.selectNodeContents(tn); nb = r.getBoundingClientRect(); }
   const cut = fin.getBoundingClientRect().left;
+  // its name in the marker rows (round 5), whole in view, or in a run that lists it
+  const sc = document.getElementById('scroller').getBoundingClientRect(), gutter = window.__fcpApp.gutter;
+  const tl = document.querySelector('#canvas .mlabel.tlabel'); let ruler = null;
+  if (tl && getComputedStyle(tl).display !== 'none') { const r = document.createRange(); r.setStart(tl.lastChild, 0); r.setEnd(tl.lastChild, tl.lastChild.length);
+    const q = r.getBoundingClientRect(); if (q.left >= sc.left + gutter - 0.5 && q.right <= sc.right - 0.5) ruler = tl.lastChild.textContent; }
+  const run = [...document.querySelectorAll('#canvas .mchip')].some(c => c.title.includes('Cross Dissolve 0.5s'));
   return { w: b.width, spans: b.left < cut && cut < b.right, ownBg: getComputedStyle(t).backgroundColor,
-           bgOpacity: bg ? Number(getComputedStyle(bg).opacity) : 1, bow: shown(bow), name: shown(tn) ? tn.textContent : null,
-           nameWhole: !shown(tn) || (nb.left >= b.left && nb.right <= b.right - 1), title: t.title,
+           body: bg ? getComputedStyle(bg).backgroundColor : null, bgOpacity: bg ? Number(getComputedStyle(bg).opacity) : 1,
+           bow: shown(bow), name: shown(tn) ? tn.textContent : null,
+           nameWhole: !shown(tn) || (nb.left >= b.left && nb.right <= b.right - 1), title: t.title, ruler, run,
+           dark: getComputedStyle(document.documentElement).colorScheme === 'dark',
            labelAfter: lab ? lab.getBoundingClientRect().left >= b.right - 0.5 : null };
 }"""
 
 
 def trans_problems(t: dict) -> list[str]:
-    """D8 (round 3) as round 4 rules it: a translucent overlay across both
-    clips at the edit, at least 14 px wide at any width; its bow-tie and its
-    name inside it, whole, or neither (a glyph never shows without its
-    name); "Cross Dissolve 0.5s" in its title; the next clip's name after it."""
+    """D8 as round 5 rules it: an overlay across both clips at the edit, at
+    least 14 px wide at any width, its body filled with the transition's own
+    colour in both themes (round 4's translucent body showed the two clips'
+    rounded ends through it, "two capsules"); named in the ruler's marker
+    rows ("Cross Dissolve 0.5s", whole, or in a run that lists it); a bow-tie
+    in the lane only with its whole name beside it; the next clip's name
+    after it."""
     out = []
     if not t or t["w"] < 14 - 0.01 or not t["spans"]:
         out.append(f"no overlay across the cut: {t}")
         return out
-    if t["ownBg"] not in ("rgba(0, 0, 0, 0)", "transparent") or t["bgOpacity"] >= 1:
-        out.append("an opaque slab")
+    want = (palette.dark if t["dark"] else palette.light)("transition").upper()
+    if t["body"] is None or _hex(t["body"]) != want or t["bgOpacity"] < 1:
+        out.append(f"its body is {t['body']} at {t['bgOpacity']}, not filled with {want}")
+    if t["ruler"] != "Cross Dissolve 0.5s" and not t["run"]:
+        out.append(f"not named in the ruler ({t['ruler']!r})")
     if t["bow"] and (t["name"] != "Cross Dissolve" or not t["nameWhole"]):
         out.append(f"a bow-tie with the name {t['name']!r} (whole: {t['nameWhole']})")
     if "Cross Dissolve 0.5s" not in t["title"]:
@@ -1323,9 +1345,12 @@ def trans_problems(t: dict) -> list[str]:
     return out
 
 
+@pytest.mark.parametrize("scheme", ["dark", "light"])
 @pytest.mark.parametrize("width", WIDTHS)
-def test_a_transition_is_drawn_as_final_cut_draws_it(browser, payloads, width):
-    assert trans_problems(_eval(browser, timeline_app.render_page_html(payloads["gym"]), width, TRANS)) == []
+def test_a_transition_is_drawn_as_final_cut_draws_it(browser, payloads, width, scheme):
+    t = _eval(browser, timeline_app.render_page_html(payloads["gym"]), width, TRANS, scheme)
+    assert trans_problems(t) == [], t
+    assert width < 1000 or t["ruler"] == "Cross Dissolve 0.5s", t  # whole at 1440; at a phone's width in a run with Finish
 
 
 def test_a_tapped_transition_names_itself_in_the_strip(browser, payloads):
@@ -1341,16 +1366,31 @@ def test_a_tapped_transition_names_itself_in_the_strip(browser, payloads):
         page.close()
     assert strip["for"] == "transition" and strip["name"] == "Cross Dissolve", strip
     assert strip["items"][1] == "length 00:00:00:12" and strip["itemCyan"][0], strip
+    # its name in the marker rows, tapped, says the same (round 5)
+    page = browser.new_page(viewport={"width": 1440, "height": 800}, color_scheme="dark")
+    try:
+        page.set_content(timeline_app.render_page_html(payloads["gym"]))
+        page.wait_for_timeout(50)
+        page.click("#canvas .mlabel.tlabel")
+        page.wait_for_timeout(30)
+        ruler = page.evaluate(STRIP)
+    finally:
+        page.close()
+    assert (ruler["for"], ruler["name"], ruler["items"]) == ("transition", "Cross Dissolve", strip["items"]), ruler
 
 
-@pytest.mark.parametrize("old,new", [
-    ("background: var(--shade); opacity: .45; }", "background: var(--raised-2); opacity: 1; }"),  # fa9b811's slab
-    ('if (Math.ceil(textW(name, "label")) + 16 + 2 * INSET <= b[1] - b[0]) {', "if (true) {"),  # a bow-tie with a cut name
-], ids=["slab", "glyph-without-its-name"])
-def test_the_transition_gate_goes_red(browser, payloads, old, new):
+@pytest.mark.parametrize("old,new,scheme", [
+    # round 4's translucent body: the two clips' ends show through ("two capsules" in light)
+    ("  .trans .tbg { position: absolute; inset: 0; background: var(--transition); }",
+     "  .trans .tbg { position: absolute; inset: 0; background: var(--shade); opacity: .45; }", "light"),
+    # round 4: no name in the ruler
+    ("    (p.transitions || []).forEach(function (t) {\n      var at = frac(t.start)", "    ([]).forEach(function (t) {\n      var at = frac(t.start)", "dark"),
+    ('if (Math.ceil(textW(name, "label")) + 16 + 2 * INSET <= b[1] - b[0]) {', "if (true) {", "dark"),  # a bow-tie with a cut name
+], ids=["translucent", "unnamed", "glyph-without-its-name"])
+def test_the_transition_gate_goes_red(browser, payloads, old, new, scheme):
     html = timeline_app.render_page_html(payloads["gym"])
     assert html.count(old) == 1
-    assert trans_problems(_eval(browser, html.replace(old, new), 1440, TRANS))
+    assert trans_problems(_eval(browser, html.replace(old, new), 1440, TRANS, scheme))
 
 
 TITLES = r"""() => [...document.querySelectorAll('#canvas .clip.k-title')].map(c => {
@@ -1414,26 +1454,63 @@ STEMS = r"""() => {
   const spine = document.querySelector('#canvas .lane[data-lane="0"]');
   const parts = [...spine.querySelectorAll('.clip, .gap')].map(x => x.getBoundingClientRect());
   const covers = [...document.querySelectorAll('#canvas .clip, #canvas .gap')].map(x => x.getBoundingClientRect());
-  return [...document.querySelectorAll('#canvas .conn')].map(e => {
+  const clips = {}; document.querySelectorAll('#canvas .clip').forEach(c => { clips[c.__c.id] = c; });
+  const st = document.createElement('style'); st.textContent = '#canvas .conn { pointer-events: auto !important; }'; document.head.appendChild(st);
+  const out = [...document.querySelectorAll('#canvas .conn')].map(e => {
     const b = e.getBoundingClientRect(), down = e.classList.contains('down');
     const dot = { l: b.left - 2, r: b.left + 4, t: down ? b.bottom - 6 : b.top, b: down ? b.bottom : b.top + 6 };
     const under = parts.filter(r => r.left <= b.left + 4 && b.left - 4 <= r.right)[0];
+    // its clip: named by the stem, or (a build that does not name it) the connected clip whose edge it starts at, nearest
+    const start = down ? b.top : b.bottom, gapTo = (c) => { const r = c.getBoundingClientRect(); return Math.max(0, r.left - b.left, b.left - r.right); };
+    const own = e.dataset.for ? clips[e.dataset.for] : Object.values(clips).filter(c => c.__c.lane && Math.abs((down ? c.getBoundingClientRect().bottom : c.getBoundingClientRect().top) - start) <= 0.6)
+      .sort((p, q) => gapTo(p) - gapTo(q))[0] || null;
+    const ob = own ? own.getBoundingClientRect() : null;
+    // what paints at points down the stem: the stem itself, all the way (round 5: a lane-2 stem
+    // behind a lane-1 clip showed only below it, as a second pin on that clip)
+    // (a name's box is see-through: only its text would hide the line; points outside the view are not drawn)
+    const view = document.getElementById('scroller').getBoundingClientRect();
+    const inText = (lab, x, y) => { const r = document.createRange(); r.selectNodeContents(lab.firstChild);
+      return [...r.getClientRects()].some(q => q.left <= x && x <= q.right && q.top <= y && y <= q.bottom); };
+    let hidden = 0;
+    for (let y = b.top + 1; y < b.bottom - 1; y += 2) {
+      if (b.left + 1 < view.left || b.left + 1 > view.right || y < view.top || y > view.bottom) continue;
+      for (const h of document.elementsFromPoint(b.left + 1, y)) {
+        if (h === e) break;
+        const lab = h.closest && h.closest('.label');
+        if (lab && !inText(lab, b.left + 1, y)) continue;
+        hidden++; break;
+      }
+    }
     return { down, end: down ? b.bottom : b.top, edge: under ? (down ? under.top : under.bottom) : null,
-             covered: covers.filter(r => r.left < dot.r - 0.5 && dot.l + 0.5 < r.right && r.top < dot.b - 0.5 && dot.t + 0.5 < r.bottom).length };
+             covered: covers.filter(r => r.left < dot.r - 0.5 && dot.l + 0.5 < r.right && r.top < dot.b - 0.5 && dot.t + 0.5 < r.bottom).length,
+             own: own ? own.__c.name : null, onClip: !!ob && dot.l >= ob.left - 0.5 && dot.r <= ob.right + 0.5,
+             start: ob ? (down ? Math.abs(b.top - ob.bottom) : Math.abs(b.bottom - ob.top)) : null, hidden };
   });
+  st.remove();
+  return out;
 }"""
 
 
 def stem_problems(stems: list) -> list[str]:
     """Item 8 (round 4): every connection stem ends at its anchor dot ON the
     storyline's edge, the dot clear of every clip so it shows (round 3's dot
-    sat 4 px inside the storyline, behind it)."""
+    sat 4 px inside the storyline, behind it). Round 5: the dot is over its
+    own clip (round 4's 6 px inset put a 6 px title's dot past it), and the
+    stem is one line from its clip to its dot that nothing paints over (a
+    lane-2 stem behind a lane-1 clip read as a second pin on it)."""
     out = []
     for i, s in enumerate(stems):
         if s["edge"] is None or abs(s["end"] - s["edge"]) > 0.6:
             out.append(f"stem {i}: ends at {s['end']:.1f}, the storyline's edge is at {s['edge']}")
         if s["covered"]:
             out.append(f"stem {i}: its anchor dot is behind a clip")
+        if s.get("own") is not None:
+            if not s["onClip"]:
+                out.append(f"stem {i} ({s['own']}): its dot is not over its clip")
+            if s["start"] > 0.6:
+                out.append(f"stem {i} ({s['own']}): it starts {s['start']:.1f} px from its clip")
+            if s["hidden"]:
+                out.append(f"stem {i} ({s['own']}): painted over at {s['hidden']} points (a clip in front of it)")
     return out
 
 
@@ -1444,12 +1521,19 @@ def test_every_stem_ends_at_its_dot_on_the_storyline(browser, payloads, fixture,
     assert stems and stem_problems(stems) == []
 
 
-def test_the_stem_gate_goes_red(browser, payloads):
-    """Mutation check: 035392a's stems, to 4 px inside the storyline."""
-    html = timeline_app.render_page_html(payloads["interview"])
-    old = "var top = hit ? hit.offsetTop : 4,"
+@pytest.mark.parametrize("old,new,fixture,width", [
+    # 035392a's stems, to 4 px inside the storyline
+    ("var top = hit ? hit.offsetTop : 4,", "var top = (hit ? hit.offsetTop : 4) + 4,", "interview", 1440),
+    # round 4's inset: a 6 px title's dot past its clip
+    ("var lx = ce.offsetLeft + Math.min(INSET, Math.max(0, ce.offsetWidth / 2 - 1)),", "var lx = ce.offsetLeft + INSET,", "interview", 1440),
+    # round 4's stems behind the clips they pass: lane 2's read as second pins on lane 1
+    ("border-left: 2px solid var(--mute); z-index: 3; pointer-events: none; }", "border-left: 2px solid var(--mute); z-index: -1; pointer-events: none; }",
+     "music-video", 390),
+], ids=["inside-the-storyline", "past-a-narrow-clip", "behind-lane-1"])
+def test_the_stem_gate_goes_red(browser, payloads, old, new, fixture, width):
+    html = timeline_app.render_page_html(payloads[fixture])
     assert html.count(old) == 1
-    assert stem_problems(_eval(browser, html.replace(old, "var top = (hit ? hit.offsetTop : 4) + 4,"), 1440, STEMS))
+    assert stem_problems(_eval(browser, html.replace(old, new), width, STEMS))
 
 
 OVERVIEW = r"""() => { const ov = document.getElementById('overview'), ob = ov.getBoundingClientRect(), p = window.__fcpApp.state.payload;
@@ -1517,9 +1601,22 @@ def test_the_minimap_gate_goes_red(browser, payloads, old, new):
     assert overview_problems(_eval(browser, html.replace(old, new), 390, OVERVIEW), 390)
 
 
-HEADER = r"""() => { const m = document.getElementById('meta'), t = m.firstChild.textContent, fmt = /\d+×\d+\s@\s[\d.]+fps/.exec(t);
-  const r = document.createRange(); r.setStart(m.firstChild, fmt.index); r.setEnd(m.firstChild, fmt.index + fmt[0].length);
-  return { text: t, tops: [...new Set([...r.getClientRects()].map(q => Math.round(q.top)))].length }; }"""
+HEADER = r"""() => { const m = document.getElementById('meta');
+  // every character of the header as drawn: its text and its box (works on one text node or many spans)
+  const chars = [], walker = document.createTreeWalker(m, NodeFilter.SHOW_TEXT); let n;
+  while ((n = walker.nextNode())) { if (getComputedStyle(n.parentElement).visibility === 'hidden') continue;
+    for (let i = 0; i < n.length; i++) { const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + 1);
+      const b = [...r.getClientRects()].filter(q => q.width > 0)[0]; if (b) chars.push({ c: n.data[i], top: Math.round(b.top) }); } }
+  const text = m.textContent, fmt = /\d+×\d+\s@\s[\d.]+fps/.exec(text);
+  // the visible characters, spaces left out (a space at a line's end has no box)
+  const solid = chars.filter(c => c.c.trim() && c.c !== '\u00a0'), want = fmt[0].replace(/\s/g, '');
+  const fi = solid.map(c => c.c).join('').indexOf(want);
+  const tops = fi < 0 ? 0 : new Set(solid.slice(fi, fi + want.length).map(c => c.top)).size;
+  // a "·" is dangling when the nearest visible character before or after it is on another line
+  const dangling = solid.map((c, i) => c.c === '·' && ((i > 0 && solid[i - 1].top !== c.top) || (i + 1 < solid.length && solid[i + 1].top !== c.top)) ? i : -1)
+    .filter(i => i >= 0).length;
+  const lines = new Set(chars.map(c => c.top)).size;
+  return { text, tops, dangling, lines }; }"""
 
 
 def test_the_header_reads_whole(browser, payloads):
@@ -1528,14 +1625,35 @@ def test_the_header_reads_whole(browser, payloads):
     is a timecode."""
     h = _eval(browser, timeline_app.render_page_html(payloads["music-video"]), 390, HEADER)
     assert h["tops"] == 1, h
-    assert h["text"].startswith("gap spine + 8 connected · 00:02:43:20 · "), h
+    assert h["text"].startswith("gap spine + 8 connected\u00a0· 00:02:43:20\u00a0· "), h
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("fixture", FIXTURES)
+def test_no_dot_dangles_where_the_header_wraps(browser, payloads, fixture, width):
+    """Round 5 (both critics): the header wraps whole segments and never
+    leaves a "·" at a line's end or start (035392a and 379ae3b ended the
+    music video's first line at 390 with one)."""
+    h = _eval(browser, timeline_app.render_page_html(payloads[fixture]), width, HEADER)
+    assert h["dangling"] == 0, h
+
+
+def test_the_dangling_dot_gate_goes_red(browser, payloads):
+    """Mutation check: the separator drawn whatever the line (379ae3b's)."""
+    html = timeline_app.render_page_html(payloads["music-video"])
+    old = 'if (nx && nx.getBoundingClientRect().top > sp.getBoundingClientRect().top + 2) sp.style.visibility = "hidden";'
+    assert html.count(old) == 1
+    h = _eval(browser, html.replace(old, ""), 390, HEADER)
+    assert h["lines"] > 1 and h["dangling"], h
 
 
 def test_the_header_gate_goes_red(browser, payloads):
+    """Mutation check: fa9b811's header (ordinary spaces round "@", and since
+    round 5 the segment's own no-wrap removed with them)."""
     html = timeline_app.render_page_html(payloads["music-video"])
-    old = '"\\u00a0@\\u00a0"'
-    assert html.count(old) == 1
-    assert _eval(browser, html.replace(old, '" @ "'), 390, HEADER)["tops"] > 1
+    old, nowrap = '"\\u00a0@\\u00a0"', "  header .meta .seg { white-space: nowrap; }\n"
+    assert html.count(old) == 1 and html.count(nowrap) == 1
+    assert _eval(browser, html.replace(old, '" @ "').replace(nowrap, ""), 390, HEADER)["tops"] > 1
 
 
 LANE_TAGS = r"""() => { const sc = document.getElementById('scroller').getBoundingClientRect(), mute = getComputedStyle(document.body).getPropertyValue('--mute');
@@ -1606,6 +1724,77 @@ def test_the_lane_tag_gate_goes_red(browser, payloads, old, new, width):
     assert lane_tag_problems(_eval(browser, broken, width, LANE_TAGS), width)
 
 
+GLYPHS = r"""() => { const out = {};
+  ['todo', 'completed'].forEach(k => { const m = [...document.querySelectorAll('#canvas .mlabel')].find(e => e.dataset.kind === k && getComputedStyle(e).display !== 'none');
+    if (!m) return; const g = m.querySelector('.mg'), cs = getComputedStyle(g), af = getComputedStyle(g, '::after'), b = g.getBoundingClientRect();
+    out[k] = { w: b.width, h: b.height, fill: cs.backgroundColor, border: cs.borderTopWidth, check: af.content !== 'none' && af.content !== 'normal',
+               checkColour: af.borderRightColor, checkW: af.borderRightWidth, panel: getComputedStyle(document.getElementById('scroller')).backgroundColor }; });
+  return out; }"""
+
+
+def glyph_problems(g: dict) -> list[str]:
+    """Round 5 (both critics): a completed to-do and a to-do read apart. To-do
+    is the open square (no fill, a 2 px border); completed is the square
+    filled, 10 px or more, with a check cut out of it (drawn in the ground's
+    colour). Round 4's completed differed from to-do by a 2 px dot."""
+    out = []
+    if set(g) != {"todo", "completed"}:
+        return [f"glyphs found: {sorted(g)}"]
+    t, c = g["todo"], g["completed"]
+    if t["fill"] not in ("rgba(0, 0, 0, 0)", "transparent") or t["border"] != "2px" or min(t["w"], t["h"]) < 10 - 0.01:
+        out.append(f"to-do is not the open 10 px square: {t}")
+    if c["fill"] in ("rgba(0, 0, 0, 0)", "transparent") or min(c["w"], c["h"]) < 10 - 0.01:
+        out.append(f"completed is not a filled 10 px square: {c}")
+    if not c["check"] or c["checkColour"] != c["panel"] or c["checkW"] != "2px":
+        out.append(f"completed has no check cut out: {c}")
+    return out
+
+
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+def test_completed_and_to_do_markers_read_apart(browser, payloads, scheme):
+    assert glyph_problems(_eval(browser, timeline_app.render_page_html(payloads["interview"]), 1440, GLYPHS, scheme)) == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ("  .mg.todo, .mg.completed { width: 10px; height: 10px; }\n", ""),  # round 4's 8 px
+    ("border: solid var(--panel); border-width: 0 2px 2px 0; transform: rotate(45deg); }",
+     "border: solid var(--panel); border-width: 0; transform: rotate(45deg); }"),  # no check
+], ids=["small", "no-check"])
+def test_the_glyph_gate_goes_red(browser, payloads, old, new):
+    html = timeline_app.render_page_html(payloads["interview"])
+    assert html.count(old) == 1
+    assert glyph_problems(_eval(browser, html.replace(old, new), 1440, GLYPHS))
+
+
+FIELD = """() => { const i = document.querySelector('#acts input'); return { value: i.value, placeholder: i.placeholder }; }"""
+
+
+def _tap_field(browser, html: str) -> dict:
+    page = browser.new_page(viewport={"width": 1440, "height": 800}, color_scheme="dark")
+    try:
+        page.set_content(html)
+        page.wait_for_timeout(50)
+        page.click("#canvas .lane .clip >> nth=0")
+        page.wait_for_timeout(30)
+        return page.evaluate(FIELD)
+    finally:
+        page.close()
+
+
+def test_a_tap_leaves_the_marker_name_field_empty(browser, payloads):
+    """Round 5 (both critics): selecting a clip no longer types its name into
+    the marker-name field; the placeholder stays."""
+    assert _tap_field(browser, timeline_app.render_page_html(payloads["music-video"])) == {"value": "", "placeholder": "marker name"}
+
+
+def test_the_field_gate_goes_red(browser, payloads):
+    """Mutation check: 379ae3b's field, the tapped clip's name in it."""
+    html = timeline_app.render_page_html(payloads["music-video"])
+    old = 'name.value = "";'
+    assert html.count(old) == 1
+    assert _tap_field(browser, html.replace(old, 'name.value = c ? c.name : "";'))["value"] != ""
+
+
 # ---------------------------------------------------------------------------
 # Item 9 (round 4): nothing drawn collides with anything else drawn
 # ---------------------------------------------------------------------------
@@ -1651,15 +1840,10 @@ COLLIDE = r"""(opts) => {
     add('line', ph, box(b.left, b.left + 2, b.top, b.bottom), { at: b.left, name: 'playhead' });
     add('line', ph, ph.querySelector('.phead').getBoundingClientRect(), { at: b.left, name: 'playhead head' });
   }
-  // the connection stems: the parts not behind a clip or a gap (they are drawn at z -1), and the anchor dots
-  const covers = [...canvas.querySelectorAll('.clip, .gap')].filter(vis).map(e => e.getBoundingClientRect());
+  // the connection stems (round 5: in front of the clips they pass, so all of each), and the anchor dots
   canvas.querySelectorAll('.conn').forEach(e => {
     const b = e.getBoundingClientRect(), x0 = b.left, x1 = b.left + 2, down = e.classList.contains('down');
-    let segs = [[b.top, b.bottom]];
-    covers.forEach(c => { if (c.left < x1 && x0 < c.right) segs = segs.flatMap(([t, u]) => {
-      const o = []; if (c.top > t) o.push([t, Math.min(u, c.top)]); if (c.bottom < u) o.push([Math.max(t, c.bottom), u]);
-      return o.filter(([p, q]) => q - p > 0.01); }); });
-    segs.forEach(([t, u]) => add('line', e, box(x0, x1, t, u), { name: 'stem' }));
+    add('line', e, box(x0, x1, b.top, b.bottom), { name: 'stem' });
     add('glyph', e, box(b.left - 2, b.left + 4, down ? b.bottom - 6 : b.top, down ? b.bottom : b.top + 6), { name: 'anchor dot' });
   });
   const out = [];

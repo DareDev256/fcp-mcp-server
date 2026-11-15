@@ -42,8 +42,9 @@ MEASURE = r"""() => {
     thumb: !!c.querySelector('.thumbs'), wave: !!c.querySelector('.wave svg path'),
     box: (() => { const t = c.querySelector('.thumbs'); if (!t) return null; const b = t.getBoundingClientRect();
                   return { x: b.left + 2, y: b.top + 2, width: Math.max(1, b.width - 4), height: Math.max(1, b.height - 4) }; })() }));
-  const named = [...document.querySelectorAll('#canvas .mlabel')].filter(m => getComputedStyle(m).visibility !== 'hidden').length;
-  const clustered = [...document.querySelectorAll('#canvas .mchip')].reduce((n, c) => n + Number(c.dataset.count || 0), 0);
+  // markers only: a transition's name in the marker rows (0.34 round 5) is not a marker
+  const named = [...document.querySelectorAll('#canvas .mlabel:not(.tlabel)')].filter(m => getComputedStyle(m).visibility !== 'hidden').length;
+  const clustered = [...document.querySelectorAll('#canvas .mchip')].reduce((n, c) => n + Number(c.dataset.count || 0) - Number(c.dataset.trans || 0), 0);
   return { clips, named, clustered };
 }"""
 

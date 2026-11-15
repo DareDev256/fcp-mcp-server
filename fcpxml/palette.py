@@ -46,7 +46,8 @@ TOKENS: dict[str, tuple[str, str]] = {
     # shields draws #333 (8.7:1). Every other surface uses accent / accent-fill.
     "badge": ("#33EBFF", "#33EBFF"),
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
-    "shade": ("#000000BF", "#000000BF"),    # a transition's translucent overlay
+    "shade": ("#000000BF", "#000000BF"),    # a dark scrim (unused by the app since 0.34 round 5)
+    "transition": ("#4A4A4A", "#B5B5B5"),   # a transition's body over the edit (0.34 round 5: filled)
     # the outline round a name drawn over a picture (0.34 round 4: no scrim
     # pill; a 1 px black outline and a soft shadow, so white text reads over
     # a white frame; tests/test_app_labels.py measures it)
