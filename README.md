@@ -654,9 +654,10 @@ desktop; clips 88 px tall (titles and sound 72 px, every clip 56 px on a
 phone) with a filmstrip over the waveform's own band (one -60..0 dBFS
 scale, a column per peak), and a 3 px stripe in Final Cut 12.4's own role
 colour (read from the installed app by `scripts/fcp_role_colours.m`, the
-same in both themes); titles in the Titles colour; transitions as a
-translucent overlay; a glyph per marker kind (standard, chapter, to-do,
-completed), always with its name, or in a bracketed run where the names
+same in both themes); titles in the Titles colour; transitions as an
+overlay filled with the transition's colour, named in the ruler; a glyph per
+marker kind (standard, chapter, an open square for a to-do, a filled one
+with a check for a completed to-do), always with its name, or in a bracketed run where the names
 cannot all fit; gaps; a flash frame in red, the only red; a timecode ruler
 with frame ticks and a playhead on top that snaps to cuts; no mark drawn
 over another (the playhead, once moved, is a cursor over them). A clip's name is inside it, whole, or not drawn, and

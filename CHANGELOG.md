@@ -82,19 +82,34 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   4: from the ruler's top it ran through the Press marker a frame after it);
   a connection is a 2 px stem from its clip's edge ending in its 6 px anchor
   dot ON the storyline's edge (round 3's dot sat 4 px inside the storyline,
-  behind it), and a stem within a dot's width of another moves along its
-  clip. Checked over every drawn primitive (below).
-- **Transitions** are a translucent overlay across both clips at the edit,
-  never under 14 px wide; their bow-tie and name ("Cross Dissolve") are
-  drawn inside when the name fits whole, else neither (a glyph never shows
-  without its name); the name and length are in the tooltip and the strip
-  on a tap; the next clip's name starts after it.
+  behind it), 6 px into its clip or half its width when that is less, so the
+  dot is always on its clip (round 5: a 6 px title's dot sat past it); a
+  stem that passes another lane's clip is drawn in front of it as one line
+  to its single dot, moved along its clip clear of that clip's name (round
+  5: drawn behind, a lane-2 stem read as a second pin on the lane-1 clip:
+  "7 pins for 4 clips"); a stem within a dot's width of another moves
+  along its clip. Checked over every drawn primitive (below).
+- **Transitions** are an overlay across both clips at the edit, never under
+  14 px wide, its body filled with the transition's own colour in both
+  themes (round 5: round 4's translucent body let the two clips' rounded
+  ends show through, "two capsules" in the light theme). Each is named in
+  the ruler's marker rows (round 5): its bow-tie at the edit and
+  "Cross Dissolve 0.5s", placed with the markers (whole, or in a run as
+  theirs are: "2 items" with Finish at 430 and 390), tappable, and counted
+  in the hint ("8 of 8 names shown" on the gym at 1440). In the lane a
+  bow-tie shows only with its whole name beside it; the next clip's name
+  starts after the overlay.
 - **Titles** have the Titles role colour as their body (Final Cut 12.4's,
   read from the app) and their name inside when it fits (white on #7E53D2,
   5.2:1 in both themes, measured); a narrow title is a 24 px bar. Connected
   clips are never drawn thinner than 6 px.
 - **The header** reads "gap spine + 8 connected" on a gap spine, gives the
-  length as a timecode, and never breaks inside "3840×2160 @ 23.98fps".
+  length as a timecode, and never breaks inside "3840×2160 @ 23.98fps". It
+  wraps whole segments, each "·" kept to the segment before it by a
+  non-breaking space, and a "·" left at a line's end is hidden (round 5:
+  the music video's first line at 390 ended in one).
+- **Selecting a clip** no longer types its name into the marker-name field;
+  the placeholder stays (round 5).
 - **Roles.** A 3 px stripe in Final Cut 12.4's own role colours, read from
   the installed app (`scripts/fcp_role_colours.m` loads its Flexo.framework
   and asks `FFColorForRole +colorSchemeForIndex:` for each built-in role):
@@ -123,14 +138,17 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   the squat rests at the same samples as before, so its cut, its silences
   and every proof test are unchanged.
 - **Markers.** Separate glyphs for standard, chapter, to-do and completed
-  to-do markers. A glyph never shows without its whole name to its right:
+  to-do markers; a to-do is the open 10 px square and a completed to-do the
+  square filled with a check cut out of it (round 5: they differed by a
+  2 px dot). A glyph never shows without its whole name to its right:
   each marker (after any flash flag) takes row 0 or row 1 if its name fits
   there in view; only a run whose names cannot all be named is bracketed
   (round 4): a bracket from its first marker to its last with a tick at
   each and a chip centred on it ("3 markers", a tap lists them), never over
   more than a quarter of the view (round 3 drew "7 markers" at 9.3 min for
-  markers out to 17.4 min). A marker is in view when its glyph and name are;
-  every marker in view is named or in a run.
+  markers out to 17.4 min). Every marker whose glyph and name are in view is
+  named or in a run; one whose name only the view's edge stops joins a run
+  with its neighbour when it can (round 5), else waits for a scroll.
   With a gap's markers read (below), `view`'s
   summary counts the real total on a gap-based edit ("3 markers", where it
   said 0).
@@ -278,6 +296,20 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   frames") stays plural.
 
 ### Gates, each broken once in the real code and seen red
+- `tests/test_app_glance.py`, round 5 (the gatekeeper's last round: five
+  defects both round-4 critics named; each gate also run on 379ae3b and red
+  there): the transition's body filled with its own colour in both themes
+  and its name in the marker rows, whole or in a run, and counted in the
+  hint (red with round 4's translucent body, with no ruler name, with the
+  bow-tie always drawn); every stem's dot over its own clip, the stem
+  starting at its clip's edge and nothing painted over it down to its dot
+  (red with round 4's 6 px inset, with the stems behind the clips they
+  pass, with round 3's stems); a to-do the open 10 px square and a
+  completed to-do filled with a cut-out check, both themes (red at 8 px,
+  with no check); no "·" at a header line's end or start on the three
+  fixtures at every width (red with the separator always drawn); a tap
+  leaving the marker-name field empty with its placeholder (red with
+  379ae3b's pre-fill).
 - `tests/test_app_glance.py`, round 4 (the Fable ruling on two critics'
   FIX FIRST; each gate also run on the round-3 build, 035392a, and red
   there): names inside their clip, whole, 11 px, 6 px in, no pill and no
@@ -472,6 +504,22 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   the tooltip and the strip on a tap, and no bow-tie is drawn.
 - Once moved, the playhead is a cursor on top of everything and may cross a
   name (the ruling); at rest it touches nothing.
+- **The critics' round-4 scores** (379ae3b, two fresh critics scored against
+  Final Cut's own timeline): critic K desktop 6.75, phone 7.75, several
+  lanes 7.0, light theme passing (targets 8, 7.5, 7.5); critic L desktop
+  6.75, phone 7.0, several lanes 6.5, light theme failing on the
+  transition's two capsules. Averages: desktop 6.75 (8 the target), phone
+  7.375, lanes 6.75. Round 5 fixed the five defects both named (above); by
+  the stop rule there is no further critic round for 0.34.0.
+- **Named by one critic only, or new design, so not built in 0.34** (the
+  gatekeeper's out-of-scope list): a desktop zoom for cuts of more than 30
+  clips (the interview names 2 of its 58 clips at 1440); role words in the
+  lane tags; the overview's marks drawn one way; the height of a title clip
+  (narrow ones are 24 px bars, "lollipops" to one critic); the empty band
+  in a sound clip between its name and its waveform; labels on the zoom
+  buttons.
+  Also not built: lane tags at phone width (deferred to 0.35 by the Fable
+  ruling), and the README picture's crop.
 - Storyline clips abut, so the 6 px minimum applies to connected clips only.
 - A gap's `<keyword>` and `<rating>` are still not read: `Timeline` has no
   field for them, so reading them is a model change, not a parser fix.
