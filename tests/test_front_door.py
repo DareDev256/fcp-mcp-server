@@ -84,6 +84,10 @@ def test_the_sweep_actually_walks_the_repo():
 # ---------------------------------------------------------------------------
 
 NAME = "fcp-mcp-server"
+# The searched phrase leads the heading, then the name (0.34.1, James's rule
+# of 2026-11-15: public names and headings are what people type; Google
+# autocomplete has "final cut pro ai tools", nothing for "fcp mcp").
+PHRASE = "AI tools for Final Cut Pro"
 SUBTITLE = "Reads and writes FCPXML, no plugin, no patch"
 BENEFIT = "Edit Final Cut Pro by talking to Claude, and watch the cut change."
 
@@ -91,7 +95,7 @@ BENEFIT = "Edit Final Cut Pro by talking to Claude, and watch the cut change."
 def test_readme_opens_with_the_name_then_the_benefit_then_the_subtitle():
     lines = [line for line in (REPO / "README.md").read_text(encoding="utf-8").splitlines() if line.strip()]
     at = next(i for i, line in enumerate(lines) if line.startswith("# "))
-    assert lines[at] == f"# {NAME}"
+    assert lines[at] == f"# {PHRASE}: {NAME}"
     assert lines[at + 1] == f"**{BENEFIT}**"
     # non-breaking spaces keep "no plugin, no patch" together on a phone
     assert lines[at + 2].replace("&nbsp;", " ") == SUBTITLE

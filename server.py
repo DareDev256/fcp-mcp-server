@@ -67,7 +67,7 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.34.0"
+__version__ = "0.34.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 

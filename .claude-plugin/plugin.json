@@ -1,8 +1,8 @@
 {
   "name": "fcpxml-mcp",
   "displayName": "fcp-mcp-server",
-  "version": "0.34.0",
-  "description": "Drive Final Cut Pro from a conversation: read a timeline, run quality control, batch-edit, build rough cuts, manage markers, transcribe, and export to other NLEs. 15 grouped tools covering 102 operations over .fcpxml and .fcpxmld, with an operation journal and undo.",
+  "version": "0.34.1",
+  "description": "AI tools for Final Cut Pro. Drive Final Cut Pro from a conversation: read a timeline, run quality control, batch-edit, build rough cuts, manage markers, transcribe, and export to other NLEs. 15 grouped tools covering 102 operations over .fcpxml and .fcpxmld, with an operation journal and undo.",
   "author": {
     "name": "James Olusoga",
     "url": "https://github.com/DareDev256"

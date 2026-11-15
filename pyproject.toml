@@ -7,15 +7,15 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.34.0"
+version = "0.34.1"
 
-description = "MCP server for Final Cut Pro XML. 15 grouped tools (102 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, real media analysis (silence, beats, shot boundaries, local Whisper or ElevenLabs transcripts), a SQLite cache, ffmpeg proxy preview with source-media verification, export watch-folder round-trip, EDL import, an operation journal with undo, a review gate on delivery, bulk organize, tiered shot search with offline captions."
+description = "AI tools for Final Cut Pro (MCP server): read, edit and generate FCPXML timelines from Claude. 15 grouped tools (102 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, media analysis (silence, beats, shot boundaries, Whisper or ElevenLabs transcripts), a SQLite cache, proxy preview with source-media checks, an export watch folder, EDL import, an undo journal, a review gate on delivery, bulk organize, shot search with offline captions."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "DareDev256", email = "dev@jamesdare.com"}
 ]
-keywords = ["final-cut-pro", "mcp", "video-editing", "fcpxml", "ai"]
+keywords = ["final-cut-pro", "final-cut-pro-ai", "fcpx", "fcpxml", "mcp", "video-editing", "video-review", "ai"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
