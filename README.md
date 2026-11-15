@@ -347,6 +347,8 @@ runs on a managed Mac and survives an FCP update.
 | Timeline health checks (validation, stats, scoring) | |
 | Logging and search before the edit (scenes, transcript, shot search) | |
 
+**Client notes or Frame.io comments to place?** [frameio-to-final-cut-pro](https://github.com/DareDev256/frameio-to-final-cut-pro) (Cut Review, built on this server's parser) writes them into the cut as Final Cut to-do markers on the right clips, then shows which notes the recut touched.
+
 ---
 
 ## How It Compares
