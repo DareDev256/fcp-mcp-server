@@ -647,9 +647,11 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   /* Over a picture the name is white with a 2 px black outline and a soft
      shadow (the halo token): it reads over a white frame on any font
      rasteriser (tests/test_app_labels.py measures it; a 1 px outline read
-     97% on macOS and 76% on CI's Linux), and covers no picture. */
+     97% on macOS and 76% on CI's Linux); the first shadow sits under the
+     glyphs themselves, so their sub-pixel edges blend over black, not over
+     the picture. It covers no picture past the outline. */
   .clip.has-thumb .label { color: var(--on-media);
-    text-shadow: 1px 0px 0 var(--halo), -1px 0px 0 var(--halo), 0px 1px 0 var(--halo), 0px -1px 0 var(--halo), 1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
+    text-shadow: 0 0 0 var(--halo), 1px 0px 0 var(--halo), -1px 0px 0 var(--halo), 0px 1px 0 var(--halo), 0px -1px 0 var(--halo), 1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
       -2px -2px 0 var(--halo), -2px -1px 0 var(--halo), -2px 0px 0 var(--halo), -2px 1px 0 var(--halo), -2px 2px 0 var(--halo), -1px -2px 0 var(--halo), -1px 2px 0 var(--halo), 0px -2px 0 var(--halo), 0px 2px 0 var(--halo), 1px -2px 0 var(--halo), 1px 2px 0 var(--halo), 2px -2px 0 var(--halo), 2px -1px 0 var(--halo), 2px 0px 0 var(--halo), 2px 1px 0 var(--halo), 2px 2px 0 var(--halo),
       0 0 3px var(--halo); }
   .clip.k-title .label { color: var(--on-media); }
@@ -680,7 +682,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .trans .bow path { fill: var(--on-media); }
   .trans .tn { position: absolute; left: 22px; top: 3px; font: 600 11px/14px ui-sans-serif, system-ui, -apple-system, sans-serif;
     white-space: nowrap; color: var(--on-media);
-    text-shadow: 1px 0px 0 var(--halo), -1px 0px 0 var(--halo), 0px 1px 0 var(--halo), 0px -1px 0 var(--halo), 1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
+    text-shadow: 0 0 0 var(--halo), 1px 0px 0 var(--halo), -1px 0px 0 var(--halo), 0px 1px 0 var(--halo), 0px -1px 0 var(--halo), 1px 1px 0 var(--halo), -1px -1px 0 var(--halo), 1px -1px 0 var(--halo), -1px 1px 0 var(--halo),
       -2px -2px 0 var(--halo), -2px -1px 0 var(--halo), -2px 0px 0 var(--halo), -2px 1px 0 var(--halo), -2px 2px 0 var(--halo), -1px -2px 0 var(--halo), -1px 2px 0 var(--halo), 0px -2px 0 var(--halo), 0px 2px 0 var(--halo), 1px -2px 0 var(--halo), 1px 2px 0 var(--halo), 2px -2px 0 var(--halo), 2px -1px 0 var(--halo), 2px 0px 0 var(--halo), 2px 1px 0 var(--halo), 2px 2px 0 var(--halo),
       0 0 3px var(--halo); }
   /* A flash in the picture is a failure: red, the only red on the timeline,
