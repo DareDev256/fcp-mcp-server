@@ -177,8 +177,13 @@ def test_silence_spans_are_found_and_labelled(tone_gap_tone, tmp_path):
     assert abs(float(a) - 1.5) <= 0.06 and abs(float(b) - 2.5) <= 0.06
     png, f = rs.load(result["path"]), rs.face(32)
     runs = [run for run in result["raster"].runs if run.text.startswith("silence")]
-    # named once where it starts; band 2 (from 2 s) says where it ends
-    assert [run.text for run in runs] == ["silence 1.0s (24f)", "silence to 00:00:02:12"]
+    # named once where it starts, in the words its half second of band 1 has
+    # room for; band 2 (from 2 s) says where it ends (0.34: a label stays
+    # inside its silence, never over the sound)
+    assert [run.text for run in runs] == ["silence 1.0s"]
+    ends = [run for run in result["raster"].runs if run.text.startswith("to ")]
+    assert [run.text for run in ends] == ["to 00:00:02:12"]
+    runs += ends
     for run in runs:
         assert rs.read_text(png, f, run.x, run.y, len(run.text)) == run.text
 

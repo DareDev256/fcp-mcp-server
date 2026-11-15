@@ -53,6 +53,8 @@ __all__ = [
     "APPS_EXTENSION_ID",
     "APP_MIME_TYPE",
     "MCP_API_VERSION",
+    "ToolReply",
+    "call_tool_result",
     "advertises_extensions",
     "build_tool",
     "current_request",
@@ -226,6 +228,40 @@ def _to_resource_contents(uri: str, result: Any) -> list[Any]:
     return contents
 
 
+class ToolReply(list):
+    """A handler's content blocks plus the result's ``structuredContent``.
+
+    Handlers return a bare list of content blocks (the 1.x shape every test
+    reads). A list that also carries ``structured`` is a reply whose result
+    has ``structuredContent`` too: the view tool's payload (0.34), which the
+    ext-apps spec hands to the app and keeps out of the model's context
+    (specification/draft/apps.mdx, "structuredContent: Structured data
+    optimized for UI rendering (not added to model context)"). It is still a
+    list, so every caller that indexes or iterates the reply is unchanged.
+    """
+
+    def __init__(self, content=(), structured: dict | None = None):
+        super().__init__(content)
+        self.structured = structured
+
+
+def call_tool_result(content) -> Any:
+    """The ``CallToolResult`` for a handler's reply, on either SDK.
+
+    Built by alias (``structuredContent``), which both generations accept:
+    1.x names the field that, 2.x names it ``structured_content`` with
+    ``structuredContent`` as its alias. 1.x's ``call_tool`` decorator passes a
+    ``CallToolResult`` through as it is (mcp/server/lowlevel/server.py).
+    """
+    import mcp.types as types
+
+    payload: dict[str, Any] = {"content": list(content)}
+    structured = getattr(content, "structured", None)
+    if structured is not None:
+        payload["structuredContent"] = structured
+    return types.CallToolResult.model_validate(payload)
+
+
 def register_handlers(
     server: Server,
     *,
@@ -249,7 +285,14 @@ def register_handlers(
         server.list_prompts()(list_prompts)
         server.get_prompt()(get_prompt)
         server.list_tools()(list_tools)
-        server.call_tool()(call_tool)
+
+        async def _legacy_call_tool(name: str, arguments: dict[str, Any]):
+            content = await call_tool(name, arguments)
+            # a reply with structuredContent goes out as a whole result; a
+            # bare list keeps the 1.x path it always took
+            return call_tool_result(content) if getattr(content, "structured", None) is not None else content
+
+        server.call_tool()(_legacy_call_tool)
         return
 
     import mcp.types as types
@@ -282,7 +325,7 @@ def register_handlers(
             content = await call_tool(params.name, params.arguments or {})
         finally:
             _REQUEST_CTX.reset(token)
-        return types.CallToolResult(content=list(content))
+        return call_tool_result(content)
 
     server.add_request_handler(
         "resources/list", types.PaginatedRequestParams, _on_list_resources

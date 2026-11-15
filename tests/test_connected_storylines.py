@@ -35,7 +35,7 @@ from fcpxml.export import DaVinciExporter
 from fcpxml.filtergraph import compile_timeline, lane_tracks
 from fcpxml.parser import FCPXMLParser
 from fcpxml.rational import parse_seconds
-from fcpxml.timeline_app import extract_payload
+from fcpxml.timeline_app import payload_of
 from fcpxml.writer import FCPXMLModifier
 
 FPS = 24
@@ -163,10 +163,14 @@ def test_each_storyline_accounts_for_every_item(project):
     assert tl.transitions == []
 
 
-def _call(tool, action, **args):
+def _reply(tool, action, **args):
     import server
 
-    return asyncio.run(server.call_tool(tool, {"action": action, "args": args}))[0].text
+    return asyncio.run(server.call_tool(tool, {"action": action, "args": args}))
+
+
+def _call(tool, action, **args):
+    return _reply(tool, action, **args)[0].text
 
 
 def _tc(frames: int) -> str:
@@ -184,7 +188,7 @@ def test_every_reader_sees_the_storyline_clips(project):
     for name, (lane, first, _n) in truth.items():
         assert f"| {name} | {lane} | asset-clip | {_tc(first)} |" in listed, listed
 
-    payload = extract_payload(_call("view", "view_timeline", filepath=path, thumbnails=False))
+    payload = payload_of(_reply("view", "view_timeline", filepath=path, thumbnails=False))
     rows = {c["name"]: (c["lane"], Fraction(c["start"])) for c in payload["clips"] if c["name"] != "BASE"}
     assert rows == {name: (lane, Fraction(first, FPS)) for name, (lane, first, _n) in truth.items()}
 
@@ -262,7 +266,7 @@ def test_the_text_timeline_lists_a_storylines_transitions(project):
 
 
 def test_the_view_payload_carries_a_storylines_transitions(project):
-    payload = extract_payload(_call("view", "view_timeline", filepath=str(project), thumbnails=False))
+    payload = payload_of(_reply("view", "view_timeline", filepath=str(project), thumbnails=False))
     assert [(t["lane"], Fraction(t["start"]), Fraction(t["duration"]), Fraction(t["lead"]))
             for t in payload["transitions"]] == [
         (1, Fraction(4), Fraction(1), Fraction(1, 2)),

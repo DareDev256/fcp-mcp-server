@@ -373,8 +373,14 @@ def _cell_text(cell: Cell, f: rs.Face, width: int, nominal: int) -> list:
     for note in cell.notes:
         lines += [(t, MUTE, "") for t in rs.fit(note, f, width)]
     if cell.flash:
-        for i, item in enumerate(cell.flash):
-            text = item if i == 0 else "· " + item  # a continuation, never read as the card's own src
+        # "flash 1f" and its record time break between them, never inside one;
+        # the flash's src is a continuation ("· src ...") where that fits, and
+        # on a phone card, where it does not, the red block alone says whose
+        # src it is: no line starts with a lone "·" (0.34: four lines at 390)
+        head, at = cell.flash[0].rsplit(" ", 1)
+        lines += [(t, DANGER, "") for t in wrap_items([head, at], f, width, sep=" ")]  # red: failure (a flash frame)
+        for item in cell.flash[1:]:
+            text = "· " + item if f.measure("· " + item) <= width else item
             lines += [(t, DANGER, "") for t in rs.fit(text, f, width)]  # red: failure (a flash frame)
     return lines
 
@@ -647,6 +653,17 @@ def mark_problems(runs, marks, clear: int = MARK_CLEAR) -> list:
     return out
 
 
+SILENCE_PAD = 4  # a silence label keeps this far inside its span's edges
+
+
+def silence_end_fits(end: Fraction, b0: Fraction, b1: Fraction, span: int, texts: tuple, f) -> bool:
+    """Whether the part of a silence that carries into the band [b0, b1)
+    (from b0 to ``end``) is wide enough, on that band's ``span`` px, to hold
+    the shortest of ``texts`` inside it."""
+    px = float((min(end, b1) - b0) / (b1 - b0) * span)
+    return px - 2 * SILENCE_PAD >= min(f.measure(t) for t in texts)
+
+
 def clear_x(x: int, width: int, y: int, height: int, marks: list, low: int, high: int,
             clear: int = MARK_CLEAR) -> Optional[int]:
     """The x nearest ``x`` (rightward first) where a label ``width`` wide
@@ -871,26 +888,38 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
             nx = clear_x(x0 + 8, f.measure(note), y_wave + 4, f.height, marks, x0, x1)
             if nx is not None:
                 r.text(note, f, nx, y_wave + 4, MUTE)
-        # a silence named once, in the band it starts in, clear of every mark
+        # A silence is named once, in the band it starts in, INSIDE its own
+        # span and clear of every mark: a label never sits over the waveform
+        # (0.34: band 2's "silence to ..." covered its first second of
+        # sound). Where it ends is said in the band it carries into when that
+        # band's part of it can hold the words, else on a second line under
+        # its name here.
         last_right = x0 - 12
         for a, c in spans:
             lo, hi = max(a, b0), min(c, b1)
             if hi <= lo:
                 continue
             frames_long = int(c * nominal + Fraction(1, 2)) - int(a * nominal + Fraction(1, 2))
+            ends = (f"silence to {timecode(c, fps)}", f"to {timecode(c, fps)}")
             if a >= b0:  # named once, in the band it starts in
-                texts = (f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
-                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a))
-            else:  # carried over from the band before: where it ends
-                texts = (f"silence to {timecode(c, fps)}", f"to {timecode(c, fps)}")
-            for text in texts:
-                want = min(max(x0, to_x(lo) + 4), x1 - f.measure(text))
-                tx = clear_x(want, f.measure(text), y_wave + 2, f.height, marks, max(x0, last_right + 12), x1)
-                if tx is not None:
-                    r.fill(tx - 2, y_wave + 2, f.measure(text) + 4, f.height, PANEL)
-                    r.text(text, f, tx, y_wave + 2, INK)
-                    last_right = tx + f.measure(text)
-                    break
+                rows = [(f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
+                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a))]
+                if c > b1 and not silence_end_fits(c, b1, b1 + (b1 - b0), span, ends, f):
+                    rows.append(ends[1:])
+            elif silence_end_fits(c, b0, b1, span, ends, f):  # carried over: where it ends
+                rows = [ends]
+            else:
+                continue  # said under its name in the band before
+            low, high = max(to_x(lo) + SILENCE_PAD, last_right + 12), to_x(hi) - SILENCE_PAD
+            for k, texts in enumerate(rows):
+                y = y_wave + 2 + k * f.height
+                for text in texts:
+                    tx = clear_x(low, f.measure(text), y, f.height, marks, low, high)
+                    if tx is not None:
+                        r.fill(tx - 2, y, f.measure(text) + 4, f.height, PANEL)
+                        r.text(text, f, tx, y, INK)
+                        last_right = max(last_right, tx + f.measure(text))
+                        break
         bands.append({"start": b0, "end": b1, "y_frames": y_f, "y_label": y_label, "y_ruler": y_ruler,
                       "y_wave": y_wave, "ticks": ticks, "base": base, "level": level, "scale": scale,
                       "label_step": step, "bottom": y_wave + WAVE_H})

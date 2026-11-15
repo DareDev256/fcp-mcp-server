@@ -23,7 +23,7 @@ import pytest
 
 from fcpxml.parser import FCPXMLParser
 from fcpxml.rational import parse_seconds, rational_fps
-from fcpxml.timeline_app import extract_payload
+from fcpxml.timeline_app import payload_of
 
 REPO = Path(__file__).resolve().parent.parent
 MARKERS = [  # (timecode the tool is given, name, type)
@@ -94,7 +94,7 @@ def test_every_reader_sees_the_three_markers(marked):
     for tc, name, kind in MARKERS:
         assert f"| {tc} | {name} | {kind} |" in listed, listed
     view = asyncio.run(server.call_tool("view", {"action": "view_timeline", "args": {"filepath": path, "thumbnails": False}}))
-    payload = extract_payload(view[0].text)
+    payload = payload_of(view)
     rows = {m["name"]: (m["type"], m["start"]) for m in payload["markers"]}
     fps = rational_fps(Fraction(24000, 1001))
     truth = _truth(marked)

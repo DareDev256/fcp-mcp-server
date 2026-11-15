@@ -46,16 +46,23 @@ TOKENS: dict[str, tuple[str, str]] = {
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
     "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
     "danger": ("#FF3B30", "#D70015"),       # FAIL (and missing media) only: never an intended edit
-    # 0.33 direction B only: Final Cut's role colours, drawn as the 4 px role
+    # Final Cut Pro 12.4's own role colours, the ONE sanctioned exception to
+    # "grey, cyan, red" (decision 4, 2026-11-12): drawn as the 3 px role
     # stripe on a clip and nowhere else (never text, never a fill; held by
-    # tests/test_palette.py). Close to Final Cut Pro 12.4's defaults (video
-    # blue, titles purple, dialogue light blue, music green, effects violet),
-    # set by eye, not sampled from the app.
-    "role-video": ("#4A7FE0", "#2F63C8"),
-    "role-titles": ("#9B6BDF", "#7A4FC2"),
-    "role-dialogue": ("#3BA4E8", "#1F7FC0"),
-    "role-music": ("#3FB55A", "#25913D"),
-    "role-effects": ("#C25BD1", "#9C3BAB"),
+    # tests/test_palette.py). Read from the installed app, not typed from
+    # memory: scripts/fcp_role_colours.m loads Flexo.framework and asks
+    # FFColorForRole +colorSchemeForIndex: for each of FFRole
+    # +builtInMainRoles (Video 0, Music 1, Effects 2, Titles 3, Dialogue 0).
+    # Dark mode takes the scheme's roleFocusActiveColor (the role's colour in
+    # Final Cut's timeline index, the brightest of the scheme, so it reads on
+    # black); light mode its itemBackgroundColor (the clip body in Final Cut's
+    # own timeline), which reads on white. Both converted to sRGB by AppKit.
+    # Final Cut gives Video and Dialogue the same colour index, so they match.
+    "role-video": ("#3763A1", "#1D3454"),
+    "role-titles": ("#7E53D2", "#503585"),
+    "role-dialogue": ("#3763A1", "#1D3454"),
+    "role-music": ("#28A154", "#15542C"),
+    "role-effects": ("#2A9FA9", "#17575C"),
 }
 
 ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash", "badge")
@@ -74,10 +81,25 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
 )
 
 # Fills a block sits on, against the ground it sits on: 3:1 or better, so a
-# clip reads as a shape before its name is read (WCAG 1.4.11, non-text).
+# clip reads as a shape before its name is read (WCAG 1.4.11, non-text). The
+# role stripes are held to it on the track area (the panel) in both modes.
 FILL_PAIRS: tuple[tuple[str, str], ...] = (
     ("mute", "panel"), ("ink", "panel"),
+    ("role-video", "panel"), ("role-titles", "panel"), ("role-dialogue", "panel"),
+    ("role-music", "panel"), ("role-effects", "panel"),
 )
+
+# Where each role colour came from: (Final Cut role, FFColorForRole colour
+# index, dark-mode scheme colour, light-mode scheme colour). The test holds
+# TOKENS to it, and scripts/fcp_role_colours.m prints the same table from
+# the installed app (tests/test_palette.py runs it when Final Cut is there).
+ROLE_SOURCE = {
+    "role-video": ("Video", 0, "roleFocusActiveColor", "itemBackgroundColor"),
+    "role-titles": ("Titles", 3, "roleFocusActiveColor", "itemBackgroundColor"),
+    "role-dialogue": ("Dialogue", 0, "roleFocusActiveColor", "itemBackgroundColor"),
+    "role-music": ("Music", 1, "roleFocusActiveColor", "itemBackgroundColor"),
+    "role-effects": ("Effects", 2, "roleFocusActiveColor", "itemBackgroundColor"),
+}
 
 # The README badges: black label, cyan message, dark text on the cyan.
 BADGE_LABEL = "ground"

@@ -21,7 +21,10 @@ surface), so the check is seen going red, not only green.
 from __future__ import annotations
 
 import colorsys
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -236,12 +239,77 @@ def test_the_scrim_is_full_before_the_text_starts():
 
 
 def test_text_over_a_thumbnail_is_the_label_colour():
-    """The role text sits on the same scrim: mute grey there read about 3:1."""
+    """Everything written inside a name over a picture (the name, the "off"
+    tag of a disabled clip) is the label colour on the scrim: mute grey there
+    read about 3:1. Since 0.34 the role is the stripe, never text."""
     from fcpxml import timeline_app
 
     html = timeline_app.render_app_html()
-    rule = re.search(r"\.clip\.has-thumb \.role \{([^}]*)\}", html)
-    assert rule and "color: var(--on-media)" in rule.group(1)
+    label = re.search(r"\.clip\.has-thumb \.label \{([^}]*)\}", html)
+    tag = re.search(r"\.clip\.has-thumb \.off-tag \{([^}]*)\}", html)
+    assert label and "color: var(--on-media)" in label.group(1)
+    assert tag and "color: var(--on-media)" in tag.group(1)
+    assert ".role {" not in html
+
+
+# ---------------------------------------------------------------------------
+# Final Cut's role colours (0.34): read from the app, held to the stripe
+# ---------------------------------------------------------------------------
+
+ROLE_PROBE = REPO / "scripts" / "fcp_role_colours.m"
+FCP_APP = Path("/Applications/Final Cut Pro.app")
+
+
+def test_every_role_token_says_where_it_came_from():
+    assert set(palette.ROLE_SOURCE) == set(palette.ROLE_TOKENS)
+    for name, (role, index, dark_col, light_col) in palette.ROLE_SOURCE.items():
+        assert name == "role-" + role.lower() and isinstance(index, int)
+        assert dark_col == "roleFocusActiveColor" and light_col == "itemBackgroundColor"
+
+
+def role_mismatches(table: str) -> list[str]:
+    """Tokens that differ from the probe's table (role, index, colours...)."""
+    lines = table.strip().splitlines()
+    head = lines[0].split("\t")
+    rows = {r.split("\t")[0]: dict(zip(head, r.split("\t"))) for r in lines[1:]}
+    out = []
+    for name, (role, index, dark_col, light_col) in palette.ROLE_SOURCE.items():
+        row = rows.get(role)
+        if row is None:
+            out.append(f"{role}: not a built-in role in this Final Cut")
+            continue
+        if int(row["index"]) != index:
+            out.append(f"{role}: colour index {row['index']}, the palette says {index}")
+        for mode, col, value in (("dark", dark_col, palette.dark(name)), ("light", light_col, palette.light(name))):
+            if row[col].upper() != value.upper():
+                out.append(f"{name} {mode}: Final Cut says {row[col]}, the palette says {value}")
+    return out
+
+
+@pytest.mark.skipif(not FCP_APP.is_dir() or shutil.which("clang") is None,
+                    reason="Final Cut Pro or clang not installed: the role colours are checked where they are")
+def test_role_colours_are_final_cuts_own(tmp_path):
+    """Compile scripts/fcp_role_colours.m, run it against the installed app
+    (Flexo.framework loaded into a tool; no window, no Final Cut process) and
+    hold every role token to what Final Cut computes."""
+    tool = tmp_path / "fcp_role_colours"
+    subprocess.run(["clang", "-fobjc-arc", "-framework", "Foundation", "-framework", "AppKit", "-o", str(tool),
+                    str(ROLE_PROBE)], check=True, capture_output=True, timeout=120)
+    env = dict(os.environ, DYLD_FRAMEWORK_PATH=str(FCP_APP / "Contents" / "Frameworks"))
+    run = subprocess.run([str(tool), str(FCP_APP)], capture_output=True, text=True, env=env, timeout=120)
+    assert run.returncode == 0, run.stderr[-500:]
+    assert role_mismatches(run.stdout) == [], run.stdout
+
+
+def test_the_role_check_goes_red():
+    """Mutation check: the 0.33 set-by-eye video blue, and a role whose index
+    moved, are both seen against a table in the probe's shape."""
+    table = ("role\tindex\tbaseColor\titemBackgroundColor\troleFocusActiveColor\taudioWaveformColor\n"
+             + "\n".join(f"{r}\t{i}\t-\t{palette.light(n)}\t{palette.dark(n)}\t-"
+                         for n, (r, i, _d, _l) in palette.ROLE_SOURCE.items()))
+    assert role_mismatches(table) == []
+    assert role_mismatches(table.replace(palette.dark("role-video"), "#4A7FE0", 1))
+    assert role_mismatches(table.replace("Music\t1", "Music\t4"))
 
 
 def disabled_button_problems(html: str) -> list[str]:

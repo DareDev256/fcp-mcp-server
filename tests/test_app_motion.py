@@ -273,8 +273,8 @@ FRAME_PROBLEMS = """(prev) => {
   const alpha = %s, out = [], now = {};
   document.querySelectorAll('#canvas .clip').forEach(c => {
     const lab = c.querySelector('.label'); if (!lab || lab.classList.contains('unfit')) return;
-    const r = document.createRange(); r.selectNodeContents(lab);
-    const need = r.getBoundingClientRect().width + 14, w = c.getBoundingClientRect().width;
+    const r = document.createRange(), ls = getComputedStyle(lab); r.selectNodeContents(lab);
+    const need = r.getBoundingClientRect().width + parseFloat(ls.paddingLeft) + parseFloat(ls.paddingRight), w = c.getBoundingClientRect().width;
     const key = c.__c.id, fits = w >= need - 0.5, a = alpha(lab);
     if (c.classList.contains('ghost')) {
       // on its way out: its name hidden, or whole
@@ -407,7 +407,7 @@ CUTS_A_TIME = """() => {
 def _playhead_inside_first_time(page) -> None:
     page.evaluate("""() => { const t = document.querySelector('.tick'), r = document.createRange(); r.selectNodeContents(t);
       const b = r.getBoundingClientRect(), c = document.getElementById('canvas').getBoundingClientRect(), st = window.__fcpApp.state;
-      st.playhead = ((b.left + b.right) / 2 - c.left - 48) / st.pps; window.__fcpApp.placePlayhead(); }""")
+      st.playhead = ((b.left + b.right) / 2 - c.left - window.__fcpApp.gutter) / st.pps; window.__fcpApp.placePlayhead(); }""")
 
 
 @pytest.mark.parametrize("how", ["select at 390", "inside the first time at 390", "inside the first time at 1440"])

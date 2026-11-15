@@ -125,7 +125,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install ffmpeg (decodes the hero's first frame)
+      - name: Install ffmpeg (the hero's first frame; the gym and interview fixtures)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       # Pillow measures pixels: the label scrim over a white frame, and the
@@ -136,10 +136,14 @@ jobs:
           pip install -e ".[dev]" playwright pillow
           python -m playwright install --with-deps chromium
 
-      - name: No label in the timeline app is cut, and the hero opens on the finished cut
+      # 0.34 gates on the three fixtures: fit (median clip, overview, no
+      # sideways page), track area, labels (short, cut, on top of each
+      # other), theme (host and OS), the structured payload in a stand-in
+      # host; each broken on purpose once inside the module.
+      - name: The timeline reads at a glance, no label is cut, and the hero opens on the finished cut
         env:
           FCP_MCP_REQUIRE_BROWSER: "1"
-        run: pytest tests/test_app_labels.py tests/test_app_motion.py tests/test_hero_assets.py -v
+        run: pytest tests/test_app_glance.py tests/test_app_labels.py tests/test_app_motion.py tests/test_hero_assets.py -v
 
   # An inline `actions/github-script` block is JavaScript that nothing parses
   # until the day it runs. The `report` job in publish.yml — the one whose

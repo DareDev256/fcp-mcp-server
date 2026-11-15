@@ -39,6 +39,7 @@ from fcpxml import timeline_app as _timeline_app
 from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.mcp_compat import (
     APPS_EXTENSION_ID,
+    ToolReply,
     build_tool,
     initialization_options,
     register_handlers,
@@ -66,7 +67,7 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.33.0"
+__version__ = "0.34.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -2146,8 +2147,18 @@ def _detect_flash_frames(
     for connected in getattr(tl, 'connected_clips', []) or []:
         if not getattr(connected, 'enabled', True):
             continue
-        position = connected.offset or Timecode(frames=0, frame_rate=fps)
-        consider(connected.name, connected.duration_seconds, relative(position))
+        # Where it plays, as models.timeline_position reads it: the parser's
+        # timeline_start (already on the sequence clock), never the raw
+        # offset, which is on the PARENT's clock (0.34, bug 6: a lane clip on
+        # a trimmed parent was reported 2 s early). Only a hand-built clip
+        # with no timeline_start falls back to its offset, re-based like a
+        # spine position.
+        resolved = getattr(connected, 'timeline_start', None)
+        if resolved is not None:
+            position = resolved
+        else:
+            position = relative(connected.offset or Timecode(frames=0, frame_rate=fps))
+        consider(connected.name, connected.duration_seconds, position)
 
     return flash_frames
 
@@ -3339,6 +3350,16 @@ def _tally_text(issues) -> str:
     return f"{t['FAIL']} FAIL, {t['WARN']} WARN, {t['INFO']} INFO"
 
 
+SEVERITY_ORDER = {"FAIL": 0, "WARN": 1, "INFO": 2}
+
+
+def _by_severity(issues) -> list:
+    """The issues FAIL first, then WARN, then INFO; within one severity in
+    the order the checks found them (0.34: the table listed them in check
+    order, so an INFO about a reused source sat above an offline FAIL)."""
+    return sorted(issues, key=lambda i: SEVERITY_ORDER.get(i[0], len(SEVERITY_ORDER)))
+
+
 def _verdict(issues) -> str:
     t = _tally(issues)
     return "FAIL" if t["FAIL"] else "WARN" if t["WARN"] else "PASS"
@@ -3375,7 +3396,7 @@ Not checked: {NOT_CHECKED}.
 """
     if issues:
         result += "| Result | Where | Issue |\n|--------|-------|-------|\n"
-        result += "\n".join(f"| {VERDICT[v]} | {at} | {what} |" for v, at, what, _check in issues[:20])
+        result += "\n".join(f"| {VERDICT[v]} | {at} | {what} |" for v, at, what, _check in _by_severity(issues)[:20])
         if len(issues) > 20:
             result += f"\n... and {plural(len(issues) - 20, 'more issue')}"
     else:
@@ -4845,8 +4866,11 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
 def _with_text(result, text: str) -> list:
     """The result with its leading text replaced and everything after it kept:
     the proof tools answer with image blocks and resource links after the
-    text, and a write's hash footer must not drop them (0.32)."""
-    return _text_result(text) + list(result[1:])
+    text, and a write's hash footer must not drop them (0.32); nor its
+    structuredContent (0.34, the view payload)."""
+    content = _text_result(text) + list(result[1:])
+    structured = getattr(result, "structured", None)
+    return ToolReply(content, structured) if structured is not None else content
 
 
 async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:

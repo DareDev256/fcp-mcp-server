@@ -28,7 +28,7 @@ from fcpxml import proofs, render
 from fcpxml.export import DaVinciExporter
 from fcpxml.filtergraph import compile_timeline, lane_tracks
 from fcpxml.parser import FCPXMLParser
-from fcpxml.timeline_app import extract_payload
+from fcpxml.timeline_app import payload_of
 
 FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 needs_ffmpeg = pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
@@ -200,10 +200,14 @@ def diag(tmp_path):
     return path
 
 
-def _call(tool, action, **args):
+def _reply(tool, action, **args):
     import server
 
-    return asyncio.run(server.call_tool(tool, {"action": action, "args": args}))[0].text
+    return asyncio.run(server.call_tool(tool, {"action": action, "args": args}))
+
+
+def _call(tool, action, **args):
+    return _reply(tool, action, **args)[0].text
 
 
 def _row(report, check):
@@ -243,7 +247,7 @@ def test_the_sheet_skips_a_disabled_clip_like_the_render(diag):
 
 
 def test_the_view_payload_carries_the_flag(diag):
-    payload = extract_payload(_call("view", "view_timeline", filepath=str(diag), thumbnails=False))
+    payload = payload_of(_reply("view", "view_timeline", filepath=str(diag), thumbnails=False))
     assert {c["name"]: c["enabled"] for c in payload["clips"]} == {
         "A": True, "FLICK": False, "B": True, "GONE": False}
 

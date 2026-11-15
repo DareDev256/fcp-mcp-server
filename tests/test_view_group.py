@@ -33,13 +33,15 @@ def test_every_view_action_is_reachable_through_call_tool():
 def test_view_timeline_carries_the_payload_and_the_hash(tmp_path):
     project = tmp_path / "sample.fcpxml"
     shutil.copy(SAMPLE, project)
-    text = _call("view_timeline", {"filepath": str(project)})[0].text
-    payload = timeline_app.extract_payload(text)
-    assert payload is not None
+    reply = _call("view_timeline", {"filepath": str(project)})
+    text = reply[0].text
+    payload = timeline_app.payload_of(reply)
+    assert payload is not None and reply.structured is payload  # 0.34: the structured content
     assert payload["file"]["path"] == str(project.resolve())
     assert payload["file"]["sha256"] == journal.file_hash(str(project))
-    assert payload["file"]["sha256"] in text.split(timeline_app.PAYLOAD_OPEN)[0]
+    assert payload["file"]["sha256"] in text
     assert "ui://fcp/timeline" in text
+    assert timeline_app.PAYLOAD_OPEN not in text  # the JSON is not in the text any more
 
 
 def test_view_timeline_is_read_only_and_not_journaled(tmp_path):
@@ -134,15 +136,15 @@ def test_a_gap_based_storyline_is_named_not_counted():
     assert "0 gaps (gap-based storyline)" in summary
     assert "1 gaps" not in summary
     # the app still gets the hatched span to draw
-    text = _call("view_timeline", {"filepath": str(MUSIC_VIDEO), "thumbnails": False})[0].text
-    assert len(timeline_app.extract_payload(text)["gaps"]) == 1
+    reply = _call("view_timeline", {"filepath": str(MUSIC_VIDEO), "thumbnails": False})
+    assert len(timeline_app.payload_of(reply)["gaps"]) == 1
 
 
 def test_markers_on_clips_are_counted():
     """Chapter markers live on their clips; 0.30 said "0 timeline markers"
     under a ruler showing them."""
-    text = _call("view_timeline", {"filepath": str(SAMPLE), "thumbnails": False})[0].text
-    payload = timeline_app.extract_payload(text)
+    reply = _call("view_timeline", {"filepath": str(SAMPLE), "thumbnails": False})
+    text, payload = reply[0].text, timeline_app.payload_of(reply)
     on_clips = sum(len(c["markers"]) for c in payload["clips"])
     total = on_clips + len(payload["markers"])
     assert on_clips > 0, "the fixture must carry clip markers for this to mean anything"

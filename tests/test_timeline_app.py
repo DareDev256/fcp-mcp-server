@@ -210,7 +210,7 @@ def test_gap_based_fixture_reports_the_spine_as_one_gap():
     payload = timeline_app.build_payload(tl)
     assert payload["gap_based"] is True
     assert payload["gaps"] == [{"start": "0/1", "duration": payload["duration"]}]
-    assert [ln["lane"] for ln in payload["lanes"]] == [2, 1, -1]
+    assert [ln["lane"] for ln in payload["lanes"]] == [2, 1, -1]  # top to bottom, as Final Cut stacks them
     assert payload["lanes"][-1]["kind"] == "audio"
 
 
@@ -292,7 +292,9 @@ def test_thumbnails_are_bounded_by_count_and_bytes():
     big = "data:image/jpeg;base64," + "A" * 150_000
     calls.clear()
     timeline_app.build_payload(tl, thumbnail=lambda m, at: (calls.append(at), big)[1])
-    assert len(calls) == 3  # 450 KB crosses the 400 KB cap; the fourth is never asked for
+    # each 150 KB: the fourth crosses the 600 KB cap (0.34); the fifth is never asked for
+    assert timeline_app.MAX_THUMBNAIL_BYTES == 600_000
+    assert len(calls) == 4
 
 
 def test_a_thumbnail_that_fails_costs_nothing_from_the_budget():
