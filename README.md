@@ -1,6 +1,6 @@
 <img src="docs/assets/logo-small-400.png" width="72" height="72" alt="">
 
-# fcp-mcp-server
+# AI tools for Final Cut Pro: fcp-mcp-server
 
 **Edit Final Cut Pro by talking to Claude, and watch the cut change.**
 

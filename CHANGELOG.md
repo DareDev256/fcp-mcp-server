@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.34.1] - 2026-11-15
+
+Metadata only: nothing the server reads, writes or shows changed, so it is
+safe to take at any point.
+
+### Changed
+- The PyPI summary, the MCP registry entry (a new `title` and its
+  description) and the README heading now open with "AI tools for Final Cut
+  Pro", the words people type into search (Google autocomplete, checked
+  2026-11-15: "final cut pro ai tools", "final cut pro ai", "fcpxml"). It is
+  called an MCP server, never a plugin: it does not run inside Final Cut.
+- PyPI keywords add `final-cut-pro-ai`, `fcpx` and `video-review`.
+
 ## [0.34.0] - 2026-11-15
 
 A timeline that reads at a glance, in one look. James picked direction B
