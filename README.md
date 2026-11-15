@@ -55,7 +55,7 @@ inside a chat client. [MP4](docs/assets/hero-watch-claude-cut.mp4),
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a
 host with MCP Apps draws it inline, like Final Cut's timeline: an overview of
-the whole cut, filmstrips over waveforms, Final Cut's role colours, a glyph
+the whole cut, filmstrips with their waveforms, Final Cut's role colours, a glyph
 per marker kind, a playhead that snaps to cuts, buttons that call the other
 tools.
 
@@ -645,10 +645,12 @@ What it shows (one look since 0.34, open like Final Cut's timeline): an
 overview bar with the whole cut and a box round the part in view; every
 lane (the storyline, connected lanes above, sound lanes below, each
 connected clip with its line to the storyline); clips 88 px tall (titles
-and sound 72 px, every clip 56 px on a phone) with a filmstrip over the
-waveform of their sound and a 3 px stripe in Final Cut 12.4's own role
-colour (read from the installed app by `scripts/fcp_role_colours.m`); a
-glyph per marker kind (standard, chapter, to-do, completed); gaps;
+and sound 72 px, every clip 56 px on a phone) with a filmstrip and, over
+its foot, the waveform of their sound (mirrored round a centre line and
+outlined at its real level, so a flat tone looks flat), and a 3 px stripe in
+Final Cut 12.4's own role colour (read from the installed app by
+`scripts/fcp_role_colours.m`); a glyph per marker kind (standard, chapter,
+to-do, completed), never without its whole name; gaps;
 dissolves; a flash frame in red, the only red; a timecode ruler with frame
 ticks and a playhead that snaps to cuts. Names are whole, cut in the middle
 so the ending survives, or on their lane's rail, and never 1-3 characters;

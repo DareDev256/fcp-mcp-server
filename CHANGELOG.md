@@ -56,15 +56,25 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   `itemBackgroundColor`, the clip body in Final Cut's own timeline). They are
   the one documented exception to grey/cyan/red in `fcpxml/palette.py`, for
   the stripe only. The 0.33 values were set by eye.
-- **Sound.** A waveform under every clip with sound (the filmstrip above
-  it), from the file's peak envelope: measured once per file with ffmpeg
+- **Sound.** A waveform on every clip with sound, from the file's peak
+  envelope, mirrored round a centre line and outlined at its real level, so
+  a flat tone reads as a flat waveform and never as a filled box; on a clip
+  with a picture it lies over the foot of the filmstrip on a shade that
+  deepens downward, nothing between them. Measured once per file with ffmpeg
   (10 levels a second, -48..0 dBFS), cached in the index as analysis kind
   `peaks@10/s`, and sent as a short array (4 points a second, at most 160 a
   clip). `FCP_MCP_INDEX=off` measures every time and gives the same arrays.
   `view_timeline` takes `waveforms=false` to skip it.
 - **Markers.** Separate glyphs for standard, chapter, to-do and completed
-  to-do markers; with a gap's markers read (below), `view`'s summary counts
-  the real total on a gap-based edit ("3 markers", where it said 0).
+  to-do markers. A glyph never shows without its whole name: each marker
+  (after any flash flag) takes the first of row 0 or row 1 with its name
+  right of the glyph, then left of it, that is in view and clear; one with
+  no such place is not drawn on the ruler, glyph and name both, and the
+  overview keeps its tick. With a gap's markers read (below), `view`'s
+  summary counts the real total on a gap-based edit ("3 markers", where it
+  said 0).
+- **The ruler** stacks the two marker rows, the time row, and the frame
+  ticks in their own band under it: no time touches a tick.
 - **Theme.** The app follows the host's `hostContext.theme` (and a
   `host-context-changed` notification), then `prefers-color-scheme`;
   `preview://` follows `prefers-color-scheme`. The computed background is
@@ -221,6 +231,16 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   view, the 0.32 fit (whole cut, no median rule), 36 px clips, the tap
   sheet never opened, SNAP_PX 0, the host-theme hook removed, the
   prefers-color-scheme block removed, `structuredContent` ignored.
+- `tests/test_app_glance.py`, round 2 (the gatekeeper's frame check of the
+  first build): every ruler time 2 px clear of every tick, on the three
+  fixtures at 1440, 430 and 390 in both themes (red with the first build's
+  ruler, where the frame ticks rose into a 15 px time row); every visible
+  marker glyph with its visible, whole name, on the three fixtures at every
+  width, and the interview's "Colour matched" turned to its glyph's left at
+  390 (red with names hidden and glyphs kept); no band of 4 or more rows of
+  one flat colour across a picture clip's body on the gym cut at 1440 and
+  390 in both themes (red with the first build's clip: the filmstrip
+  stopping 24 px short and the waveform on the panel colour under it).
 - `tests/test_view_budget.py` (0.34, no browser): on the wire of the
   installed SDK (1.x and 2.x run it), the five-clip text under 2,000
   characters with no picture in it and every clip named; the interview's
@@ -314,6 +334,9 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   colour index the FCPXML does not carry).
 - The role stripe uses a clip's main role; a clip whose picture and sound
   have different roles shows its picture's.
+- The empty-band gate covers clips with a picture. A clip with sound and no
+  picture shows its clip colour above and below a quiet waveform, as Final
+  Cut does; its waveform is the same outlined shape.
 - A gap's `<keyword>` and `<rating>` are still not read: `Timeline` has no
   field for them, so reading them is a model change, not a parser fix.
 - `<audition>` as an anchored item or inside a connected storyline is not
