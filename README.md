@@ -523,14 +523,15 @@ any browser or resource viewer with no host and no fetch. Outside an MCP Apps
 host it is read only; the edit buttons wait for one. (Until 0.32 this was a
 separate static render; there is now one timeline picture.)
 
-![Timeline preview: a 30-second gym-session cut as the preview:// page draws it in 0.34, the whole cut in the track: four chapter markers on the ruler, a red flash flag one frame before Press, a Bench clip connected on lane 1, six storyline clips each with a filmstrip over its own waveform band and a blue role stripe, a translucent cross dissolve with its bow-tie into Finish named on the row below, on a true-black page](docs/assets/timeline-preview.png)
+![Timeline preview: a 30-second gym-session cut as the preview:// page draws it in 0.34, the whole cut in the track: an overview minimap, four chapter markers on the ruler, a red flash flag one frame before Press, grey lane tags, a Bench clip connected on lane 1, six storyline clips each named inside, with a filmstrip over its own waveform band and a blue role stripe, a translucent cross dissolve into Finish, on a true-black page](docs/assets/timeline-preview.png)
 
 *A 30-second gym-session cut (`demo/fixtures/gym_session.py`: the author's own
-footage, with test tones for sound), drawn from its FCPXML and its media at
-1440 px, dark: the whole cut in the track, the filmstrip over each clip's
-waveform band, the 1-frame flash before Press in red, the 0.5 s cross dissolve
-named on the row under it. `scripts/readme_timeline.py` refuses to save it
-when a clip has no filmstrip or waveform or a marker is missing.*
+footage, with synthesised tones for sound), drawn from its FCPXML and its
+media at 1440 px, dark: the whole cut in the track, every clip named inside,
+the filmstrip over each clip's waveform band (one -60..0 dBFS scale), the
+1-frame flash before Press in red, the 0.5 s cross dissolve over the cut into
+Finish. `scripts/readme_timeline.py` refuses to save it when a clip has no
+filmstrip or waveform or a marker is missing.*
 
 ### Proof you can read (v0.32.0)
 
@@ -631,7 +632,7 @@ filepath; a host that speaks MCP Apps opens the `ui://fcp/timeline`
 resource in a sandboxed iframe and posts the result into it. Which hosts do
 that, and which get text, is in [Where the timeline draws](#where-the-timeline-draws).
 
-![The MCP Apps timeline in 0.34 on an 18-minute two-camera interview: an overview bar with the whole cut, a ruler with chapter, standard and to-do marker glyphs, the whole 18 minutes in the track, lower thirds as purple Titles bars named on rows above the camera cuts, each cut a filmstrip over its waveform band with a blue dialogue stripe and its name inside or on the rows below, a music bed with a green stripe and whooshes with teal effects stripes below, a cyan playhead, and a compact selection panel](docs/screenshots/2026-11-15_034-interview-1440.png)
+![The MCP Apps timeline in 0.34 on an 18-minute two-camera interview: an overview minimap in role colours, a ruler with chapter, standard, to-do and completed marker glyphs each named, grey lane tags, the whole 18 minutes in the track, lower thirds as purple Titles bars above the camera cuts, each cut a filmstrip over its waveform band with a blue dialogue stripe, a music bed named Theme with a green stripe and whooshes with teal effects stripes below, a cyan playhead, and a compact selection panel](docs/screenshots/2026-11-15_034-interview-1440.png)
 
 *The app in headless Chromium, 1440 px, on `demo/fixtures/interview.py` (two
 synthetic cameras, 44 cuts, lower thirds, markers of all four kinds; ffmpeg
@@ -641,21 +642,25 @@ test patterns and sine tones, no person). Light theme:
 music video at 1440, 430 and 390 are beside them.*
 
 What it shows (one look since 0.34, open like Final Cut's timeline): the
-whole cut in the track at open, and an overview bar with the whole cut and a
-box round the part in view once you zoom; every
-lane (the storyline, connected lanes above, sound lanes below, each
-connected clip with its line to the storyline); clips 88 px tall (titles
-and sound 72 px, every clip 56 px on a phone) with a filmstrip over the
-waveform's own band, and a 3 px stripe in Final Cut 12.4's own role colour
-(read from the installed app by `scripts/fcp_role_colours.m`); titles in the
-Titles colour; transitions as a translucent overlay with Final Cut's
-bow-tie; a glyph per marker kind (standard, chapter, to-do, completed),
-always with its name, or counted in a cluster chip; gaps;
-a flash frame in red, the only red; a timecode ruler with frame
-ticks and a playhead that snaps to cuts; no line ever drawn through text. Names are whole, cut in the middle
-so the ending survives, or on their lane's name rows with a leader, and
-never 1-3 characters; a tap shows a clip's name, start and length in a strip
-above the ruler. Click a clip for its details; drag on the ruler for a range. It
+cut's fit region at open (the whole cut, or a music video's picture; at
+phone width a long cut zooms in to a 64 px median clip and scrolls), and an
+overview minimap of the whole cut (lanes in role colours, a tick per
+marker, the flash, a window round the part in view); every lane (the
+storyline, connected lanes above, sound lanes below, each connected clip
+with its stem and anchor dot on the storyline), with grey lane tags on a
+desktop; clips 88 px tall (titles and sound 72 px, every clip 56 px on a
+phone) with a filmstrip over the waveform's own band (one -60..0 dBFS
+scale, a column per peak), and a 3 px stripe in Final Cut 12.4's own role
+colour (read from the installed app by `scripts/fcp_role_colours.m`, the
+same in both themes); titles in the Titles colour; transitions as a
+translucent overlay; a glyph per marker kind (standard, chapter, to-do,
+completed), always with its name, or in a bracketed run where the names
+cannot all fit; gaps; a flash frame in red, the only red; a timecode ruler
+with frame ticks and a playhead on top that snaps to cuts; no mark drawn
+over another (the playhead, once moved, is a cursor over them). A clip's name is inside it, whole, or not drawn, and
+the hint strip counts the names shown ("4 of 58 names shown · tap or zoom"
+on the interview at 390); a tap shows a clip's name, start and length in a strip above the
+ruler, the record times in cyan. Click a clip for its details; drag on the ruler for a range. It
 follows the host's theme, then the OS's. The buttons call back into the
 server through the host: **Inspect** (`view_clip`) and **Find similar
 shots** (`find_shots`) are reads; **Add marker at playhead** (`mark`) and
