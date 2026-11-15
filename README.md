@@ -523,15 +523,14 @@ any browser or resource viewer with no host and no fetch. Outside an MCP Apps
 host it is read only; the edit buttons wait for one. (Until 0.32 this was a
 separate static render; there is now one timeline picture.)
 
-![Timeline preview: the 164-second music-video fixture as the preview:// page draws it in 0.34, an overview bar with the whole cut over the tracks, two connected video lanes with their names on rails, the gap the clips hang from, and the music bed on lane -1 with its green music-role stripe, on a true-black page](docs/assets/timeline-preview.png)
+![Timeline preview: a 30-second gym-session cut as the preview:// page draws it in 0.34, the whole cut in the track: four chapter markers on the ruler, a red flash flag one frame before Press, a Bench clip connected on lane 1, six storyline clips each with a filmstrip over its own waveform band and a blue role stripe, a translucent cross dissolve with its bow-tie into Finish named on the row below, on a true-black page](docs/assets/timeline-preview.png)
 
-*`examples/music-video.fcpxml`, 164 seconds, drawn from its FCPXML alone (its
-media paths do not exist here, so no pictures or sound): eight connected
-clips on three lanes over a gap-based storyline. The tracks open where the
-median clip is 44 px wide and the overview bar above carries the whole cut,
-the part in view boxed. A clip too narrow for its whole name has it on its
-lane's rail; one under 28 px opens a sheet with its name, start and length
-when tapped.*
+*A 30-second gym-session cut (`demo/fixtures/gym_session.py`: the author's own
+footage, with test tones for sound), drawn from its FCPXML and its media at
+1440 px, dark: the whole cut in the track, the filmstrip over each clip's
+waveform band, the 1-frame flash before Press in red, the 0.5 s cross dissolve
+named on the row under it. `scripts/readme_timeline.py` refuses to save it
+when a clip has no filmstrip or waveform or a marker is missing.*
 
 ### Proof you can read (v0.32.0)
 
@@ -632,7 +631,7 @@ filepath; a host that speaks MCP Apps opens the `ui://fcp/timeline`
 resource in a sandboxed iframe and posts the result into it. Which hosts do
 that, and which get text, is in [Where the timeline draws](#where-the-timeline-draws).
 
-![The MCP Apps timeline in 0.34 on an 18-minute two-camera interview: an overview bar with the whole cut, a ruler with chapter, standard and to-do marker glyphs, lower thirds named on a rail above the camera cuts, each cut a filmstrip over its waveform with a blue dialogue stripe, a music bed with a green stripe and whooshes with teal effects stripes below, a cyan playhead, and a compact selection panel](docs/screenshots/2026-11-15_034-interview-1440.png)
+![The MCP Apps timeline in 0.34 on an 18-minute two-camera interview: an overview bar with the whole cut, a ruler with chapter, standard and to-do marker glyphs, the whole 18 minutes in the track, lower thirds as purple Titles bars named on rows above the camera cuts, each cut a filmstrip over its waveform band with a blue dialogue stripe and its name inside or on the rows below, a music bed with a green stripe and whooshes with teal effects stripes below, a cyan playhead, and a compact selection panel](docs/screenshots/2026-11-15_034-interview-1440.png)
 
 *The app in headless Chromium, 1440 px, on `demo/fixtures/interview.py` (two
 synthetic cameras, 44 cuts, lower thirds, markers of all four kinds; ffmpeg
@@ -641,21 +640,22 @@ test patterns and sine tones, no person). Light theme:
 `docs/screenshots/2026-11-15_034-interview-390.png`. The gym cut and the
 music video at 1440, 430 and 390 are beside them.*
 
-What it shows (one look since 0.34, open like Final Cut's timeline): an
-overview bar with the whole cut and a box round the part in view; every
+What it shows (one look since 0.34, open like Final Cut's timeline): the
+whole cut in the track at open, and an overview bar with the whole cut and a
+box round the part in view once you zoom; every
 lane (the storyline, connected lanes above, sound lanes below, each
 connected clip with its line to the storyline); clips 88 px tall (titles
-and sound 72 px, every clip 56 px on a phone) with a filmstrip and, over
-its foot, the waveform of their sound (mirrored round a centre line and
-outlined at its real level, so a flat tone looks flat), and a 3 px stripe in
-Final Cut 12.4's own role colour (read from the installed app by
-`scripts/fcp_role_colours.m`); a glyph per marker kind (standard, chapter,
-to-do, completed), never without its whole name; gaps;
-dissolves; a flash frame in red, the only red; a timecode ruler with frame
-ticks and a playhead that snaps to cuts. Names are whole, cut in the middle
-so the ending survives, or on their lane's rail, and never 1-3 characters;
-a clip too narrow for any name opens a sheet with its name, start and
-length. Click a clip for its details; drag on the ruler for a range. It
+and sound 72 px, every clip 56 px on a phone) with a filmstrip over the
+waveform's own band, and a 3 px stripe in Final Cut 12.4's own role colour
+(read from the installed app by `scripts/fcp_role_colours.m`); titles in the
+Titles colour; transitions as a translucent overlay with Final Cut's
+bow-tie; a glyph per marker kind (standard, chapter, to-do, completed),
+always with its name, or counted in a cluster chip; gaps;
+a flash frame in red, the only red; a timecode ruler with frame
+ticks and a playhead that snaps to cuts; no line ever drawn through text. Names are whole, cut in the middle
+so the ending survives, or on their lane's name rows with a leader, and
+never 1-3 characters; a tap shows a clip's name, start and length in a strip
+above the ruler. Click a clip for its details; drag on the ruler for a range. It
 follows the host's theme, then the OS's. The buttons call back into the
 server through the host: **Inspect** (`view_clip`) and **Find similar
 shots** (`find_shots`) are reads; **Add marker at playhead** (`mark`) and
