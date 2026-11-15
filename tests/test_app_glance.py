@@ -355,6 +355,181 @@ def test_the_track_area_gate_goes_red(browser, payloads):
 
 
 # ---------------------------------------------------------------------------
+# Round 2 (the gatekeeper's frame check of abb76b1): ticks through the
+# times, a marker glyph without its name, an empty band in the clip
+# ---------------------------------------------------------------------------
+
+RULER = r"""() => {
+  const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+  // every mark the ruler draws: the frame ticks, and each time's own tick line (its left border)
+  const marks = [...document.querySelectorAll('#canvas .ftick')].map(box)
+    .concat([...document.querySelectorAll('#canvas .tick')].map(e => { const b = box(e); return { l: b.l, r: b.l + 1, t: b.t, b: b.b }; }));
+  const out = [];
+  [...document.querySelectorAll('#canvas .tick')].filter(t => getComputedStyle(t).visibility !== 'hidden').forEach(t => {
+    const g = document.createRange(); g.selectNodeContents(t); const b = g.getBoundingClientRect();
+    marks.forEach(m => { if (m.l < b.right + 2 && b.left < m.r + 2 && m.t < b.bottom + 2 && b.top < m.b + 2)
+      out.push(t.textContent + ' touches a tick at x ' + m.l.toFixed(1) + ' (text ' + b.top.toFixed(1) + '-' + b.bottom.toFixed(1) + ', tick ' + m.t.toFixed(1) + '-' + m.b.toFixed(1) + ')'); });
+  });
+  return { problems: out, times: document.querySelectorAll('#canvas .tick').length };
+}"""
+
+
+def ruler_problems(browser, html: str, width: int, scheme: str) -> dict:
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme=scheme)
+    try:
+        page.set_content(html)
+        page.wait_for_timeout(50)
+        return page.evaluate(RULER)
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("fixture", FIXTURES)
+def test_no_ruler_time_touches_a_tick(browser, payloads, fixture, width, scheme):
+    """Every time on the ruler keeps 2 px from every tick (the frame ticks
+    under it and every time's own line): round 2 found the frame ticks
+    running up through the digits' lower edge."""
+    facts = ruler_problems(browser, timeline_app.render_page_html(payloads[fixture]), width, scheme)
+    assert facts["times"] >= 2 and facts["problems"] == [], facts
+
+
+def test_the_ruler_gate_goes_red(browser, payloads):
+    """Mutation check: abb76b1's ruler (one 15 px time row the frame ticks
+    rose into) is seen."""
+    html = timeline_app.render_page_html(payloads["gym"])
+    new = ('.ruler { position: relative; height: 62px;',
+           'height: 24px; border-left: 1px solid var(--line-strong); padding: 0 0 9px 8px;', '.ftick.sec { height: 6px; }')
+    old = ('.ruler { position: relative; height: 54px;',
+           'height: 15px; border-left: 1px solid var(--line-strong); padding-left: 8px;', '.ftick.sec { height: 7px; }')
+    for a, b in zip(new, old):
+        assert html.count(a) == 1, a
+        html = html.replace(a, b)
+    assert ruler_problems(browser, html, 1440, "dark")["problems"]
+
+
+MARKS = r"""() => {
+  const sc = document.getElementById('scroller').getBoundingClientRect(), gutter = window.__fcpApp.gutter;
+  return [...document.querySelectorAll('#canvas .mlabel')].map(m => {
+    const g = m.querySelector('.mg'), gb = g.getBoundingClientRect(), cs = getComputedStyle(m);
+    const glyph = getComputedStyle(g).visibility !== 'hidden' && gb.right > sc.left && gb.left < sc.right && gb.width > 0;
+    const t = [...m.childNodes].filter(n => n.nodeType === 3), r = document.createRange();
+    if (t.length) { r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length); }
+    const tb = t.length ? r.getBoundingClientRect() : { left: 0, right: 0, width: 0 };
+    const name = cs.visibility !== 'hidden' && cs.color !== 'rgba(0, 0, 0, 0)' && tb.width > 0 &&
+                 tb.left >= sc.left + gutter - 0.5 && tb.right <= sc.right - 1 + 0.5;
+    return { text: m.textContent, title: m.title.replace(/ \([a-z]+\)$/, ''), glyph, name, flip: m.classList.contains('flip') };
+  });
+}"""
+
+
+def marker_problems(marks: list) -> list[str]:
+    """A glyph on screen whose name is not, or not whole."""
+    return [f"{m['title']!r}: glyph without its name" for m in marks if m["glyph"] and not (m["name"] and m["text"] == m["title"])]
+
+
+def _marks(browser, html: str, width: int, scheme: str = "dark") -> list:
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme=scheme)
+    try:
+        page.set_content(html)
+        page.wait_for_timeout(50)
+        return page.evaluate(MARKS)
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("fixture", FIXTURES)
+def test_a_marker_glyph_never_shows_without_its_name(browser, payloads, fixture, width):
+    marks = _marks(browser, timeline_app.render_page_html(payloads[fixture]), width)
+    assert marker_problems(marks) == [], marks
+    assert any(m["glyph"] for m in marks), "no marker drawn at all"
+
+
+def test_a_marker_name_turns_to_the_side_that_fits(browser, payloads):
+    """At 390 the interview's third marker (Colour matched, a completed to-do)
+    has no room right of its glyph in view: its name goes on the glyph's
+    left, whole (round 2 found the glyph alone)."""
+    marks = {m["title"]: m for m in _marks(browser, timeline_app.render_page_html(payloads["interview"]), 390)}
+    assert marks["Colour matched"]["glyph"] and marks["Colour matched"]["name"] and marks["Colour matched"]["flip"]
+
+
+def test_the_marker_gate_goes_red(browser, payloads):
+    """Mutation check: abb76b1 hid a crowded or cut name and kept its glyph."""
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = 'if (!done) m.classList.add("unfit", "crowded", "gone");'
+    side = "[[0, false], [1, false], [0, true], [1, true]]"
+    assert html.count(old) == 1 and html.count(side) == 1
+    broken = html.replace(old, 'if (!done) m.classList.add("unfit", "crowded");').replace(side, "[[0, false], [1, false]]")
+    assert marker_problems(_marks(browser, broken, 390))
+
+
+FLAT_HIDE = (".playhead, .markers, .flash, .mk, .trans, .conn, .range, .clip .label, .rail "
+             "{ visibility: hidden !important; }")
+
+
+def flat_bands(browser, html: str, width: int, scheme: str) -> list[str]:
+    """Rows inside each picture clip's body (its borders and the 3 px role
+    stripe left out, and 8 px each side for the rounded corners) that are one
+    flat colour across the clip: 4 or more such rows of the same colour, one
+    under the other, are an empty band. (A plain wall under the shade that
+    deepens downward changes colour row by row; a band does not.)"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme=scheme, device_scale_factor=1)
+    out = []
+    try:
+        page.set_content(html)
+        page.wait_for_timeout(50)
+        page.add_style_tag(content=FLAT_HIDE)
+        boxes = page.evaluate("""() => [...document.querySelectorAll('#canvas .clip.has-thumb')].map(c => {
+            const b = c.getBoundingClientRect(); return { name: c.__c.name, x: b.left, y: b.top, w: b.width, h: b.height }; })""")
+        for b in boxes:
+            if b["w"] < 24:
+                continue
+            shot = Image.open(BytesIO(page.screenshot(clip={"x": b["x"], "y": b["y"], "width": b["w"], "height": b["h"]})))
+            im = shot.convert("RGB")
+            width_px, height_px = im.size
+            run, colour = 0, None
+            for y in range(2, height_px - 5):  # the 1 px border, and the 3 px stripe over the bottom border
+                row = [im.getpixel((x, y)) for x in range(8, width_px - 8)]
+                lo, hi = [min(p[k] for p in row) for k in range(3)], [max(p[k] for p in row) for k in range(3)]
+                flat = all(h - lo_ <= 2 for lo_, h in zip(lo, hi))
+                # a band is rows of ONE colour: the same flat colour row after row
+                same = flat and colour is not None and all(abs(a - c) <= 2 for a, c in zip(row[0], colour))
+                run, colour = (run + 1, colour) if same else ((1, row[0]) if flat else (0, None))
+                if run == 4:
+                    out.append(f"{b['name']} at {width}/{scheme}: rows {y - 3}-{y} are one colour {colour}")
+    finally:
+        page.close()
+    return out
+
+
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_no_empty_band_in_a_clip(browser, payloads, width, scheme):
+    """The gym's clips carry picture and sound: the filmstrip and the waveform
+    share the clip, nothing flat between them; the flat tone (Bench, Press,
+    Finish are steady sines) is an outlined shape at its level round a centre
+    line, never a filled box."""
+    assert flat_bands(browser, timeline_app.render_page_html(payloads["gym"]), width, scheme) == []
+
+
+def test_the_empty_band_gate_goes_red(browser, payloads):
+    """Mutation check: abb76b1's clip (the filmstrip stopping 24 px short of
+    the foot, the waveform on the panel colour under it) is seen."""
+    html = timeline_app.render_page_html(payloads["gym"])
+    new = ".clip.has-thumb .wave { height: 44%; background: linear-gradient(to bottom, transparent, var(--shade)); }"
+    assert html.count(new) == 1
+    broken = html.replace(new, ".clip.has-thumb.has-wave .thumbs { bottom: 24px; } "
+                               ".clip.has-thumb .wave { height: 21px; background: var(--panel); }")
+    assert flat_bands(browser, broken, 1440, "dark")
+
+
+# ---------------------------------------------------------------------------
 # Names: the middle ellipsis, the rail, the tap sheet, the playhead
 # ---------------------------------------------------------------------------
 

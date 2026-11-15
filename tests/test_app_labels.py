@@ -198,8 +198,8 @@ def test_a_marker_at_the_playhead_keeps_its_flag(browser, width):
 
 @pytest.mark.parametrize("mutation,old,new", [
     ("the playhead back over the marker rows", ".playhead { position: absolute; top: 33px;", ".playhead { position: absolute; top: 0;"),
-    ("tick text back against the playhead head", "border-left: 1px solid var(--line-strong); padding-left: 8px;",
-     "border-left: 1px solid var(--line-strong); padding-left: 4px;"),
+    ("tick text back against the playhead head", "border-left: 1px solid var(--line-strong); padding: 0 0 9px 8px;",
+     "border-left: 1px solid var(--line-strong); padding: 0 0 9px 4px;"),
 ], ids=["playhead-over-markers", "tick-under-head"])
 def test_the_touch_check_goes_red(browser, mutation, old, new):
     """Mutation checks: the round-3 collisions, put back, are seen."""

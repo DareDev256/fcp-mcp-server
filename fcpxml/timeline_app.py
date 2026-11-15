@@ -522,17 +522,22 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   #scroller { position: relative; overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line);
     border-radius: 8px; background: var(--panel); }
   #canvas { position: relative; min-width: 100%; padding-bottom: 8px; }  /* the last lane never meets the border */
-  /* The ruler: two marker rows (a glyph per kind, the name beside it) over
-     the timecode row. A time starts 8 px right of its tick, clear of the
-     playhead's head, so 00:00:00:00 shows with the playhead at 0. */
-  .ruler { position: relative; height: 54px; border-bottom: 1px solid var(--line); cursor: crosshair; user-select: none; }
-  .tick { position: absolute; bottom: 0; height: 15px; border-left: 1px solid var(--line-strong); padding-left: 8px;
+  /* The ruler, top to bottom: two marker rows (a glyph per kind, the name
+     beside it), the timecode row, then the frame ticks in their own 8 px
+     band under it: a time never touches a tick (0.34 round 2: the ticks ran
+     up through the digits). A time starts 8 px right of its own tick line,
+     clear of the playhead's head, so 00:00:00:00 shows with the playhead at 0. */
+  .ruler { position: relative; height: 62px; border-bottom: 1px solid var(--line); cursor: crosshair; user-select: none; }
+  .tick { position: absolute; bottom: 0; height: 24px; border-left: 1px solid var(--line-strong); padding: 0 0 9px 8px;
     font: 11px/15px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--mute); white-space: nowrap; }
   .ftick { position: absolute; bottom: 0; width: 0; height: 4px; border-left: 1px solid var(--line-strong); }
-  .ftick.sec { height: 7px; }
+  .ftick.sec { height: 6px; }
   .mlabel { position: absolute; top: 2px; font-size: 11px; line-height: 14px; color: var(--ink); white-space: nowrap;
     padding: 0 3px 0 11px; }
   .mlabel.row1 { top: 17px; }
+  /* the name on the glyph's left, when the right has no room */
+  .mlabel.flip { transform: translateX(-100%); padding: 0 11px 0 3px; }
+  .mlabel.flip .mg { left: auto; right: -4px; }
   /* Final Cut's marker glyphs: a standard marker, a chapter marker (a pin),
      a to-do (hollow) and a completed to-do (filled, with its ring). */
   .mlabel .mg { position: absolute; left: -4px; top: 3px; width: 8px; height: 8px; background: var(--accent); }
@@ -540,9 +545,12 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .mlabel .mg.chapter { height: 11px; top: 2px; clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); }
   .mlabel .mg.todo { background: transparent; border: 2px solid var(--accent); }
   .mlabel .mg.completed { border: 2px solid var(--accent); box-shadow: inset 0 0 0 1px var(--panel); }
-  /* A label that does not fit is hidden, never cut: its flag, tick or clip stays,
-     and the name is in the title tooltip and the tap sheet. fitLabels() decides. */
-  .mlabel.unfit, .gap.unfit, .flag.unfit { color: transparent; }
+  /* A label that does not fit is hidden, never cut: its tick or clip stays,
+     and the name is in the title tooltip and the tap sheet. fitLabels() decides.
+     A marker or flash flag with no room is not drawn on the ruler at all,
+     glyph and name both (placeMarkers(); the overview keeps its tick). */
+  .mlabel.unfit, .gap.unfit { color: transparent; }
+  .mlabel.gone, .flag.unfit { visibility: hidden; }
   .tick.unfit { visibility: hidden; }
   .tick.under-playhead { visibility: hidden; }  /* a ruler time the playhead would cut through */
   .clip .label.unfit, .rail .rl.unfit { visibility: hidden; }
@@ -564,11 +572,17 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
      never stretched, never one frame blown up to fill a long clip. */
   .clip .thumbs { position: absolute; inset: 0; background-repeat: repeat-x; background-size: auto 100%;
     background-position: center; }
-  /* A clip with picture AND sound: the filmstrip over the sound, as Final Cut draws it. */
-  .clip.has-thumb.has-wave .thumbs { bottom: 24px; }
-  .clip .wave { position: absolute; left: 0; right: 0; bottom: 3px; width: 100%; height: 62%; }
-  .clip.has-thumb .wave { height: 21px; background: var(--panel); }
-  .clip .wave path { fill: var(--mute); }
+  /* The sound: its peaks mirrored round a centre line, outlined, at their
+     real level, so a flat tone reads as a flat waveform and never as a filled
+     box. With a picture it lies over the foot of the filmstrip on a shade
+     that deepens downward: the filmstrip and the waveform share the clip
+     with nothing between them (0.34 round 2: an empty band sat between). */
+  .clip .wave { position: absolute; left: 0; right: 0; bottom: 3px; width: 100%; height: 62%; overflow: visible; }
+  .clip.has-thumb .wave { height: 44%; background: linear-gradient(to bottom, transparent, var(--shade)); }
+  .clip .wave .env { fill: var(--mute); fill-opacity: .45; stroke: var(--ink); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+  .clip .wave .mid { fill: none; stroke: var(--ink); stroke-opacity: .55; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+  .clip.has-thumb .wave .env { fill: var(--on-media); fill-opacity: .3; stroke: var(--on-media); }
+  .clip.has-thumb .wave .mid { stroke: var(--on-media); }
   /* The role: a 3 px stripe along the clip's foot in Final Cut 12.4's own
      role colour (fcpxml/palette.py says where each was read). */
   .clip .stripe { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; z-index: 2; }
@@ -603,7 +617,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   .gap { position: absolute; top: 8px; bottom: 8px; border: 1px solid var(--line-strong); border-radius: 7px;
     background: var(--raised); color: var(--mute); padding: 4px 8px; font-size: 11px; pointer-events: none;
     overflow: hidden; white-space: nowrap; }
-  .markers { position: absolute; left: 0; right: 0; top: 54px; bottom: 0; pointer-events: none; }
+  .markers { position: absolute; left: 0; right: 0; top: 62px; bottom: 0; pointer-events: none; }
   .tmark { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px solid var(--accent); opacity: .55; }
   /* The playhead starts under the two marker rows, 2 px clear of the second
      row's flags; its head clears the tick text (padding-left 8px). */
@@ -1060,14 +1074,17 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var t = String(type || "").toLowerCase();
     return t === "chapter" ? "chapter" : (t === "todo" || t === "incomplete") ? "todo" : t === "completed" ? "completed" : "standard";
   }
-  // The sound, up from the clip's foot as Final Cut draws it: levels 0-100
-  // (-48..0 dBFS peaks) built into an SVG by the HTML parser (numbers only).
+  // The sound: levels 0-100 (-48..0 dBFS peaks) mirrored round a centre
+  // line, an outlined envelope and the line itself, built into an SVG by the
+  // HTML parser (numbers only). A silent stretch is the centre line alone.
   function waveEl(levels) {
-    var n = levels.length, top = [];
-    levels.forEach(function (v, i) { top.push(i + "," + (100 - v)); });
-    var d = "M" + ["0,100"].concat(top, [(n - 1) + ",100"]).join(" L") + " Z";
+    var n = levels.length, top = [], bottom = [];
+    // full scale is 94% of the band, so a loud peak's outline stays off the role stripe
+    levels.forEach(function (v, i) { var h = v * 0.47; top.push(i + "," + (50 - h)); bottom.unshift(i + "," + (50 + h)); });
+    var d = "M" + top.concat(bottom).join(" L") + " Z", last = Math.max(1, n - 1);
     var holder = el("div");
-    holder.innerHTML = '<svg class="wave" viewBox="0 0 ' + Math.max(1, n - 1) + ' 100" preserveAspectRatio="none"><path d="' + d + '"></path></svg>';
+    holder.innerHTML = '<svg class="wave" viewBox="0 0 ' + last + ' 100" preserveAspectRatio="none"><path class="env" d="' + d +
+      '"></path><path class="mid" d="M0,50 L' + last + ',50"></path></svg>';
     return holder.firstChild;
   }
   // The only CSS image the shell sets: a data: thumbnail (the caller checks it is one).
@@ -1138,11 +1155,10 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var ft = el("div", "ftick" + (F % nom === 0 ? " sec" : "")); ft.style.left = x(F / nom * perSec) + "px"; ruler.appendChild(ft);
     }
     ruler.dataset.frames = String(sub);
-    // Marker names on two rows: sequence markers AND clip markers (a chapter
+    // Markers on two rows: sequence markers AND clip markers (a chapter
     // marker lives on its clip in FCPXML; every m.start is already on the
-    // sequence clock), left to right; on neither row, the flag stays and the
-    // name goes to its tooltip, never printed over its neighbour.
-    var rowEnd = [-1, -1], named = p.markers.slice();
+    // sequence clock); placeMarkers() gives each a row and a side.
+    var named = p.markers.slice();
     p.clips.forEach(function (c) { (c.markers || []).forEach(function (m) { named.push(m); }); });
     named.sort(function (a, b) { return frac(a.start) - frac(b.start); });
     named.forEach(function (m) {
@@ -1150,11 +1166,7 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       var lab = el("div", "mlabel", m.name); lab.style.left = left + "px"; lab.title = m.name + " (" + g + ")";
       lab.insertBefore(el("span", "mg " + g), lab.firstChild); lab.dataset.kind = g; lab.__key = "m:" + m.name + "@" + m.start;
       ruler.appendChild(lab);
-      // (10 px: the next flag's glyph hangs 4 px left of its name)
-      var row = left > rowEnd[0] + 10 ? 0 : (left > rowEnd[1] + 10 ? 1 : -1);
-      if (row === 1) lab.classList.add("row1");
-      if (row < 0) { lab.classList.add("unfit", "crowded"); return; }
-      rowEnd[row] = left + lab.offsetWidth;
+      lab.__x = left; lab.__w = lab.offsetWidth;  // rows and sides: placeMarkers(), for the part in view
     });
     ruler.addEventListener("mousedown", rulerDown);
     var byId = {}; p.clips.forEach(function (c) { byId[c.id] = c; });
@@ -1224,12 +1236,46 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
     var sc = $("scroller"); if (!sc || sc.hidden) return;
     var r = sc.getBoundingClientRect(), left = r.left + GUTTER, right = r.right - 1;
     sc.querySelectorAll(".clip .label").forEach(function (l) { l.classList.toggle("unfit", l.scrollWidth > l.clientWidth + 0.5); });
-    sc.querySelectorAll(".tick, .mlabel:not(.crowded), .gap, .clip .label:not(.unfit), .rail .rl, .flag").forEach(function (e) {
+    sc.querySelectorAll(".tick, .gap, .clip .label:not(.unfit), .rail .rl").forEach(function (e) {
       // The TEXT's extent, not the element's: a gap's block is as wide as
-      // the gap, which may run past the view while its words are in it (a
-      // marker's glyph hangs left of its name and is not part of it).
+      // the gap, which may run past the view while its words are in it.
       var b = textBox(e), own = e.classList.contains("gap") && e.scrollWidth > e.clientWidth + 0.5;
-      e.classList.toggle("unfit", !!(own || b.left < left - 0.5 || b.right > right + 0.5 || (e.classList.contains("flag") && e.__crowded)));
+      e.classList.toggle("unfit", !!(own || b.left < left - 0.5 || b.right > right + 0.5));
+    });
+    placeMarkers(r, left, right);
+  }
+  // The ruler's two rows, placed for the part in view: each flash flag first
+  // (a failure; right-aligned to its frame), then each marker left to right,
+  // on the first of: row 0 with its name right of the glyph, row 1 right,
+  // row 0 left, row 1 left, whose glyph and name are both in view and clear
+  // of everything placed (6 px). A marker with no such place is not drawn on
+  // the ruler, glyph and name both: a glyph never shows without its name
+  // (0.34 round 2). The overview keeps every marker's tick.
+  function placeMarkers(view, left, right) {
+    var ruler = document.querySelector("#canvas .ruler"); if (!ruler) return;
+    var x0 = ruler.getBoundingClientRect().left, rows = [[], []], GAP = 6;
+    var free = function (row, a, b, ta, tb) {
+      return ta >= left - 0.5 && tb <= right + 0.5 && a >= view.left && b <= view.right - 1 &&
+        !rows[row].some(function (r) { return a < r[1] + GAP && r[0] < b + GAP; });
+    };
+    ruler.querySelectorAll(".flag").forEach(function (f) {
+      var b = x0 + f.__right, a = b - f.__w, row = free(0, a, b, a, b - 8) ? 0 : free(1, a, b, a, b - 8) ? 1 : -1;
+      f.classList.toggle("row1", row === 1); f.classList.toggle("unfit", row < 0);
+      if (row >= 0) rows[row].push([a, b]);
+    });
+    ruler.querySelectorAll(".mlabel").forEach(function (m) {
+      var at = x0 + m.__x, wd = m.__w, done = false;
+      m.classList.remove("row1", "flip", "unfit", "crowded", "gone");
+      [[0, false], [1, false], [0, true], [1, true]].forEach(function (c) {
+        if (done) return;
+        var a = c[1] ? at - wd : at - 4, b = c[1] ? at + 4 : at + wd;   // glyph and name
+        var ta = c[1] ? at - wd + 3 : at + 11, tb = c[1] ? at - 11 : at + wd - 3;  // the name alone
+        if (!free(c[0], a, b, ta, tb)) return;
+        if (c[0]) m.classList.add("row1");
+        if (c[1]) m.classList.add("flip");
+        rows[c[0]].push([a, b]); done = true;
+      });
+      if (!done) m.classList.add("unfit", "crowded", "gone");
     });
   }
   function textBox(e) {
@@ -1239,8 +1285,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
   }
   // A flash in the picture (diagnose's FAIL): a red sliver down the tracks,
   // never thinner than 2 px, and a red flag on the ruler, right-aligned to it
-  // on the first marker row with room, so the marker one frame later keeps
-  // its name. A WARN (2-5f) is drawn in grey: red means failure only.
+  // (placeMarkers() gives it the first row with room, before any marker).
+  // A WARN (2-5f) is drawn in grey: red means failure only.
   function drawFlashes(ruler, canvas) {
     var top = ruler.offsetHeight;
     (state.payload.flashes || []).forEach(function (f) {
@@ -1251,15 +1297,8 @@ _APP_TEMPLATE = r"""<!DOCTYPE html>
       canvas.appendChild(sl);
       var tag = el("div", "flag", "flash " + f.frames + "f"); if (!fail) { tag.style.color = "var(--mute)"; tag.style.borderColor = "var(--mute)"; }
       tag.title = sl.title; ruler.appendChild(tag);
-      var right = x(frac(f.start)), wpx = tag.offsetWidth, left = right - wpx;
-      var free = function (row) {
-        return ![].some.call(ruler.querySelectorAll(".mlabel" + (row ? ".row1" : ":not(.row1)") + ":not(.crowded)"), function (m) {
-          var a = m.offsetLeft, b = a + m.offsetWidth; return a < right + 2 && left - 4 < b; });
-      };
-      var row = free(0) ? 0 : free(1) ? 1 : -1;
-      tag.style.left = left + "px";
-      if (row === 1) tag.classList.add("row1");
-      if (row < 0) { tag.__crowded = true; tag.classList.add("unfit"); }
+      var right = x(frac(f.start));
+      tag.__right = right; tag.__w = tag.offsetWidth; tag.style.left = (right - tag.__w) + "px";  // its row: placeMarkers()
     });
   }
   // The whole cut, always: every lane as a thin row, the markers, and a box
