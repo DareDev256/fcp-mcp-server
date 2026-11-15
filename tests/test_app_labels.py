@@ -285,7 +285,10 @@ def halo_coverage(browser, html: str) -> float:
         page.close()
     px = shot.load()
     w, h = shot.size
-    glyph = {(x, y) for x in range(w) for y in range(h) if px[x, y][0] > px[x, y][1] + 40}
+    # a glyph pixel is red on dark: the red text, alone or blended with its
+    # halo; a light pixel with a warm tint is the halo's own fringe over the
+    # white frame (CI's Linux draws it sub-pixel, (213, 173, 137)), not text
+    glyph = {(x, y) for x in range(w) for y in range(h) if px[x, y][0] > 80 and px[x, y][1] < 60 and px[x, y][2] < 60}
     ring = {(x + dx, y + dy) for x, y in glyph for dx in (-1, 0, 1) for dy in (-1, 0, 1)
             if 0 <= x + dx < w and 0 <= y + dy < h and (x + dx, y + dy) not in glyph}
     if not glyph or not ring:
