@@ -212,23 +212,29 @@ def test_the_border_check_goes_red(browser):
     """Mutation check: without the track padding the last lane's clips sit
     within 6px of the border (the critic's TRACK clip at 390)."""
     html = timeline_app.render_app_html()
-    old = "#canvas { position: relative; min-width: 100%; padding-bottom: 8px; }"
+    old = "#canvas { position: relative; min-width: 100%; padding-bottom: 8px; isolation: isolate; }"
     assert html.count(old) == 1
-    found = offenders(browser, html.replace(old, "#canvas { position: relative; min-width: 100%; }"),
+    found = offenders(browser, html.replace(old, "#canvas { position: relative; min-width: 100%; isolation: isolate; }"),
                       _payload("music-video.fcpxml"), 390)
     assert any("bottom border" in f for f in found)
 
 
-def test_a_crowded_marker_keeps_its_flag_and_its_name_in_the_tooltip(browser):
+def test_crowded_markers_are_named_or_counted_in_a_chip(browser):
+    """Five markers inside two seconds at phone width: each is named right
+    of its own glyph, or counted in a cluster chip whose tooltip names it
+    (0.34 round 3; until then a crowded marker kept a glyph with no name)."""
     page = browser.new_page(viewport={"width": 390, "height": 900})
     try:
         page.set_content(timeline_app.render_app_html())
         page.evaluate("p => window.__fcpApp.setPayload(p)", _stress())
-        flags = page.evaluate("() => [...document.querySelectorAll('.mlabel')].map(e => [e.title, e.offsetHeight > 0])")
+        named = page.evaluate("() => [...document.querySelectorAll('.mlabel')].filter(e => getComputedStyle(e).display !== 'none').map(e => e.textContent)")
+        chips = page.evaluate("() => [...document.querySelectorAll('.mchip')].map(e => [Number(e.dataset.count), e.title])")
     finally:
         page.close()
-    names = [t.split(" (")[0] for t, _ in flags]  # the tooltip is the name and its kind: "Beat 3 (standard)"
-    assert all(f"Beat {i}" in names for i in range(1, 6)) and all(drawn for _, drawn in flags)
+    listed = " · ".join(t for _, t in chips)
+    for i in range(1, 6):
+        assert f"Beat {i}" in named or f"Beat {i} " in listed, (named, chips)
+    assert all(n == len(t.split(" · ")) for n, t in chips), chips
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +291,7 @@ def test_a_label_over_a_white_frame_reads_at_4_5_to_1(browser):
 def test_the_scrim_check_goes_red_without_the_scrim(browser):
     """Mutation check: the 0.31 first-pass scrim (a fade across the text) is caught."""
     html = timeline_app.render_app_html()
-    broken = html.replace("background: linear-gradient(var(--shade) 0px, var(--shade) 100%);",
+    broken = html.replace("background: linear-gradient(var(--shade) 0px, var(--shade) 100%), var(--raised);",
                           "background: linear-gradient(transparent, var(--shade));")
     assert broken != html
     assert _label_contrast(browser, broken) < 4.5
@@ -373,7 +379,7 @@ def _hex(css: str) -> str:
 def test_the_preview_page_names_every_clip_and_switches_its_controls_off(browser, width):
     """The page never scrolls sideways (the overview bar carries the whole
     cut, one bar per clip); every clip is named inside its box or, whole, on
-    its lane's rail (the tap sheet covers the rest: test_app_glance.py); the
+    its lane's rows, or (no room anywhere) named in the strip when tapped; the
     edit controls are visibly off and say why; no role is written as text
     (it is the stripe); the panels a neutral grey; the placeholder reads at
     4.5:1 on what it sits on."""
@@ -383,13 +389,25 @@ def test_the_preview_page_names_every_clip_and_switches_its_controls_off(browser
         page.set_content(timeline_app.render_page_html(timeline_app.build_payload(tl)))
         page.wait_for_timeout(50)
         facts = page.evaluate(PAGE_FACTS)
+        # a clip with no room for its name anywhere stays tappable: the strip above the ruler names it
+        tapped = {}
+        for c in facts["clips"]:
+            if c["inside"] or (c["rail"] and c["rail"]["visible"]):
+                continue
+            box = c["clip"]
+            page.mouse.click((box["l"] + box["r"]) / 2, (box["t"] + box["b"]) / 2)
+            tapped[c["name"]] = page.evaluate("() => document.getElementById('strip').querySelector('b').textContent")
     finally:
         page.close()
     assert facts["pageOverflow"] <= 1, facts["pageOverflow"]
-    n, m = (int(v) for v in re.search(r"(\d+) clips? \+ (\d+) connected", facts["meta"]).groups())
-    assert facts["overview"] == n + m == len(facts["clips"])
+    m = re.search(r"(\d+ clips?|gap spine) \+ (\d+) connected", facts["meta"])
+    n = 0 if m.group(1) == "gap spine" else int(m.group(1).split()[0])
+    assert facts["overview"] == n + int(m.group(2)) == len(facts["clips"])
     for c in facts["clips"]:
-        assert c["inside"] or (c["rail"] and c["rail"]["visible"] and c["rail"]["text"] == c["name"]), c
+        if c["name"] in tapped:
+            assert tapped[c["name"]] == c["name"], (c, tapped)
+        else:
+            assert c["inside"] or (c["rail"]["visible"] and c["rail"]["text"] == c["name"]), c
     assert all(b["aria"] == "true" and b["border"] == "dashed" for b in facts["acts"])
     assert "Read only" in facts["note"]
     assert facts["roleText"] == 0

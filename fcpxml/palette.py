@@ -48,8 +48,9 @@ TOKENS: dict[str, tuple[str, str]] = {
     "danger": ("#FF3B30", "#D70015"),       # FAIL (and missing media) only: never an intended edit
     # Final Cut Pro 12.4's own role colours, the ONE sanctioned exception to
     # "grey, cyan, red" (decision 4, 2026-11-12): drawn as the 3 px role
-    # stripe on a clip and nowhere else (never text, never a fill; held by
-    # tests/test_palette.py). Read from the installed app, not typed from
+    # stripe on a clip, and (0.34 round 3) the Titles colour as a title
+    # clip's body, as Final Cut draws a title; never text, never another
+    # fill (held by tests/test_palette.py). Read from the installed app, not typed from
     # memory: scripts/fcp_role_colours.m loads Flexo.framework and asks
     # FFColorForRole +colorSchemeForIndex: for each of FFRole
     # +builtInMainRoles (Video 0, Music 1, Effects 2, Titles 3, Dialogue 0).
@@ -76,6 +77,7 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
     ("accent", "ground"), ("accent", "panel"),
     ("accent-ink", "accent-fill"),
     ("on-media", "shade"),
+    ("on-media", "role-titles"),  # a title's name on its Titles-coloured body
     ("danger", "ground"),
     ("ground", "mute"), ("ground", "ink"),  # names on the legacy preview's clip fills
 )

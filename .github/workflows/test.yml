@@ -143,7 +143,7 @@ jobs:
       - name: The timeline reads at a glance, no label is cut, and the hero opens on the finished cut
         env:
           FCP_MCP_REQUIRE_BROWSER: "1"
-        run: pytest tests/test_app_glance.py tests/test_app_labels.py tests/test_app_motion.py tests/test_hero_assets.py -v
+        run: pytest tests/test_app_glance.py tests/test_readme_picture.py tests/test_app_labels.py tests/test_app_motion.py tests/test_hero_assets.py -v
 
   # An inline `actions/github-script` block is JavaScript that nothing parses
   # until the day it runs. The `report` job in publish.yml — the one whose

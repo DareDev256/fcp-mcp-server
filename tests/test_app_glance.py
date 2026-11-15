@@ -166,6 +166,7 @@ FACTS = r"""() => {
            // the app's own height (the body, padding and all), not the viewport it sits in
            tracks, pageH: document.body.getBoundingClientRect().height,
            pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+           trackScroll: document.getElementById('scroller').scrollWidth - document.getElementById('scroller').clientWidth,
            clips: clips.map(c => ({ name: c.__c.name, id: c.__c.id, lane: c.__c.lane, kind: c.__c.kind, h: c.getBoundingClientRect().height,
                                     w: c.getBoundingClientRect().width,
                                     label: (c.querySelector('.label') || {}).textContent || null,
@@ -213,12 +214,13 @@ def label_problems(facts: dict) -> list[str]:
     return out
 
 
-def fit_problems(facts: dict) -> list[str]:
-    """The fit gates: the median clip under 44 px, the overview carrying less
-    than the whole cut, a sideways page scroll."""
+def fit_problems(facts: dict, opening: bool = True) -> list[str]:
+    """The fit gates: at open the whole cut in the track (round 3: no track
+    scroll, at every width; it replaced "median clip >= 44 px"), the
+    overview carrying the whole cut, no sideways page scroll."""
     out = []
-    if facts["median"] < 44 - 0.01:
-        out.append(f"median clip {facts['median']:.1f} px")
+    if opening and facts["trackScroll"] > 1:
+        out.append(f"the track scrolls {facts['trackScroll']} px at open: the whole cut is not in view")
     ov = facts["overview"]
     if not ov["box"] or not ov["bars"]:
         out.append("no overview")
@@ -265,10 +267,11 @@ def test_the_track_area_is_over_a_third_of_the_page_at_1440(browser, payloads, f
 
 @pytest.mark.parametrize("width,picture,short", [(1440, 88, 72), (390, 56, 56)])
 def test_clip_heights_follow_the_lane_type(browser, payloads, width, picture, short):
-    """Picture lanes 88 px, titles and sound 72 px on a desktop; 56 px on a phone."""
+    """Picture lanes 88 px, sound 72 px on a desktop; 56 px on a phone; a
+    title too narrow for its name is a 24 px bar (round 3)."""
     facts = _facts(browser, timeline_app.render_page_html(payloads["interview"]), width)
     seen = {(c["kind"], round(c["h"])) for c in facts["clips"]}
-    assert seen == {("spine", picture), ("title", short), ("audio", short)}, seen
+    assert seen == {("spine", picture), ("title", 24), ("audio", short)}, seen
 
 
 # ---- each gate, broken on purpose ------------------------------------------------
@@ -278,14 +281,14 @@ def _stress() -> dict:
     two wide ones."""
     tl = FCPXMLParser().parse_file(str(EXAMPLES / "sample.fcpxml")).timelines[0]
     p = timeline_app.build_payload(tl)
-    tiny = next(c for c in p["clips"] if c["duration"] == "1/4")
+    tiny = next(c for c in p["clips"] if c["duration"] == "2/1")
     tiny["name"] = "Interview_take_twelve"
     return p
 
 
 def test_the_short_label_gate_goes_red(browser, payloads):
     html = timeline_app.render_app_html()
-    old = "MEDIAN_MIN = 44, LABEL_MIN = 28, KEEP_MIN = 4,"
+    old = "LABEL_MIN = 28, KEEP_MIN = 4,"
     assert html.count(old) == 1
 
     def problems(page_html):
@@ -299,17 +302,18 @@ def test_the_short_label_gate_goes_red(browser, payloads):
             page.close()
 
     assert problems(html) == []
-    broken = problems(html.replace(old, "MEDIAN_MIN = 44, LABEL_MIN = 4, KEEP_MIN = 1,"))
+    broken = problems(html.replace(old, "LABEL_MIN = 4, KEEP_MIN = 1,"))
     assert any(p.startswith("short") for p in broken), broken
 
 
 def test_the_overlap_gate_goes_red(browser, payloads):
-    """Every rail name on one row: OVERLAY 1-3 land on each other."""
-    html = timeline_app.render_page_html(payloads["music-video"])
-    old = "var row = cx > rowEnd[0] + 4 ? 0 : cx > rowEnd[1] + 4 ? 1 : -1;"
+    """Name rows that do not look at what is already on them: the
+    interview's camera names land on each other."""
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = "if (rows[r].some(function (q) { return a < q[1] + 6 && q[0] < b + 6; })) continue;"
     assert html.count(old) == 1
     assert label_problems(_facts(browser, html, 1440)) == []
-    broken = label_problems(_facts(browser, html.replace(old, "var row = 0;"), 1440))
+    broken = label_problems(_facts(browser, html.replace(old, ""), 1440))
     assert any(p.startswith("on top of each other") for p in broken), broken
 
 
@@ -317,12 +321,30 @@ def test_the_cut_label_gate_goes_red(browser, payloads):
     """Names measured without their padding run out of their boxes, and with
     the fit pass (the net that hides such a name) gone they are seen cut."""
     html = timeline_app.render_page_html(payloads["gym"])
-    old = "SNAP_PX = 8, GUTTER = 16, MIN_PPS = 0.25, PAD = 16, TIGHT = 8;"
+    old = "SNAP_PX = 8, GUTTER = 16, MIN_PPS = 0.01, PAD = 16, TIGHT = 8;"
     net = "    placePlayhead();\n    fitLabels();\n    drawOverview();\n"
     assert html.count(old) == 1 and html.count(net) == 1
     assert label_problems(_facts(browser, html, 390)) == []
-    broken = html.replace(old, "SNAP_PX = 8, GUTTER = 16, MIN_PPS = 0.25, PAD = -40, TIGHT = -40;").replace(net, "    placePlayhead();\n    drawOverview();\n")
+    broken = html.replace(old, "SNAP_PX = 8, GUTTER = 16, MIN_PPS = 0.01, PAD = -40, TIGHT = -40;").replace(net, "    placePlayhead();\n    drawOverview();\n")
     assert any(p.startswith("cut") for p in label_problems(_facts(browser, broken, 390)))
+
+
+def _zoomed(browser, html: str, width: int, clicks: int) -> dict:
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme="dark")
+    try:
+        page.set_content(html)
+        page.wait_for_timeout(50)
+        for _ in range(clicks):
+            page.click("#zin")
+        page.wait_for_timeout(50)
+        return page.evaluate(FACTS)
+    finally:
+        page.close()
+
+
+def test_the_overview_carries_the_whole_cut_when_zoomed_in(browser, payloads):
+    facts = _zoomed(browser, timeline_app.render_page_html(payloads["music-video"]), 390, 3)
+    assert facts["trackScroll"] > 1 and fit_problems(facts, opening=False) == []
 
 
 def test_the_overview_gate_goes_red(browser, payloads):
@@ -330,19 +352,19 @@ def test_the_overview_gate_goes_red(browser, payloads):
     html = timeline_app.render_page_html(payloads["music-video"])
     old = "var W = ov.clientWidth, H = ov.clientHeight, dur = extent(), lanes = p.lanes;"
     assert html.count(old) == 1
-    broken = html.replace(old, "var W = ov.clientWidth, H = ov.clientHeight, dur = (sc.clientWidth - GUTTER) / state.pps, lanes = p.lanes;")
-    assert fit_problems(_facts(browser, html, 390)) == []
-    assert any("overview" in p for p in fit_problems(_facts(browser, broken, 390)))
+    broken = html.replace(old, "var W = ov.clientWidth, H = ov.clientHeight, dur = ($(\"scroller\").clientWidth - GUTTER) / state.pps, lanes = p.lanes;")
+    assert any("overview" in p for p in fit_problems(_zoomed(browser, broken, 390, 3), opening=False))
 
 
-def test_the_median_gate_goes_red(browser, payloads):
-    """The 0.32 fit (the whole cut in the width, nothing else) makes the music
-    video's shots slivers at 390."""
+def test_the_whole_cut_gate_goes_red(browser, payloads):
+    """Round 3: the 0.34 first build's fit (the median clip at least 44 px)
+    left the music video, the interview, every phone width scrolling at open."""
     html = timeline_app.render_page_html(payloads["music-video"])
-    old = "state.pps = Math.max(MIN_PPS, w / extent(), (MEDIAN_MIN + 1) / medianDuration());"
+    old = "state.pps = Math.max(MIN_PPS, w / extent());"
     assert html.count(old) == 1
-    broken = fit_problems(_facts(browser, html.replace(old, "state.pps = Math.max(MIN_PPS, w / extent());"), 390))
-    assert any(p.startswith("median") for p in broken), broken
+    median = sorted(float(Fraction(c["duration"])) for c in payloads["music-video"]["clips"])[4]
+    broken = fit_problems(_facts(browser, html.replace(old, f"state.pps = Math.max(MIN_PPS, w / extent(), 45 / {median});"), 1440))
+    assert any("scrolls" in p for p in broken), broken
 
 
 def test_the_track_area_gate_goes_red(browser, payloads):
@@ -411,25 +433,50 @@ def test_the_ruler_gate_goes_red(browser, payloads):
 
 MARKS = r"""() => {
   const sc = document.getElementById('scroller').getBoundingClientRect(), gutter = window.__fcpApp.gutter;
-  return [...document.querySelectorAll('#canvas .mlabel')].map(m => {
-    const g = m.querySelector('.mg'), gb = g.getBoundingClientRect(), cs = getComputedStyle(m);
-    const glyph = getComputedStyle(g).visibility !== 'hidden' && gb.right > sc.left && gb.left < sc.right && gb.width > 0;
-    const t = [...m.childNodes].filter(n => n.nodeType === 3), r = document.createRange();
-    if (t.length) { r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length); }
-    const tb = t.length ? r.getBoundingClientRect() : { left: 0, right: 0, width: 0 };
-    const name = cs.visibility !== 'hidden' && cs.color !== 'rgba(0, 0, 0, 0)' && tb.width > 0 &&
-                 tb.left >= sc.left + gutter - 0.5 && tb.right <= sc.right - 1 + 0.5;
-    return { text: m.textContent, title: m.title.replace(/ \([a-z]+\)$/, ''), glyph, name, flip: m.classList.contains('flip') };
+  const textOf = (m) => { const t = [...m.childNodes].filter(n => n.nodeType === 3), r = document.createRange();
+    if (!t.length) return null; r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length); return r.getBoundingClientRect(); };
+  const seen = (e) => getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).color !== 'rgba(0, 0, 0, 0)';
+  const glyphs = [...document.querySelectorAll('#canvas .mlabel, #canvas .mchip')].map(m => {
+    const g = m.querySelector('.mg'), gb = g.getBoundingClientRect(), tb = textOf(m) || { left: 0, right: 0, width: 0 };
+    return { chip: m.classList.contains('mchip'), text: m.textContent, title: m.title.replace(/ \([a-z]+\)$/, ''),
+             count: Number(m.dataset.count || 0), listed: m.classList.contains('mchip') ? m.title.split(' · ').length : 1,
+             glyph: getComputedStyle(g).visibility !== 'hidden' && gb.width > 0 && gb.right > sc.left && gb.left < sc.right,
+             gl: gb.left, gr: gb.right, tl: tb.left, tr: tb.right, named: seen(m) && tb.width > 0 &&
+             tb.left >= sc.left + gutter - 0.5 && tb.right <= sc.right - 1 + 0.5 };
   });
+  const p = window.__fcpApp.state.payload;
+  const total = p.markers.length + p.clips.reduce((n, c) => n + (c.markers || []).length, 0);
+  return { glyphs, total };
 }"""
 
 
-def marker_problems(marks: list) -> list[str]:
-    """A glyph on screen whose name is not, or not whole."""
-    return [f"{m['title']!r}: glyph without its name" for m in marks if m["glyph"] and not (m["name"] and m["text"] == m["title"])]
+def marker_problems(facts: dict) -> list[str]:
+    """Round 3: every glyph on screen has its OWN whole name immediately to
+    its right, or is a cluster chip whose count is the markers it lists; and
+    the markers drawn (named + in chips) are every marker the FCPXML holds."""
+    out, drawn = [], 0
+    for g in facts["glyphs"]:
+        if not g["glyph"]:
+            continue
+        if not g["named"]:
+            out.append(f"{g['title']!r}: glyph without its name")
+            continue
+        if not (g["gr"] - 0.5 <= g["tl"] <= g["gr"] + 10):
+            out.append(f"{g['title']!r}: its name is not just right of its own glyph")
+        if g["chip"]:
+            if g["count"] != g["listed"] or g["text"] != f"{g['count']} marker" + ("s" if g["count"] != 1 else ""):
+                out.append(f"chip {g['text']!r} lists {g['listed']}")
+            drawn += g["count"]
+        else:
+            if g["text"] != g["title"]:
+                out.append(f"{g['title']!r} drawn as {g['text']!r}")
+            drawn += 1
+    if drawn != facts["total"]:
+        out.append(f"{drawn} markers drawn, the FCPXML holds {facts['total']}")
+    return out
 
 
-def _marks(browser, html: str, width: int, scheme: str = "dark") -> list:
+def _marks(browser, html: str, width: int, scheme: str = "dark") -> dict:
     page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme=scheme)
     try:
         page.set_content(html)
@@ -441,31 +488,31 @@ def _marks(browser, html: str, width: int, scheme: str = "dark") -> list:
 
 @pytest.mark.parametrize("width", WIDTHS)
 @pytest.mark.parametrize("fixture", FIXTURES)
-def test_a_marker_glyph_never_shows_without_its_name(browser, payloads, fixture, width):
-    marks = _marks(browser, timeline_app.render_page_html(payloads[fixture]), width)
-    assert marker_problems(marks) == [], marks
-    assert any(m["glyph"] for m in marks), "no marker drawn at all"
+def test_every_marker_is_named_or_counted_in_a_cluster(browser, payloads, fixture, width):
+    facts = _marks(browser, timeline_app.render_page_html(payloads[fixture]), width)
+    assert marker_problems(facts) == [], facts
+    assert any(g["glyph"] for g in facts["glyphs"]), "no marker drawn at all"
 
 
-def test_a_marker_name_turns_to_the_side_that_fits(browser, payloads):
-    """At 390 the interview's third marker (Colour matched, a completed to-do)
-    has no room right of its glyph in view: its name goes on the glyph's
-    left, whole (round 2 found the glyph alone)."""
-    marks = {m["title"]: m for m in _marks(browser, timeline_app.render_page_html(payloads["interview"]), 390)}
-    assert marks["Colour matched"]["glyph"] and marks["Colour matched"]["name"] and marks["Colour matched"]["flip"]
+def test_markers_that_cannot_all_be_named_merge_into_a_chip(browser, payloads):
+    """At 390 the interview's 14 markers do not all fit: the ones that cannot
+    be named sit in chips whose counts add up, never a flipped name (round 2
+    put "Colour matched" left of its glyph, under Good laugh's)."""
+    facts = _marks(browser, timeline_app.render_page_html(payloads["interview"]), 390)
+    chips = [g for g in facts["glyphs"] if g["chip"] and g["glyph"]]
+    assert chips and sum(g["count"] for g in chips) + sum(1 for g in facts["glyphs"] if g["glyph"] and not g["chip"]) == 14
 
 
 def test_the_marker_gate_goes_red(browser, payloads):
-    """Mutation check: abb76b1 hid a crowded or cut name and kept its glyph."""
+    """Mutation check: a marker with no room silently dropped (no cluster)."""
     html = timeline_app.render_page_html(payloads["interview"])
-    old = 'if (!done) m.classList.add("unfit", "crowded", "gone");'
-    side = "[[0, false], [1, false], [0, true], [1, true]]"
-    assert html.count(old) == 1 and html.count(side) == 1
-    broken = html.replace(old, 'if (!done) m.classList.add("unfit", "crowded");').replace(side, "[[0, false], [1, false]]")
+    old = "      host.marks.push(mk);\n"
+    assert html.count(old) == 1
+    broken = html.replace(old, '      m.classList.add("gone", "unfit"); return;\n')
     assert marker_problems(_marks(browser, broken, 390))
 
 
-FLAT_HIDE = (".playhead, .markers, .flash, .mk, .trans, .conn, .range, .clip .label, .rail "
+FLAT_HIDE = (".playhead, .flash, .trans, .conn, .range, .clip .label, .rail "
              "{ visibility: hidden !important; }")
 
 
@@ -486,7 +533,9 @@ def flat_bands(browser, html: str, width: int, scheme: str) -> list[str]:
         page.wait_for_timeout(50)
         page.add_style_tag(content=FLAT_HIDE)
         boxes = page.evaluate("""() => [...document.querySelectorAll('#canvas .clip.has-thumb')].map(c => {
-            const b = c.getBoundingClientRect(); return { name: c.__c.name, x: b.left, y: b.top, w: b.width, h: b.height }; })""")
+            const b = c.getBoundingClientRect(), p = c.querySelector('.wave path');
+            return { name: c.__c.name, x: b.left, y: b.top, w: b.width, h: b.height,
+                     fill: p ? getComputedStyle(p).fill : null }; })""")
         for b in boxes:
             if b["w"] < 24:
                 continue
@@ -501,7 +550,8 @@ def flat_bands(browser, html: str, width: int, scheme: str) -> list[str]:
                 # a band is rows of ONE colour: the same flat colour row after row
                 same = flat and colour is not None and all(abs(a - c) <= 2 for a, c in zip(row[0], colour))
                 run, colour = (run + 1, colour) if same else ((1, row[0]) if flat else (0, None))
-                if run == 4:
+                # the waveform's own fill is not empty: a steady tone IS a filled band (round 3)
+                if run == 4 and not (b["fill"] and _hex(b["fill"]) == "#%02X%02X%02X" % tuple(colour)):
                     out.append(f"{b['name']} at {width}/{scheme}: rows {y - 3}-{y} are one colour {colour}")
     finally:
         page.close()
@@ -511,10 +561,10 @@ def flat_bands(browser, html: str, width: int, scheme: str) -> list[str]:
 @pytest.mark.parametrize("scheme", ["dark", "light"])
 @pytest.mark.parametrize("width", [1440, 390])
 def test_no_empty_band_in_a_clip(browser, payloads, width, scheme):
-    """The gym's clips carry picture and sound: the filmstrip and the waveform
-    share the clip, nothing flat between them; the flat tone (Bench, Press,
-    Finish are steady sines) is an outlined shape at its level round a centre
-    line, never a filled box."""
+    """The gym's clips carry picture and sound: the filmstrip and the
+    waveform's band share the clip, nothing flat between them (round 2), and
+    the band is filled to each clip's own loudest peak, so a steady tone
+    (Bench, Press, Finish) is a filled band and no empty rows sit over it."""
     assert flat_bands(browser, timeline_app.render_page_html(payloads["gym"]), width, scheme) == []
 
 
@@ -522,11 +572,58 @@ def test_the_empty_band_gate_goes_red(browser, payloads):
     """Mutation check: abb76b1's clip (the filmstrip stopping 24 px short of
     the foot, the waveform on the panel colour under it) is seen."""
     html = timeline_app.render_page_html(payloads["gym"])
-    new = ".clip.has-thumb .wave { height: 44%; background: linear-gradient(to bottom, transparent, var(--shade)); }"
+    new = ".clip.has-thumb .wave { height: var(--wave-h); }"
     assert html.count(new) == 1
-    broken = html.replace(new, ".clip.has-thumb.has-wave .thumbs { bottom: 24px; } "
-                               ".clip.has-thumb .wave { height: 21px; background: var(--panel); }")
+    broken = html.replace(new, ".clip.has-thumb .wave { height: 12px; }")
     assert flat_bands(browser, broken, 1440, "dark")
+
+
+ANATOMY = r"""() => [...document.querySelectorAll('#canvas .clip.has-thumb.has-wave')].map(c => {
+  const t = c.querySelector('.thumbs').getBoundingClientRect(), w = c.querySelector('.wave').getBoundingClientRect();
+  const p = getComputedStyle(c.querySelector('.wave path'));
+  return { name: c.__c.name, thumbBottom: t.bottom, waveTop: w.top, waveBottom: w.bottom, clipBottom: c.getBoundingClientRect().bottom,
+           fill: p.fill, fillOpacity: Number(p.fillOpacity), stroke: p.stroke };
+})"""
+
+
+def anatomy_problems(clips: list) -> list[str]:
+    """Round 3: the waveform in its OWN band under the filmstrip (they meet,
+    they do not overlap), filled solid."""
+    out = []
+    for c in clips:
+        if abs(c["thumbBottom"] - c["waveTop"]) > 0.6:
+            out.append(f"{c['name']}: the filmstrip ends at {c['thumbBottom']:.1f}, the waveform starts at {c['waveTop']:.1f}")
+        if c["fill"] in ("none", "") or c["fillOpacity"] < 1:
+            out.append(f"{c['name']}: the waveform is not filled ({c['fill']}, {c['fillOpacity']})")
+    return out
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_the_waveform_has_its_own_band_under_the_filmstrip(browser, payloads, width):
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme="dark")
+    try:
+        page.set_content(timeline_app.render_page_html(payloads["gym"]))
+        page.wait_for_timeout(50)
+        clips = page.evaluate(ANATOMY)
+    finally:
+        page.close()
+    assert len(clips) == 7 and anatomy_problems(clips) == []
+
+
+def test_the_anatomy_gate_goes_red(browser, payloads):
+    """Mutation check: fa9b811's clip, the filmstrip running to the foot and
+    the waveform over it."""
+    html = timeline_app.render_page_html(payloads["gym"])
+    old = ".clip.has-thumb.has-wave .thumbs { bottom: calc(3px + var(--wave-h)); }"
+    assert html.count(old) == 1
+    page = browser.new_page(viewport={"width": 1440, "height": 700}, color_scheme="dark")
+    try:
+        page.set_content(html.replace(old, ""))
+        page.wait_for_timeout(50)
+        clips = page.evaluate(ANATOMY)
+    finally:
+        page.close()
+    assert anatomy_problems(clips)
 
 
 # ---------------------------------------------------------------------------
@@ -548,10 +645,17 @@ def test_a_storyline_name_is_cut_in_the_middle_and_keeps_its_ending(browser):
     assert long_name.startswith(head) and long_name.endswith(tail) and len(head + tail) >= 4
 
 
-SHEET = """() => { const s = document.getElementById('sheet');
-  return { shown: !s.hidden && getComputedStyle(s).display !== 'none', for: s.dataset.for || null,
-           name: (s.querySelector('.sn') || {}).textContent || null,
-           rows: [...s.querySelectorAll('dt')].map(d => [d.textContent, d.nextElementSibling.textContent]), sel: [...document.querySelectorAll('#sel dt')].map(d => [d.textContent, d.nextElementSibling.textContent]),
+STRIP = """() => { const s = document.getElementById('strip'), sc = document.getElementById('scroller').getBoundingClientRect();
+  const ruler = document.querySelector('#canvas .ruler').getBoundingClientRect(), sb = s.getBoundingClientRect();
+  // anything outside the timeline's own canvas that sits over the tracks
+  const over = [...document.body.querySelectorAll('*')].filter(e => !e.closest('#canvas') && e !== document.body && !e.contains(document.getElementById('scroller')) &&
+    !e.closest('#scroller') && getComputedStyle(e).position !== 'static' && getComputedStyle(e).display !== 'none' && (() => {
+      const b = e.getBoundingClientRect(); return b.width > 0 && b.left < sc.right && sc.left < b.right && b.top < sc.bottom && sc.top < b.bottom; })())
+    .map(e => e.id || e.className);
+  return { for: s.dataset.for || null, name: (s.querySelector('b') || {}).textContent || null,
+           items: [...s.querySelectorAll('.si')].map(e => e.textContent), title: [...s.querySelectorAll('.si')].map(e => e.title),
+           above: sb.bottom <= sc.top + 0.5 && sb.bottom <= ruler.top, over,
+           sel: [...document.querySelectorAll('#sel dt')].map(d => [d.textContent, d.nextElementSibling.textContent, d.nextElementSibling.title]),
            tc: document.getElementById('tc').textContent }; }"""
 
 
@@ -567,35 +671,42 @@ def _tap(browser, payload, html=None, width=390):
             return { id: c.__c.id, name: c.__c.name, w: r.width, x: r.left + r.width / 2, y: r.top + r.height / 2 }; }""")
         page.mouse.click(box["x"], box["y"])
         page.wait_for_timeout(50)
-        return box, page.evaluate(SHEET)
+        return box, page.evaluate(STRIP)
     finally:
         page.close()
 
 
-def test_a_clip_with_no_name_inside_says_it_in_the_tap_sheet(browser, payloads):
-    """Under 28 px a clip draws no name; a tap opens the sheet with its name,
-    start and length, and the selection panel shows its start timecode, which
-    the playhead (the cyan record time) now reads too."""
+def _timecode(seconds: Fraction, fps: Fraction) -> str:
+    frames = int(seconds * fps + Fraction(1, 2))
+    return f"{frames // 24 // 3600:02d}:{frames // 24 // 60 % 60:02d}:{frames // 24 % 60:02d}:{frames % 24:02d}"
+
+
+def test_a_tap_names_the_clip_in_the_strip_above_the_ruler(browser, payloads):
+    """Round 3: no sheet floats over the lanes. A tap selects the clip; the
+    strip anchored above the ruler shows its name, start and length (lengths
+    are timecodes, the exact rational in the title), the Selection panel
+    shows the same, and the playhead (the cyan record time) is at its start."""
     payload = payloads["music-video"]
-    box, sheet = _tap(browser, payload)
+    box, strip = _tap(browser, payload)
     assert box["w"] < 28, box
     clip = next(c for c in payload["clips"] if c["id"] == box["id"])
-    fps, start = Fraction(payload["fps"]), Fraction(clip["start"])
-    frames = int(start * fps + Fraction(1, 2))
-    tc = f"{frames // 24 // 3600:02d}:{frames // 24 // 60 % 60:02d}:{frames // 24 % 60:02d}:{frames % 24:02d}"
-    length = Fraction(clip["duration"])
-    assert sheet["shown"] and sheet["for"] == box["id"], sheet
-    assert sheet["name"] == box["name"]
-    assert dict(sheet["rows"]) == {"start": tc, "length": f"{float(length):.3f}s · {round(length * fps)}f"}, sheet
-    assert dict(sheet["sel"])["start"] == tc and sheet["tc"] == tc
+    fps = Fraction(payload["fps"])
+    start, length = _timecode(Fraction(clip["start"]), fps), _timecode(Fraction(clip["duration"]), fps)
+    assert strip["for"] == box["id"] and strip["name"] == box["name"], strip
+    assert strip["items"] == [f"start {start}", f"length {length}"] and strip["title"][1] == clip["duration"] + " s", strip
+    assert strip["above"] and strip["over"] == [], strip
+    sel = {k: (v, t) for k, v, t in strip["sel"]}
+    assert sel["start"][0] == start and sel["length"] == (length, clip["duration"] + " s") and strip["tc"] == start
+    assert re.fullmatch(r"\d\d:\d\d:\d\d:\d\d", sel["source in"][0]) and sel["source in"][1] == clip["source_start"] + " s"
 
 
-def test_the_tap_sheet_check_goes_red(browser, payloads):
+def test_the_strip_gate_goes_red(browser, payloads):
+    """Mutation check: the strip floated over the lanes, as round 2's sheet did."""
     html = timeline_app.render_page_html(payloads["music-video"])
-    old = "if (ce && !(lab && !lab.classList.contains(\"unfit\"))) openSheet(ce); else closeSheet();"
+    old = "#strip { display: flex;"
     assert html.count(old) == 1
-    _box, sheet = _tap(browser, None, html.replace(old, "closeSheet();"))
-    assert not sheet["shown"]
+    _box, strip = _tap(browser, None, html.replace(old, "#strip { position: absolute; top: 260px; left: 40px; z-index: 30; display: flex;"))
+    assert not strip["above"] or strip["over"]
 
 
 SNAP = """([dx]) => { const app = window.__fcpApp, st = app.state, p = st.payload;
@@ -714,6 +825,335 @@ def test_the_flash_is_red_and_the_ruler_starts_at_zero(browser, payloads, width)
     assert facts["flag"] == "flash 1f"
     assert facts["zero"], "00:00:00:00 is hidden"
     assert facts["overflow"] <= 1  # the 30 s cut fits: its tracks do not scroll sideways
+
+
+# ---------------------------------------------------------------------------
+# Round 3 (two fresh critics on fa9b811, the gatekeeper's fix brief): names
+# on rows for the storyline too, lanes that collapse, nothing drawn through
+# text, transitions and titles as Final Cut draws them, the overview, the header
+# ---------------------------------------------------------------------------
+
+SHARE = r"""() => {
+  const named = (c) => { const l = c.querySelector('.label'); return (l && !l.classList.contains('unfit')) ||
+      [...document.querySelectorAll('.rail .rl')].some(r => r.dataset.for === c.__c.id && !r.classList.contains('unfit')); };
+  const spine = [...document.querySelectorAll('#canvas .clip')].filter(c => !c.__c.lane && c.getBoundingClientRect().width >= 28);
+  return { wide: spine.length, named: spine.filter(named).length };
+}"""
+
+
+def _eval(browser, html: str, width: int, script: str, scheme: str = "dark", clicks: int = 0):
+    page = browser.new_page(viewport={"width": width, "height": 700}, color_scheme=scheme)
+    try:
+        page.set_content(html)
+        page.wait_for_timeout(50)
+        for _ in range(clicks):
+            page.click("#zin")
+        page.wait_for_timeout(50)
+        return page.evaluate(script)
+    finally:
+        page.close()
+
+
+def test_most_storyline_clips_are_named_inside_or_on_a_row(browser, payloads):
+    """A2: on the interview at 1440 (whole cut at open: 44 cuts in 1,380 px)
+    at least 80% of the storyline clips 28 px or wider show a name, inside or
+    on the storyline's name rows."""
+    facts = _eval(browser, timeline_app.render_page_html(payloads["interview"]), 1440, SHARE)
+    assert facts["wide"] >= 20 and facts["named"] / facts["wide"] >= 0.8, facts
+
+
+def test_the_name_share_gate_goes_red(browser, payloads):
+    """Mutation check: no name rows under the storyline (fa9b811)."""
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = "var rail = items.length ? railFor("
+    assert html.count(old) == 1
+    facts = _eval(browser, html.replace(old, "var rail = items.length && lane.lane ? railFor("), 1440, SHARE)
+    assert facts["named"] / facts["wide"] < 0.8, facts
+
+
+LANES = r"""() => [...document.querySelectorAll('#canvas .lane')].map(l => ({ lane: l.dataset.lane, h: l.getBoundingClientRect().height,
+  collapsed: l.classList.contains('collapsed'), rail: l.__rail ? getComputedStyle(l.__rail).display : null }))"""
+
+
+def test_a_lane_with_nothing_in_view_collapses(browser, payloads):
+    """A3: zoomed in on the interview at 390 the whooshes (lane -2, from
+    00:02:59) are out of view: their lane is a thin rule, its names with it;
+    the music bed (lane -1, from 0) stays."""
+    lanes = {r["lane"]: r for r in _eval(browser, timeline_app.render_page_html(payloads["interview"]), 390, LANES, clicks=6)}
+    assert lanes["-2"]["collapsed"] and lanes["-2"]["h"] <= 10 and lanes["-2"]["rail"] in (None, "none"), lanes
+    assert not lanes["-1"]["collapsed"] and lanes["-1"]["h"] > 50, lanes
+
+
+def test_the_collapse_gate_goes_red(browser, payloads):
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = 'row.classList.toggle("collapsed", !shown);'
+    assert html.count(old) == 1
+    lanes = {r["lane"]: r for r in _eval(browser, html.replace(old, 'row.classList.toggle("collapsed", false);'), 390, LANES, clicks=6)}
+    assert lanes["-2"]["h"] > 10
+
+
+THROUGH = r"""() => {
+  // lines are pointer-events: none; make them hit-testable so elementsFromPoint reports what is painted on top
+  const st = document.createElement('style');
+  st.textContent = '#canvas .playhead, #canvas .playhead *, #canvas .conn, #canvas .flash, #canvas .ftick, #canvas .mtick, ' +
+                   '#canvas .mg, #canvas .trans, #canvas .trans *, #canvas .gap, #canvas .gap * { pointer-events: auto !important; }';
+  document.head.appendChild(st);
+  const shown = (e) => { const c = getComputedStyle(e); return c.visibility !== 'hidden' && c.display !== 'none' && !e.closest('.collapsed') &&
+                                                            c.color !== 'rgba(0, 0, 0, 0)'; };
+  const lines = [...document.querySelectorAll('#canvas .playhead, #canvas .phead, #canvas .conn, #canvas .flash, #canvas .ftick, ' +
+                                              '#canvas .mtick, #canvas .mg, #canvas .trans .bow')].filter(shown);
+  const texts = [];
+  document.querySelectorAll('#canvas .clip .label:not(.unfit), #canvas .rail .rl:not(.unfit), #canvas .gap .gl:not(.unfit)')
+    .forEach(e => { if (shown(e)) texts.push([e, e.getBoundingClientRect()]); });
+  document.querySelectorAll('#canvas .tick, #canvas .mlabel, #canvas .mchip, #canvas .flag').forEach(e => {
+    if (!shown(e) || e.classList.contains('unfit')) return;
+    const t = [...e.childNodes].filter(n => n.nodeType === 3); if (!t.length) return;
+    const r = document.createRange(); r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length);
+    texts.push([e, r.getBoundingClientRect()]);
+  });
+  const out = [];
+  // a name's own leader (its ::before) may run along its edge, never through its text
+  document.querySelectorAll('#canvas .rail .rl:not(.unfit)').forEach(e => {
+    if (!shown(e)) return;
+    const b = e.getBoundingClientRect(), pc = getComputedStyle(e, '::before'), lx = b.left + parseFloat(pc.left);
+    const top = pc.top !== 'auto' ? b.top + parseFloat(pc.top) : b.bottom - parseFloat(pc.bottom) - parseFloat(pc.height);
+    const t = [...e.childNodes].filter(n => n.nodeType === 3), r = document.createRange();
+    r.setStart(t[0], 0); r.setEnd(t[t.length - 1], t[t.length - 1].length); const tb = r.getBoundingClientRect();
+    if (lx > tb.left + 0.5 && lx < tb.right - 0.5 && top < tb.bottom - 0.5 && top + parseFloat(pc.height) > tb.top + 0.5)
+      out.push('the leader runs through ' + JSON.stringify(e.textContent));
+  });
+  texts.forEach(([te, tb]) => lines.forEach(l => {
+    if (te.contains(l)) return;
+    const lb = l.getBoundingClientRect();
+    const x0 = Math.max(tb.left, lb.left), x1 = Math.min(tb.right, lb.right), y0 = Math.max(tb.top, lb.top), y1 = Math.min(tb.bottom, lb.bottom);
+    if (x1 - x0 < 0.5 || y1 - y0 < 0.5) return;
+    for (let x = x0 + 0.25; x < x1; x += 1.5) for (let y = y0 + 0.25; y < y1; y += 1.5) {
+      const hits = document.elementsFromPoint(x, y);
+      const li = hits.findIndex(h => h === l || l.contains(h)), ti = hits.findIndex(h => h === te || te.contains(h));
+      // the text paints here (a clip's rounded corner clips its name's box) and the line paints over it
+      if (li >= 0 && ti >= 0 && li < ti) { out.push((l.className.baseVal != null ? l.className.baseVal : l.className) + ' over ' +
+                                                     JSON.stringify(te.textContent.slice(0, 24)) + ' at ' + x.toFixed(1) + ',' + y.toFixed(1)); return; }
+    }
+  }));
+  st.remove();
+  return out;
+}"""
+
+
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+@pytest.mark.parametrize("width", WIDTHS)
+@pytest.mark.parametrize("fixture", FIXTURES)
+def test_nothing_is_drawn_through_text(browser, payloads, fixture, width, scheme):
+    """B4: no line, tick, playhead or glyph pixel is painted inside any text
+    box (names on clips and rows, gap names, ruler times, marker names and
+    chips, the flash flag): marker lines are out of the lanes, the playhead,
+    a flash and every connection line go behind names on opaque grounds."""
+    assert _eval(browser, timeline_app.render_page_html(payloads[fixture]), width, THROUGH, scheme) == []
+
+
+def test_nothing_is_drawn_through_text_after_a_tap(browser, payloads):
+    page = browser.new_page(viewport={"width": 390, "height": 800}, color_scheme="dark")
+    try:
+        page.set_content(timeline_app.render_page_html(payloads["music-video"]))
+        page.wait_for_timeout(50)
+        for i in range(3):  # tap three clips in turn: the playhead moves to each one's start
+            box = page.evaluate(f"""() => {{ const c = [...document.querySelectorAll('#canvas .clip')][{i}], r = c.getBoundingClientRect();
+                return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }}; }}""")
+            page.mouse.click(box["x"], box["y"])
+            page.wait_for_timeout(30)
+            assert page.evaluate(THROUGH) == [], i
+    finally:
+        page.close()
+
+
+def test_the_through_text_gate_goes_red(browser, payloads):
+    """Mutation check: the playhead painted over the names (fa9b811 drew it
+    through "Gap" and "TRACK")."""
+    html = timeline_app.render_page_html(payloads["music-video"])
+    old = "pointer-events: none; z-index: 6; }"
+    assert html.count(old) == 1
+    assert _eval(browser, html.replace(old, "pointer-events: none; z-index: 9; }"), 1440, THROUGH)
+
+
+def test_the_leader_gate_goes_red(browser, payloads):
+    """Mutation check: a centred name's leader drawn the full height of its
+    name, down through "Cross Dissolve 0.5s" (the first round-3 render)."""
+    html = timeline_app.render_page_html(payloads["gym"])
+    old = "  .rail .rl.mid::before { left: 50%; height: var(--lead); }"
+    assert html.count(old) == 1
+    found = _eval(browser, html.replace(old, "  .rail .rl.mid::before { left: 50%; height: calc(15px + var(--lead)); bottom: 0 !important; }"), 390, THROUGH)
+    assert any("leader runs through" in f for f in found), found
+
+
+FLASH_NAMES = r"""() => {
+  const flashes = [...document.querySelectorAll('#canvas .flash')].map(f => f.getBoundingClientRect());
+  const ruler = document.querySelector('#canvas .ruler').getBoundingClientRect(), out = [];
+  flashes.forEach(f => { if (Math.abs(f.top - ruler.top) > 0.5) out.push('the flash line starts at ' + f.top + ', the ruler at ' + ruler.top); });
+  document.querySelectorAll('#canvas .clip .label:not(.unfit), #canvas .rail .rl:not(.unfit)').forEach(e => {
+    if (getComputedStyle(e).visibility === 'hidden' || e.closest('.collapsed')) return;
+    // the name's own text, not its scrim
+    const t = [...e.childNodes].filter(n => n.nodeType === 3); if (!t.length) return;
+    const g = document.createRange(); g.setStart(t[0], 0); g.setEnd(t[t.length - 1], t[t.length - 1].length);
+    const b = g.getBoundingClientRect(), clip = e.closest('.clip');
+    if (clip && b.right > clip.getBoundingClientRect().right + 0.5) out.push(e.textContent + ' runs past its clip');
+    flashes.forEach(f => { if (f.left < b.right + 0.5 && b.left < f.right + 0.5 && f.top < b.bottom && b.top < f.bottom)
+      out.push(e.textContent + ' crosses the flash line'); });
+  });
+  return out;
+}"""
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_no_name_crosses_the_flash_line(browser, payloads, width):
+    """B5: the red flash line runs from the ruler's top through the picture's
+    tracks; no clip's name (inside it, or on a row) crosses it, and a name
+    inside a clip never runs past the clip's end (gym 390/430: the connected
+    Bench's name crossed it)."""
+    assert _eval(browser, timeline_app.render_page_html(payloads["gym"]), width, FLASH_NAMES) == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ('lane.lane > 0 ? flashX : []', '[]'),  # with the names at their clip's start, as fa9b811 placed them (below)
+    (".flash { position: absolute; top: 0; bottom: 0;", ".flash { position: absolute; top: 62px; bottom: 0;"),
+], ids=["names-ignore-the-flash", "flash-under-the-ruler"])
+def test_the_flash_name_gate_goes_red(browser, payloads, old, new):
+    html = timeline_app.render_page_html(payloads["gym"])
+    assert html.count(old) == 1
+    broken = html.replace(old, new)
+    if new == "[]":
+        start = 'prefer: lane.lane ? "end" : "start"'
+        assert broken.count(start) == 1
+        broken = broken.replace(start, 'prefer: "start"')
+    if "top: 62px" in new:  # the line drawn from the ruler's foot (fa9b811), not its top
+        broken = broken.replace('sl.style.bottom = "auto"; sl.style.height = foot + "px";', 'sl.style.top = "62px";')
+        broken = broken.replace('f.style.bottom = "auto"; f.style.height = (s0 + s.offsetHeight) + "px";', 'f.style.top = "62px";')
+    assert _eval(browser, broken, 390, FLASH_NAMES)
+
+
+TRANS = r"""() => {
+  const t = document.querySelector('#canvas .trans'); if (!t) return null;
+  const b = t.getBoundingClientRect(), bg = t.querySelector('.tbg'), fin = [...document.querySelectorAll('#canvas .clip')].find(c => c.__c.name === 'Finish');
+  const lab = fin.querySelector('.label'), name = [...document.querySelectorAll('#canvas .rl.tname')].find(r => !r.classList.contains('unfit'));
+  const cut = fin.getBoundingClientRect().left;
+  return { w: b.width, spans: b.left < cut && cut < b.right, ownBg: getComputedStyle(t).backgroundColor,
+           bgOpacity: bg ? Number(getComputedStyle(bg).opacity) : 1, bow: !!t.querySelector('svg.bow path'),
+           name: name ? name.textContent : null, nameShown: !!name && getComputedStyle(name).visibility !== 'hidden',
+           labelAfter: lab ? lab.getBoundingClientRect().left >= b.right - 0.5 : null };
+}"""
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_a_transition_is_drawn_as_final_cut_draws_it(browser, payloads, width):
+    """D8: a translucent overlay across both clips at the edit, the bow-tie,
+    at least 12 px wide at any width (it never reads as a gap), its name
+    "Cross Dissolve 0.5s" on a row, and the next clip's name after it."""
+    t = _eval(browser, timeline_app.render_page_html(payloads["gym"]), width, TRANS)
+    assert t and t["w"] >= 12 and t["spans"] and t["bow"], t
+    assert t["ownBg"] in ("rgba(0, 0, 0, 0)", "transparent") and t["bgOpacity"] < 1, t
+    assert t["name"] == "Cross Dissolve 0.5s" and t["nameShown"], t
+    assert t["labelAfter"] in (True, None), t
+
+
+def test_the_transition_gate_goes_red(browser, payloads):
+    """Mutation check: an opaque slab (fa9b811's box)."""
+    html = timeline_app.render_page_html(payloads["gym"])
+    old = "background: var(--shade); opacity: .45; }"
+    assert html.count(old) == 1
+    t = _eval(browser, html.replace(old, "background: var(--raised-2); opacity: 1; }"), 1440, TRANS)
+    assert t["bgOpacity"] >= 1
+
+
+TITLES = r"""() => [...document.querySelectorAll('#canvas .clip.k-title')].map(c => {
+  const lab = c.querySelector('.label'), row = [...document.querySelectorAll('.rail .rl')].find(r => r.dataset.for === c.__c.id && !r.classList.contains('unfit'));
+  return { name: c.__c.name, bg: getComputedStyle(c).backgroundColor, h: c.getBoundingClientRect().height, inside: !!lab, row: !!row };
+})"""
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_titles_are_titles_coloured_and_named(browser, payloads, width):
+    """D9: a title clip's body is the Titles role colour (Final Cut 12.4's,
+    read from the app); one too narrow for its name is a 24 px bar named on
+    its row (at 1440 every lower third is named); no empty grey pill."""
+    titles = _eval(browser, timeline_app.render_page_html(payloads["interview"]), width, TITLES)
+    assert len(titles) == 8
+    for t in titles:
+        assert _hex(t["bg"]) == palette.dark("role-titles").upper(), t
+        assert t["inside"] or round(t["h"]) == 24, t
+        if width == 1440:
+            assert t["inside"] or t["row"], t
+
+
+def test_the_title_gate_goes_red(browser, payloads):
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = ".clip.k-title { background: var(--role-titles); border-color: var(--role-titles); }"
+    assert html.count(old) == 1
+    titles = _eval(browser, html.replace(old, ".clip.k-title { background: var(--raised-2); }"), 1440, TITLES)
+    assert any(_hex(t["bg"]) != palette.dark("role-titles").upper() for t in titles)
+
+
+THIN = r"""() => ({ clips: [...document.querySelectorAll('#canvas .clip')].filter(c => c.__c.lane).map(c => [c.__c.name, c.getBoundingClientRect().width]),
+  conns: [...document.querySelectorAll('#canvas .conn')].map(c => [getComputedStyle(c).borderLeftWidth, getComputedStyle(c, '::after').width]) })"""
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_no_connected_clip_is_thinner_than_6_px(browser, payloads, width):
+    """D10: the interview's 2 s whooshes are 6 px at least (fa9b811: 2 px);
+    connection lines 2 px with a 6 px anchor dot."""
+    facts = _eval(browser, timeline_app.render_page_html(payloads["interview"]), width, THIN)
+    assert all(w >= 6 - 0.01 for _n, w in facts["clips"]), facts["clips"]
+    assert facts["conns"] and all(c == ["2px", "6px"] for c in facts["conns"]), facts["conns"][:3]
+
+
+def test_the_thin_clip_gate_goes_red(browser, payloads):
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = "var MIN_W = 6,"
+    assert html.count(old) == 1
+    facts = _eval(browser, html.replace(old, "var MIN_W = 1,"), 1440, THIN)
+    assert any(w < 6 for _n, w in facts["clips"])
+
+
+OVERVIEW = r"""() => { const ov = document.getElementById('overview');
+  return { ground: getComputedStyle(ov).backgroundColor, bars: [...new Set([...ov.querySelectorAll('.ob')].map(b => getComputedStyle(b).backgroundColor))],
+           glyphs: ov.querySelectorAll('.og.mg').length, lines: ov.querySelectorAll('.om').length,
+           total: window.__fcpApp.state.payload.markers.length + window.__fcpApp.state.payload.clips.reduce((n, c) => n + (c.markers || []).length, 0) }; }"""
+
+
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+def test_the_overview_reads(browser, payloads, scheme):
+    """E12: every clip bar 3:1 or better on the overview's ground; every
+    marker a glyph (fa9b811: bars at about 1.5:1, markers plain lines)."""
+    o = _eval(browser, timeline_app.render_page_html(payloads["interview"]), 1440, OVERVIEW, scheme)
+    assert o["bars"] and all(palette.contrast(_hex(b), _hex(o["ground"])) >= 3 for b in o["bars"]), o
+    assert o["glyphs"] == o["total"] == 14 and o["lines"] == 0, o
+
+
+def test_the_overview_contrast_gate_goes_red(browser, payloads):
+    html = timeline_app.render_page_html(payloads["interview"])
+    old = "#overview .ob { position: absolute; border-radius: 1px; background: var(--mute); }"
+    assert html.count(old) == 1
+    o = _eval(browser, html.replace(old, "#overview .ob { position: absolute; border-radius: 1px; background: var(--line-strong); }"), 1440, OVERVIEW)
+    assert any(palette.contrast(_hex(b), _hex(o["ground"])) < 3 for b in o["bars"])
+
+
+HEADER = r"""() => { const m = document.getElementById('meta'), t = m.firstChild.textContent, fmt = /\d+×\d+\s@\s[\d.]+fps/.exec(t);
+  const r = document.createRange(); r.setStart(m.firstChild, fmt.index); r.setEnd(m.firstChild, fmt.index + fmt[0].length);
+  return { text: t, tops: [...new Set([...r.getClientRects()].map(q => Math.round(q.top)))].length }; }"""
+
+
+def test_the_header_reads_whole(browser, payloads):
+    """E13: on the music video at 390 the format "3840×2160 @ 23.98fps" never
+    breaks inside (fa9b811 broke after "@"); a gap spine says so; the length
+    is a timecode."""
+    h = _eval(browser, timeline_app.render_page_html(payloads["music-video"]), 390, HEADER)
+    assert h["tops"] == 1, h
+    assert h["text"].startswith("gap spine + 8 connected · 00:02:43:20 · "), h
+
+
+def test_the_header_gate_goes_red(browser, payloads):
+    html = timeline_app.render_page_html(payloads["music-video"])
+    old = '"\\u00a0@\\u00a0"'
+    assert html.count(old) == 1
+    assert _eval(browser, html.replace(old, '" @ "'), 390, HEADER)["tops"] > 1
 
 
 # ---------------------------------------------------------------------------

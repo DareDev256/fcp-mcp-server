@@ -130,17 +130,30 @@ def test_tokens_are_grey_or_cyan_or_red():
 ROLE_USE = re.compile(r"var\(--role-[a-z]+\)")
 
 
+TITLE_BODY = re.compile(r"\.clip\.k-title \{[^}]*\}")
+
+
 def role_uses_off_stripe(text: str) -> list:
-    """Lines that paint with a role colour anywhere but a clip's role stripe
-    (0.33 direction B: Final Cut's role colours, stripes only)."""
-    return [line.strip() for line in text.splitlines() if ROLE_USE.search(line) and ".stripe.role-" not in line]
+    """Lines that paint with a role colour anywhere but a clip's role stripe,
+    or (0.34 round 3) the Titles colour on a title clip's body, as Final Cut
+    draws a title. Any other role on a title body, or any text, is caught."""
+    out = []
+    for line in text.splitlines():
+        if not ROLE_USE.search(line) or ".stripe.role-" in line:
+            continue
+        if TITLE_BODY.search(line) and set(ROLE_USE.findall(line)) == {"var(--role-titles)"} and "color: var(--role" not in line.replace("border-color", ""):
+            continue
+        out.append(line.strip())
+    return out
 
 
-def test_role_colours_paint_stripes_only():
+def test_role_colours_paint_stripes_and_title_bodies_only():
     text = (REPO / "fcpxml" / "timeline_app.py").read_text(encoding="utf-8")
     assert ROLE_USE.search(text)
     assert role_uses_off_stripe(text) == []
     assert role_uses_off_stripe("  .clip .label { color: var(--role-music); }")
+    assert role_uses_off_stripe("  .clip.k-title { background: var(--role-music); }")
+    assert role_uses_off_stripe("  .clip.k-title { color: var(--role-titles); }")
 
 
 FAILURE_ONLY = ("fcpxml/proofs.py", "fcpxml/raster.py", "tools/preview.py", "tools/scenes.py")
