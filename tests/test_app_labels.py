@@ -286,10 +286,13 @@ def halo_coverage(browser, html: str, dpr: int = 1) -> float:
         page.close()
     px = shot.load()
     w, h = shot.size
-    # a glyph pixel is red on dark: the red text, alone or blended with its
-    # halo; a light pixel with a warm tint is the halo's own fringe over the
-    # white frame (CI's Linux draws it sub-pixel, (213, 173, 137)), not text
-    glyph = {(x, y) for x in range(w) for y in range(h) if px[x, y][0] > 80 and px[x, y][1] < 60 and px[x, y][2] < 60}
+    # the text's core: pixels the red name covers (red over 200, green and
+    # blue under 60). Its edge pixels, part text and part what is under it,
+    # are in the ring and are measured: dark red over a halo, pink over a
+    # bare frame. (CI's Linux draws text sub-pixel: its edge spreads a pixel
+    # past the core, and counting that edge as text put the ring on the
+    # halo's own soft rim, (250, 250, 211), 2 px out.)
+    glyph = {(x, y) for x in range(w) for y in range(h) if px[x, y][0] > 200 and px[x, y][1] < 60 and px[x, y][2] < 60}
     ring = {(x + dx, y + dy) for x, y in glyph for dx in (-1, 0, 1) for dy in (-1, 0, 1)
             if 0 <= x + dx < w and 0 <= y + dy < h and (x + dx, y + dy) not in glyph}
     if not glyph or not ring:
@@ -306,8 +309,8 @@ HALO_SEEN: dict = {}  # what the last measurement saw, for the failure message
 
 
 def test_a_label_over_a_white_frame_reads_at_4_5_to_1(browser):
-    """(A 1 px outline read 97% here on macOS and 76% on CI's Linux; the
-    2 px outline reads 100% on macOS.)"""
+    """Measured from the text's core: 100% with the halo on macOS, 25% with a
+    soft shadow only, 0% with no halo (round 4)."""
     one = halo_coverage(browser, timeline_app.render_app_html())
     seen = dict(HALO_SEEN)
     assert one >= 0.95, (seen, "at 2x:", halo_coverage(browser, timeline_app.render_app_html(), 2))
