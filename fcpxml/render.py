@@ -454,7 +454,8 @@ def frame_scale_filter(max_short_side: int) -> str:
 
 
 def render_frame(
-    source: str, at: Fraction, out_path: str, *, max_short_side: Optional[int] = None
+    source: str, at: Fraction, out_path: str, *, max_short_side: Optional[int] = None,
+    quality: Optional[int] = None,
 ) -> Optional[str]:
     """Extract a single frame from *source* at *at* seconds.
 
@@ -462,7 +463,8 @@ def render_frame(
     shorter edge (see :func:`frame_scale_filter`) for consumers that only need
     to look at the picture, not measure it — a vision model captions a 1080p
     frame in a fraction of the time it takes on a 4K one, and says the same
-    thing.
+    thing. ``quality`` is ffmpeg's JPEG ``-q:v`` (2 best .. 31), for a
+    thumbnail that travels in a payload; None leaves ffmpeg's default.
     """
     if shutil.which("ffmpeg") is None or not Path(source).is_file():
         return None
@@ -470,6 +472,8 @@ def render_frame(
             "-ss", str(float(at)), "-i", str(source)]
     if max_short_side is not None:
         args += ["-vf", frame_scale_filter(max_short_side)]
+    if quality is not None:
+        args += ["-q:v", str(int(quality))]
     args += ["-frames:v", "1", str(out_path)]
     try:
         result = subprocess.run(

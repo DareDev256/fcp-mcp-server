@@ -20,6 +20,7 @@ from typing import Callable, Optional
 import tools
 from fcpxml import dtd, gen, journal, render, timeline_app
 from fcpxml.media_intel import media_src_to_path
+from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 from tools._common import parse_project, text_result
 
@@ -76,7 +77,7 @@ def _gap_target(args: dict, payload: dict) -> Target:
     else:
         index = int(args.get("gap_index", 0))
         if not 0 <= index < len(gaps):
-            raise ValueError(f"gap_index must be 0..{len(gaps) - 1}; there are {len(gaps)} gaps")
+            raise ValueError(f"gap_index must be 0..{len(gaps) - 1}; there are {plural(len(gaps), 'gap')}")
         hit = gaps[index]
     seconds = Fraction(hit["duration"])
     if args.get("seconds") is not None:
@@ -211,7 +212,7 @@ async def handle_gen_quote(args: dict):
         f"**Quote {q.id}** — {q.provider}/{q.model}, {q.billable_seconds}s billable "
         f"for {float(q.requested_seconds):.2f}s requested",
         f"Estimated: {'$' + str(q.usd) if q.usd is not None else 'no price on file'} "
-        f"(prices as of {q.prices_as_of}, {gen.prices_age_days()} days ago; "
+        f"(prices as of {q.prices_as_of}, {plural(gen.prices_age_days(), 'day')} ago; "
         + ("read on the vendor's own page" if q.confirmed else "UNVERIFIED: no vendor page states it")
         + "; third-party figures, NOT verified against an invoice)",
         f"Cap: ${q.cap_usd} per call ({gen.MAX_USD_ENV})" + (" — OVER CAP, generation will refuse" if q.over_cap else ""),
@@ -222,7 +223,7 @@ async def handle_gen_quote(args: dict):
         lines.append(
             "To spend it: call gen_fill_gap / gen_broll / gen_extend_clip with the same provider, model, "
             f"seconds and prompt, plus quote_id=\"{q.id}\" and confirm=true. Valid for "
-            f"{gen.QUOTE_TTL_SECONDS // 60} minutes in this server process."
+            f"{plural(gen.QUOTE_TTL_SECONDS // 60, 'minute')} in this server process."
         )
     lines.append("```json\n" + json.dumps(d) + "\n```")
     return text_result(gen.redact("\n".join(lines)))

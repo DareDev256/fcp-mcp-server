@@ -11,7 +11,10 @@ This renders the real shell in headless Chromium at 1440 and 390 on the two
 fixtures and on a stress payload (a long clip name, five markers in two
 seconds, a run-out past the last clip), and measures every label box. It is
 skipped where Playwright or its browser is missing; the `rendered-labels` CI
-job installs both so it runs on every push.
+job installs both so it runs on every push. Since 0.34 there is one look
+(open, like Final Cut's timeline): clip numbers and the key under the
+timeline went with the 0.32 look, and (0.34 round 4) a clip is named inside
+itself, whole, or in the strip when tapped (tests/test_app_glance.py holds those).
 """
 
 from __future__ import annotations
@@ -42,15 +45,19 @@ EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 # it names, and inside the scroller's visible track area (right of the
 # sticky lane gutter). A hidden label (.unfit) is allowed; a cut one is not.
 OFFENDERS = """() => {
-  const out = [], GUTTER = 48;
+  const out = [], GUTTER = window.__fcpApp.gutter;
   const sc = document.getElementById('scroller'), r = sc.getBoundingClientRect();
   const left = r.left + GUTTER, right = r.right - 1;
+  // (a tick the playhead hides is still measured: hiding it is not how the head clears it)
   const shown = (e) => !e.classList.contains('unfit') && e.textContent.trim() !== '';
   const name = (e) => e.className + ' "' + e.textContent.trim().slice(0, 24) + '"';
-  sc.querySelectorAll('.tick, .mlabel, .gap, .clip .label').forEach((e) => {
+  // the text's own box: a marker's glyph hangs left of its name and is not text
+  const textBox = (e) => { const g = document.createRange(), t = [...e.childNodes].filter(n => n.nodeType === 3);
+    if (t.length) { g.setStart(t[0], 0); g.setEnd(t[t.length - 1], t[t.length - 1].length); } else g.selectNodeContents(e);
+    return g.getBoundingClientRect(); };
+  sc.querySelectorAll('.tick, .mlabel, .gap .gl, .clip .label').forEach((e) => {
     if (!shown(e)) return;
-    const range = document.createRange(); range.selectNodeContents(e);
-    const b = range.getBoundingClientRect();   // the text, not its (possibly clip-wide) block
+    const b = textBox(e);   // the text, not its (possibly clip-wide) block
     if (e.scrollWidth > e.clientWidth + 0.5 && !e.classList.contains('tick') && !e.classList.contains('mlabel'))
       out.push('truncated ' + name(e));
     if (b.left < left - 0.5 || b.right > right + 0.5) out.push('clipped by the view ' + name(e));
@@ -59,10 +66,9 @@ OFFENDERS = """() => {
   });
   // The other way to fail: hiding a label that would have fitted (its text
   // fits its own box and lies inside the view). Crowded markers are exempt.
-  sc.querySelectorAll('.tick.unfit, .gap.unfit, .clip .label.unfit, .mlabel.unfit:not(.crowded)').forEach((e) => {
+  sc.querySelectorAll('.tick.unfit, .gap .gl.unfit, .clip .label.unfit, .mlabel.unfit:not(.crowded)').forEach((e) => {
     if (e.textContent.trim() === '') return;
-    const range = document.createRange(); range.selectNodeContents(e);
-    const b = range.getBoundingClientRect();
+    const b = textBox(e);
     const fitsOwn = e.classList.contains('tick') || e.classList.contains('mlabel') || e.scrollWidth <= e.clientWidth + 0.5;
     if (fitsOwn && b.left >= left - 0.5 && b.right <= right + 0.5) out.push('hidden though it fits ' + name(e));
   });
@@ -74,10 +80,9 @@ OFFENDERS = """() => {
   if (head) {
     const hb = head.getBoundingClientRect(), lb = ph.getBoundingClientRect();
     const line = { left: lb.left, right: lb.left + 2, top: lb.top, bottom: lb.bottom };
-    sc.querySelectorAll('.tick, .mlabel, .gap, .clip .label').forEach((e) => {
+    sc.querySelectorAll('.tick, .mlabel, .gap .gl, .clip .label').forEach((e) => {
       if (!shown(e)) return;
-      const range = document.createRange(); range.selectNodeContents(e);
-      if (near(hb, range.getBoundingClientRect(), 1)) out.push('the playhead head touches ' + name(e));
+      if (near(hb, textBox(e), 1)) out.push('the playhead head touches ' + name(e));
     });
     sc.querySelectorAll('.mlabel').forEach((e) => {
       if (near(line, e.getBoundingClientRect(), 0)) out.push('the playhead line covers the marker ' + name(e));
@@ -152,8 +157,10 @@ def test_the_check_goes_red_without_the_fit_pass(browser):
     """Mutation check: the same shell with fitLabels() never called draws cut
     labels on the stress payload, and the measurement sees them."""
     html = timeline_app.render_app_html()
-    broken = html.replace("    placePlayhead();\n    fitLabels();\n", "    placePlayhead();\n")
-    assert broken != html, "the fit pass is no longer called where this test expects"
+    broken = html.replace("    placePlayhead();\n    fitLabels();\n    drawOverview();\n", "    placePlayhead();\n    drawOverview();\n")
+    broken = broken.replace("sc.scrollLeft = Math.max(0, state.region[0] * state.pps);\n    fitLabels();", "sc.scrollLeft = Math.max(0, state.region[0] * state.pps);")
+    broken = broken.replace('$("scroller").addEventListener("scroll", function () { fitLabels(); syncOverview(); });', "")
+    assert broken.count("fitLabels();") == 0, "the fit pass is called where this test does not expect"
     found = offenders(browser, broken, _stress(), 390)
     assert found, "the instrument cannot see a cut label"
     assert any("clipped by the view" in f or "truncated" in f for f in found)
@@ -192,13 +199,19 @@ def test_a_marker_at_the_playhead_keeps_its_flag(browser, width):
 
 
 @pytest.mark.parametrize("mutation,old,new", [
-    ("the playhead back over the marker rows", ".playhead { position: absolute; top: 30px;", ".playhead { position: absolute; top: 0;"),
-    ("tick text back against the playhead head", "padding-left: 9px;", "padding-left: 4px;"),
-], ids=["playhead-over-markers", "tick-under-head"])
+    ("the playhead back over the marker rows", ".playhead { position: absolute; top: 54px;", ".playhead { position: absolute; top: 0;"),
+    # the head back up in the time row (round 3's place), with a time 2 px from its tick
+    ("the head back in the time row", "border-left: 1px solid var(--line-strong); padding: 0 0 9px 8px;",
+     "border-left: 1px solid var(--line-strong); padding: 0 0 9px 2px;"),
+], ids=["playhead-over-markers", "head-in-the-times"])
 def test_the_touch_check_goes_red(browser, mutation, old, new):
     """Mutation checks: the round-3 collisions, put back, are seen."""
     html = timeline_app.render_app_html()
     assert html.count(old) == 1, mutation
+    if "time row" in mutation:
+        up = "border-bottom: 0; border-top: 8px solid var(--accent); }"
+        assert html.count(up) == 1
+        html = html.replace(up, "border-bottom: 0; border-top: 8px solid var(--accent); top: -16px; }")
     assert offenders(browser, html.replace(old, new), _marker_at_zero(), 390), mutation
 
 
@@ -206,23 +219,29 @@ def test_the_border_check_goes_red(browser):
     """Mutation check: without the track padding the last lane's clips sit
     within 6px of the border (the critic's TRACK clip at 390)."""
     html = timeline_app.render_app_html()
-    old = "#canvas { position: relative; min-width: 100%; padding-bottom: 8px; }"
+    old = "#canvas { position: relative; min-width: 100%; padding-bottom: 8px; isolation: isolate; }"
     assert html.count(old) == 1
-    found = offenders(browser, html.replace(old, "#canvas { position: relative; min-width: 100%; }"),
+    found = offenders(browser, html.replace(old, "#canvas { position: relative; min-width: 100%; isolation: isolate; }"),
                       _payload("music-video.fcpxml"), 390)
     assert any("bottom border" in f for f in found)
 
 
-def test_a_crowded_marker_keeps_its_flag_and_its_name_in_the_tooltip(browser):
+def test_crowded_markers_are_named_or_counted_in_a_chip(browser):
+    """Five markers inside two seconds at phone width: each is named right
+    of its own glyph, or counted in a cluster chip whose tooltip names it
+    (0.34 round 3; until then a crowded marker kept a glyph with no name)."""
     page = browser.new_page(viewport={"width": 390, "height": 900})
     try:
         page.set_content(timeline_app.render_app_html())
         page.evaluate("p => window.__fcpApp.setPayload(p)", _stress())
-        flags = page.evaluate("() => [...document.querySelectorAll('.mlabel')].map(e => [e.title, e.offsetHeight > 0])")
+        named = page.evaluate("() => [...document.querySelectorAll('.mlabel')].filter(e => getComputedStyle(e).display !== 'none').map(e => e.textContent)")
+        chips = page.evaluate("() => [...document.querySelectorAll('.mchip')].map(e => [Number(e.dataset.count), e.title])")
     finally:
         page.close()
-    names = [t for t, _ in flags]
-    assert all(f"Beat {i}" in names for i in range(1, 6)) and all(drawn for _, drawn in flags)
+    listed = " · ".join(t for _, t in chips)
+    for i in range(1, 6):
+        assert f"Beat {i}" in named or f"Beat {i} " in listed, (named, chips)
+    assert all(n == len(t.split(" · ")) for n, t in chips), chips
 
 
 # ---------------------------------------------------------------------------
@@ -239,9 +258,13 @@ def _white_thumb() -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def _label_contrast(browser, html: str) -> float:
-    """Render a clip whose thumbnail is pure white, hide the label's text,
-    and measure the brightest pixel left where the text sits."""
+def halo_coverage(browser, html: str, dpr: int = 1) -> float:
+    """Render a clip whose thumbnail is pure white, draw its name in pure red
+    (so its glyphs can be found), and measure the ring of pixels just outside
+    the glyphs: the share of them that the white name reads against at 4.5:1
+    or better. 0.34 round 4 took the scrim pill away: the name's halo (a 1 px
+    black outline and a soft shadow) is what makes it read over a picture."""
+    import base64
     import io
 
     from PIL import Image
@@ -251,37 +274,54 @@ def _label_contrast(browser, html: str) -> float:
     p = copy.deepcopy(_payload("sample.fcpxml"))
     for c in p["clips"]:
         c["thumb"] = _white_thumb()
-    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page = browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=dpr)
     try:
         page.set_content(html)
         page.evaluate("p => window.__fcpApp.setPayload(p)", p)
         label = page.locator(".lane.spine .clip.has-thumb .label:not(.unfit)").first
-        top = label.evaluate("e => parseFloat(getComputedStyle(e).paddingTop)")
-        # the playhead and marker lines are drawn over clips on purpose; measure the scrim alone
-        page.add_style_tag(content='.playhead, .markers, .mk, .range { visibility: hidden !important; }')
-        label.evaluate("e => [e, ...e.querySelectorAll('*')].forEach(x => { x.style.color = 'transparent'; })")
+        page.add_style_tag(content='.playhead, .range { visibility: hidden !important; }')
+        label.evaluate("e => { e.style.color = 'rgb(255, 0, 0)'; }")
         shot = Image.open(io.BytesIO(label.screenshot())).convert("RGB")
     finally:
         page.close()
-    # where the text is drawn, inset 2px: the box sits at a fractional x, so its edge
-    # columns catch a sliver of the clip border beside it
-    band = shot.crop((2, int(top) + 1, shot.width - 2, shot.height - 1))
-    raw = band.tobytes()  # RGB triples; getdata() is deprecated from Pillow 13
-    brightest = max((tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)), key=sum)
-    return palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % brightest)
+    px = shot.load()
+    w, h = shot.size
+    # the text's core: pixels the red name covers (red over 200, green and
+    # blue under 60). Its edge pixels, part text and part what is under it,
+    # are in the ring and are measured: dark red over a halo, pink over a
+    # bare frame. (CI's Linux draws text sub-pixel: its edge spreads a pixel
+    # past the core, and counting that edge as text put the ring on the
+    # halo's own soft rim, (250, 250, 211), 2 px out.)
+    glyph = {(x, y) for x in range(w) for y in range(h) if px[x, y][0] > 200 and px[x, y][1] < 60 and px[x, y][2] < 60}
+    ring = {(x + dx, y + dy) for x, y in glyph for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+            if 0 <= x + dx < w and 0 <= y + dy < h and (x + dx, y + dy) not in glyph}
+    if not glyph or not ring:
+        return 0.0
+    bad = [(x, y) for x, y in ring if palette.contrast(palette.dark("on-media"), "#%02X%02X%02X" % px[x, y]) < 4.5]
+    out = io.BytesIO()
+    shot.save(out, "PNG")
+    HALO_SEEN.update(size=(w, h), glyph=len(glyph), ring=len(ring), bad=[(x, y, px[x, y]) for x, y in bad][:30],
+                     png=base64.b64encode(out.getvalue()).decode())
+    return 1 - len(bad) / len(ring)
+
+
+HALO_SEEN: dict = {}  # what the last measurement saw, for the failure message
 
 
 def test_a_label_over_a_white_frame_reads_at_4_5_to_1(browser):
-    assert _label_contrast(browser, timeline_app.render_app_html()) >= 4.5
+    """Measured from the text's core: 100% with the halo on macOS, 25% with a
+    soft shadow only, 0% with no halo (round 4)."""
+    one = halo_coverage(browser, timeline_app.render_app_html())
+    seen = dict(HALO_SEEN)
+    assert one >= 0.95, (seen, "at 2x:", halo_coverage(browser, timeline_app.render_app_html(), 2))
 
 
-def test_the_scrim_check_goes_red_without_the_scrim(browser):
-    """Mutation check: the 0.31 first-pass scrim (a fade across the text) is caught."""
+def test_the_halo_check_goes_red_without_the_halo(browser):
+    """Mutation check: the name over a picture with no halo (and no pill)."""
     html = timeline_app.render_app_html()
-    broken = html.replace("background: linear-gradient(to bottom, transparent 0, var(--shade) 10px);",
-                          "background: linear-gradient(transparent, var(--shade));")
+    broken = re.sub(r"(\.clip\.has-thumb \.label \{ color: var\(--on-media\);)\s*text-shadow:[^}]*\}", r"\1 }", html)
     assert broken != html
-    assert _label_contrast(browser, broken) < 4.5
+    assert halo_coverage(browser, broken) < 0.5
 
 
 def _spine_tile_height(browser) -> float:
@@ -296,7 +336,8 @@ def _spine_tile_height(browser) -> float:
 
 def thumbnail_problem(short_side: int, tile_height: float) -> str | None:
     """A thumbnail's short side is at least twice the tile it fills, so it is
-    sharp on a 2x display instead of upscaled (round 4: 54 px in a 48 px tile)."""
+    sharp on a 2x display instead of upscaled (round 4: 54 px in a 48 px tile;
+    0.34: the 108 px of 0.33 in an 88 px clip)."""
     if short_side < 2 * tile_height:
         return f"{short_side} px thumbnails for a {tile_height:.0f} px tile: under 2x"
     return None
@@ -307,7 +348,7 @@ def test_thumbnails_are_twice_the_tile(browser):
 
 
 def test_the_thumbnail_check_goes_red_at_the_old_size(browser):
-    assert thumbnail_problem(54, _spine_tile_height(browser)) is not None
+    assert thumbnail_problem(108, _spine_tile_height(browser)) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -332,31 +373,23 @@ def test_the_preview_page_draws_itself_with_no_host(browser, fixture, width):
 
 
 PAGE_FACTS = """() => {
-  const sc = document.getElementById('scroller'), r = sc.getBoundingClientRect();
   const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
   const clips = [...document.querySelectorAll('#canvas .clip')].map(c => {
-    const num = c.querySelector('.num'), lane = Number(c.parentNode.dataset.lane);
-    const out = [...c.parentNode.querySelectorAll('.onum')].find(o => o.dataset.for === num.textContent);
-    return { name: c.title.split(' · ')[0], num: num.textContent, lane, clip: box(c),
-             inside: num.classList.contains('on') && getComputedStyle(num).visibility === 'visible',
-             out: out ? { box: box(out), visible: getComputedStyle(out).visibility === 'visible',
-                          lead: !!out.querySelector('.lead') } : null };
+    const lab = c.querySelector('.label'), lane = Number(c.parentNode.dataset.lane);
+    return { name: c.__c.name, id: c.__c.id, lane, clip: box(c), row: box(c.parentNode),
+             inside: !!lab && !lab.classList.contains('unfit') && getComputedStyle(lab).visibility !== 'hidden' ? lab.textContent : null };
   });
-  const texts = [...document.querySelectorAll('#canvas .tick, #canvas .mlabel, #canvas .clip .label')]
-    .filter(e => !e.classList.contains('unfit') && getComputedStyle(e).visibility !== 'hidden' && e.textContent.trim())
-    .map(e => { const g = document.createRange(); g.selectNodeContents(e); const b = g.getBoundingClientRect();
-                return { text: e.textContent.trim().slice(0, 20), l: b.left, r: b.right, t: b.top, b: b.bottom }; });
-  const key = [...document.querySelectorAll('#key span')].map(s => [s.querySelector('b').textContent, s.textContent.slice(s.querySelector('b').textContent.length)]);
   const acts = [...document.querySelectorAll('#acts button')].map(b => ({ aria: b.getAttribute('aria-disabled'),
              border: getComputedStyle(b).borderStyle }));
-  const role = document.querySelector('.clip .role');
   const input = document.querySelector('#acts input');
   let bg = input, bgc = getComputedStyle(bg).backgroundColor;
   while (bg && (bgc === 'rgba(0, 0, 0, 0)' || bgc === 'transparent')) { bg = bg.parentElement; bgc = bg ? getComputedStyle(bg).backgroundColor : 'rgb(0, 0, 0)'; }
-  return { overflow: sc.scrollWidth - sc.clientWidth, clips, texts, key, acts,
-           meta: document.getElementById('meta').textContent,
+  const sc = document.getElementById('scroller');
+  return { pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, clips, acts,
+           meta: document.getElementById('meta').textContent, overview: document.querySelectorAll('#overview .ob').length,
+           rows: document.querySelectorAll('#canvas .rail, #canvas .rl').length, count: document.getElementById('count').textContent,
            note: (document.querySelector('.readonly-note') || {}).textContent || '',
-           role: role ? { size: parseFloat(getComputedStyle(role).fontSize), upper: getComputedStyle(role).textTransform } : null,
+           roleText: document.querySelectorAll('.clip .role').length,
            card: getComputedStyle(document.querySelector('.card')).backgroundColor,
            placeholder: getComputedStyle(input, '::placeholder').color, placeholderOn: bgc };
 }"""
@@ -367,58 +400,54 @@ def _hex(css: str) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-def _meets(a: dict, b: dict) -> bool:
-    return a["l"] < b["r"] and b["l"] < a["r"] and a["t"] < b["b"] and b["t"] < a["b"]
-
-
 @pytest.mark.parametrize("width", [980, 1440, 390])
-def test_the_preview_page_fits_numbers_and_keys_every_clip(browser, width):
-    """The whole 164 s sequence in the width (an 8 px/s floor ran it 14 s
-    past the edge). EVERY clip carries its number: inside, or just outside on
-    a leader (above, or below for a lane under the spine) when the box is
-    too narrow; the key lists every clip, as many as the header counts; no
-    outside number meets another or any label. The edit controls are
-    visibly off and say why; the role tag is 12 px capitals; the panels a
-    neutral grey; the placeholder reads at 4.5:1 on what it sits on."""
+def test_the_preview_page_names_every_clip_and_switches_its_controls_off(browser, width):
+    """The page never scrolls sideways (the overview bar carries the whole
+    cut, one bar per clip); every clip is named inside its box, whole, or
+    (no room there) named in the strip when tapped; the
+    edit controls are visibly off and say why; no role is written as text
+    (it is the stripe); the panels a neutral grey; the placeholder reads at
+    4.5:1 on what it sits on."""
     tl = FCPXMLParser().parse_file(str(EXAMPLES / "music-video.fcpxml")).timelines[0]
     page = browser.new_page(viewport={"width": width, "height": 900})
     try:
         page.set_content(timeline_app.render_page_html(timeline_app.build_payload(tl)))
         page.wait_for_timeout(50)
         facts = page.evaluate(PAGE_FACTS)
+        # a clip with no room for its name anywhere stays tappable: the strip above the ruler names it
+        tapped = {}
+        for c in facts["clips"]:
+            if c["inside"]:
+                continue
+            box = c["clip"]
+            page.mouse.click((box["l"] + box["r"]) / 2, (box["t"] + box["b"]) / 2)
+            tapped[c["name"]] = page.evaluate("() => document.getElementById('strip').querySelector('b').textContent")
     finally:
         page.close()
-    assert facts["overflow"] <= 1, facts["overflow"]
-    n, m = (int(v) for v in re.search(r"(\d+) clips? \+ (\d+) connected", facts["meta"]).groups())
-    assert len(facts["key"]) == n + m == len(facts["clips"])
-    assert facts["key"] == [[c["num"], c["name"]] for c in sorted(facts["clips"], key=lambda c: int(c["num"]))]
-    outs = []
+    assert facts["pageOverflow"] <= 1, facts["pageOverflow"]
+    m = re.search(r"(\d+ clips?|gap spine) \+ (\d+) connected", facts["meta"])
+    n = 0 if m.group(1) == "gap spine" else int(m.group(1).split()[0])
+    assert facts["overview"] == n + int(m.group(2)) == len(facts["clips"])
     for c in facts["clips"]:
-        assert c["inside"] or (c["out"] and c["out"]["visible"]), c
-        if c["out"]:
-            o = c["out"]["box"]
-            assert c["out"]["lead"], c
-            if c["lane"] >= 0:
-                assert o["b"] <= c["clip"]["t"], c  # above the box
-            else:
-                assert o["t"] >= c["clip"]["b"], c  # below it, under the spine
-            outs.append(o)
-    for i, a in enumerate(outs):
-        assert not any(_meets(a, b) for b in outs[i + 1:]), a
-        assert not any(_meets(a, t) for t in facts["texts"]), a
+        if c["name"] in tapped:
+            assert tapped[c["name"]] == c["name"], (c, tapped)
+        else:
+            assert c["inside"] == c["name"], c
+    assert facts["rows"] == 0
     assert all(b["aria"] == "true" and b["border"] == "dashed" for b in facts["acts"])
     assert "Read only" in facts["note"]
-    assert facts["role"]["size"] >= 12 and facts["role"]["upper"] == "uppercase"
+    assert facts["roleText"] == 0
     r, g, b = (int(v) for v in re.findall(r"\d+", facts["card"])[:3])
     assert r == g == b, facts["card"]
     assert palette.contrast(_hex(facts["placeholder"]), _hex(facts["placeholderOn"])) >= 4.5, facts
 
 
 @pytest.mark.parametrize("width", [980, 390])
-def test_a_narrow_clip_under_the_spine_is_numbered_below_it(browser, tmp_path, width):
-    """The fixture's one clip under the spine (the music bed) is long enough
-    to hold its number; cut to one second it is not, and its number goes
-    just BELOW its box on a leader, visible, never above it."""
+def test_a_narrow_clip_under_the_spine_has_no_name_row(browser, tmp_path, width):
+    """The fixture's one clip under the spine (the music bed) cut to one
+    second has no room for its name: it has no name, no name row and no
+    leader (0.34 round 4; round 3 hung its name on a row under its lane); the
+    hint strip counts it as not shown, and a tap names it in the strip."""
     src = (EXAMPLES / "music-video.fcpxml").read_text()
     old = 'lane="-1" name="TRACK"\n                          offset="3600s" start="0s" duration="164s"'
     assert src.count(old) == 1
@@ -430,12 +459,16 @@ def test_a_narrow_clip_under_the_spine_is_numbered_below_it(browser, tmp_path, w
         page.set_content(timeline_app.render_page_html(timeline_app.build_payload(tl)))
         page.wait_for_timeout(50)
         facts = page.evaluate(PAGE_FACTS)
+        bed = next(c for c in facts["clips"] if c["lane"] < 0)
+        box = bed["clip"]
+        page.mouse.click((box["l"] + box["r"]) / 2, (box["t"] + box["b"]) / 2)
+        tapped = page.evaluate("() => document.getElementById('strip').querySelector('b').textContent")
     finally:
         page.close()
-    bed = next(c for c in facts["clips"] if c["lane"] < 0)
-    assert not bed["inside"] and bed["out"] and bed["out"]["visible"] and bed["out"]["lead"], bed
-    assert bed["out"]["box"]["t"] >= bed["clip"]["b"], bed
-    assert [bed["num"], bed["name"]] in facts["key"]
+    assert not bed["inside"] and facts["rows"] == 0, bed
+    shown = sum(1 for c in facts["clips"] if c["inside"])
+    assert facts["count"] == f"{shown} of {len(facts['clips'])} names shown · tap or zoom", facts["count"]
+    assert tapped == "TRACK"
 
 
 HEAD_GAP = """() => {
@@ -472,6 +505,6 @@ def test_the_playhead_head_clears_the_flag_above_it(browser):
 
 def test_the_head_gap_check_goes_red(browser):
     html = timeline_app.render_app_html()
-    old = ".playhead { position: absolute; top: 30px;"
+    old = ".playhead { position: absolute; top: 54px;"
     assert html.count(old) == 1
-    assert head_gap(browser, html.replace(old, ".playhead { position: absolute; top: 28px;")) < 1.5
+    assert head_gap(browser, html.replace(old, ".playhead { position: absolute; top: 31px;")) < 1.5

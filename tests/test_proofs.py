@@ -348,6 +348,50 @@ def _card_texts(sheet, index: int, red: bool) -> str:
     return " ".join(out)
 
 
+def flash_lines(sheet, index: int) -> list[str]:
+    """The red lines drawn under card ``index``, top to bottom, as drawn."""
+    box = next(b for b in sheet["boxes"] if b["index"] == index)
+    raster, path = sheet["rasters"][box["page"] - 1], sheet["pages"][box["page"] - 1]
+    png = rs.load(path)
+    runs = [r for r in raster.runs if box["x"] <= r.x < box["x"] + box["w"] and box["y"] <= r.y < box["y"] + box["h"]]
+    red = [r for r in runs if any(png.get(x, r.y + r.height // 2)[:3] == pytest.approx(proofs.DANGER, abs=40)
+                                  for x in range(r.x, r.x + r.width))]
+    return [r.text for r in sorted(red, key=lambda r: r.y)]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("layout,want", [("desktop", 2), ("phone", 3)])
+def test_the_flash_badge_breaks_between_items_never_on_a_dot(gym, tmp_path, layout, want):
+    """0.32 residue: on the phone the badge wrapped to four lines and one
+    began with a lone "· src". Now "flash 1f" and its time break between
+    them, and the src line keeps its "· " only where it fits whole."""
+    sheet = _sheet(gym["timeline"], tmp_path, layout, str(gym["edited"]))
+    lines = flash_lines(sheet, 4)
+    assert len(lines) == want, lines
+    assert not any(line.startswith("·") and not line.startswith("· src") for line in lines), lines
+    assert lines[0].startswith("flash 1f") and lines[-1].endswith("00:00:17:23"), lines
+    assert all(re.fullmatch(r"(flash 1f( \d\d:\d\d:\d\d:\d\d)?|\d\d:\d\d:\d\d:\d\d|(· )?src \d\d:\d\d:\d\d:\d\d)", ln)
+               for ln in lines), lines
+
+
+@needs_ffmpeg
+def test_the_flash_badge_check_goes_red(gym, tmp_path, monkeypatch):
+    """Mutation check: 0.32's wrap (each item cut to the card's width, the
+    dot glued on) gives the phone card four lines, one a lone dot's "· src"."""
+    real = proofs._cell_text
+
+    def old_text(cell, f, width, nominal):
+        lines = [x for x in real(cell, f, width, nominal) if x[1] != proofs.DANGER]
+        for i, item in enumerate(cell.flash):
+            text = item if i == 0 else "· " + item
+            lines += [(t, proofs.DANGER, "") for t in rs.fit(text, f, width)]
+        return lines
+
+    monkeypatch.setattr(proofs, "_cell_text", old_text)
+    lines = flash_lines(_sheet(gym["timeline"], tmp_path, "phone", str(gym["edited"])), 4)
+    assert len(lines) == 4 and lines[2].strip() in ("·", "· src"), lines
+
+
 @needs_ffmpeg
 @pytest.mark.parametrize("layout", ["desktop", "phone"])
 def test_one_flash_is_one_red_badge_on_the_card_that_flashes(gym, tmp_path, layout):
@@ -804,16 +848,57 @@ def test_each_join_frame_is_captioned_with_its_rec_and_src(gym, tmp_path):
         assert rec.x == src.x
 
 
+def silence_label_problems(result) -> list[str]:
+    """Every label on a band's waveform strip lies inside a silence of that
+    band (by the band's own axis, the span's pixels less its padding): a
+    label never sits over the sound."""
+    g, raster = result["geometry"], result["raster"]
+    x0, x1, span = g["x0"], g["x1"], g["span"]
+    out = []
+    for i, band in enumerate(result["bands"]):
+        b0, b1 = band["start"], band["end"]
+
+        def to_x(t, b0=b0, b1=b1):
+            return x0 + int(round(float((t - b0) / (b1 - b0) * span)))
+
+        silent = [(to_x(max(a, b0)), to_x(min(c, b1))) for a, c in result["spans"] if min(c, b1) > max(a, b0)]
+        for r in raster.runs:
+            if band["y_wave"] <= r.y < band["y_wave"] + proofs.WAVE_H and r.x < x1:
+                if not any(lo <= r.x and r.x + r.width <= hi for lo, hi in silent):
+                    out.append(f"band {i + 1}: {r.text!r} at x {r.x}-{r.x + r.width}, silence at {silent}")
+    return out
+
+
 @needs_ffmpeg
-def test_a_silence_carried_into_the_next_band_says_where_it_ends(gym, tmp_path):
+def test_a_silence_carried_into_the_next_band_says_where_it_ends_inside_the_silence(gym, tmp_path):
+    """The rest between the second and third squat set starts in band 1 and
+    carries into band 2 for half a second: too narrow there for its end, so
+    band 1 says it, on a second line under the name, inside the silence; no
+    label sits over the sound (0.32 residue: band 2's label covered ~1 s)."""
     result = _gym_check(gym, tmp_path)
     png, raster = rs.load(result["path"]), result["raster"]
     (a, c), = result["spans"]
-    band = result["bands"][1]
-    assert a < band["start"] < c
+    first, second = result["bands"]
+    assert a < second["start"] < c
     x1 = result["geometry"]["x1"]
-    runs = [r for r in raster.runs if band["y_wave"] <= r.y < band["y_wave"] + proofs.WAVE_H and r.x < x1]
-    assert [_read(png, r) for r in runs] == [f"silence to {tc(c)}"]
+
+    def labels(band):
+        return [_read(png, r) for r in sorted(raster.runs, key=lambda r: (r.y, r.x))
+                if band["y_wave"] <= r.y < band["y_wave"] + proofs.WAVE_H and r.x < x1]
+
+    frames = round((c - a) * 24)
+    assert labels(first) == [f"silence 1.5s ({frames}f)", f"to {tc(c)}"]
+    assert labels(second) == []
+    assert silence_label_problems(result) == []
+
+
+@needs_ffmpeg
+def test_the_silence_label_gate_goes_red(gym, tmp_path, monkeypatch):
+    """Mutation check: a label let out of its span (0.32's placement, which
+    only had to stay inside the band) is seen over the sound."""
+    monkeypatch.setattr(proofs, "silence_end_fits", lambda *a, **k: True)
+    monkeypatch.setattr(proofs, "SILENCE_PAD", -400)
+    assert silence_label_problems(_gym_check(gym, tmp_path))
 
 
 @needs_ffmpeg

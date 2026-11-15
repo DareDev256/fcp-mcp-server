@@ -273,8 +273,8 @@ FRAME_PROBLEMS = """(prev) => {
   const alpha = %s, out = [], now = {};
   document.querySelectorAll('#canvas .clip').forEach(c => {
     const lab = c.querySelector('.label'); if (!lab || lab.classList.contains('unfit')) return;
-    const r = document.createRange(); r.selectNodeContents(lab);
-    const need = r.getBoundingClientRect().width + 14, w = c.getBoundingClientRect().width;
+    const r = document.createRange(), ls = getComputedStyle(lab); r.selectNodeContents(lab);
+    const need = r.getBoundingClientRect().width + parseFloat(ls.paddingLeft) + parseFloat(ls.paddingRight), w = c.getBoundingClientRect().width;
     const key = c.__c.id, fits = w >= need - 0.5, a = alpha(lab);
     if (c.classList.contains('ghost')) {
       // on its way out: its name hidden, or whole
@@ -284,9 +284,11 @@ FRAME_PROBLEMS = """(prev) => {
     }
     if (getComputedStyle(c).visibility === 'hidden') { now[key] = false; return; }
     now[key] = fits;
-    if (c.classList.contains('has-thumb')) {
-      const cs = getComputedStyle(lab);
-      if (cs.visibility === 'hidden' || !cs.backgroundImage.includes('gradient')) out.push('no scrim on ' + key);
+    // over a picture a name that shows carries its halo (round 4: no scrim
+    // pill; the outline comes and goes with the name)
+    if (c.classList.contains('has-thumb') && a > 0.01) {
+      const cs = getComputedStyle(lab), m = /rgba?\\(([^)]+)\\)/.exec(cs.textShadow || ''), v = m ? m[1].split(',').map(Number) : [];
+      if (cs.visibility === 'hidden' || !m || (v.length > 3 && v[3] <= 0.01)) out.push('no halo on ' + key);
     }
     if (a > 0.01 && !fits) out.push('a cut name on ' + key + ' (' + w.toFixed(1) + ' < ' + need.toFixed(1) + ')');
     if (fits && prev[key] && a < 0.01) out.push('a dropped name on ' + key);
@@ -296,8 +298,9 @@ FRAME_PROBLEMS = """(prev) => {
 
 
 def label_problems_through_motion(page, step_ms: int = 30) -> list[str]:
-    """Every name, frame by frame through the motion: scrim drawn, never shown
-    cut, never still invisible one frame after its clip got wide enough."""
+    """Every name, frame by frame through the motion: never shown cut, never
+    still invisible one frame after its clip got wide enough, and over a
+    picture never shown without its halo."""
     out, prev = [], {}
     for ms in range(0, MOTION_MS + 160, step_ms):
         page.evaluate(SEEK, ms)
@@ -306,7 +309,7 @@ def label_problems_through_motion(page, step_ms: int = 30) -> list[str]:
     return out
 
 
-def test_names_keep_their_scrim_and_fade_in_once_they_fit(browser):
+def test_names_keep_their_halo_and_fade_in_once_they_fit(browser):
     a = _thumbed(_base())
     page = _page(browser, width=390)
     try:
@@ -319,8 +322,8 @@ def test_names_keep_their_scrim_and_fade_in_once_they_fit(browser):
 
 
 def test_the_name_check_goes_red_on_a_hidden_label(browser):
-    """Mutation check: the round-5 way (the whole label, scrim and all, hidden
-    until the motion settles) fails it."""
+    """Mutation check: the round-5 way (the whole label hidden until the
+    motion settles) fails it."""
     a = _thumbed(_base())
     page = _page(browser, width=390)
     try:
@@ -332,7 +335,7 @@ def test_the_name_check_goes_red_on_a_hidden_label(browser):
         problems = label_problems_through_motion(page)
     finally:
         page.close()
-    assert any("no scrim" in x for x in problems)
+    assert any("no halo" in x for x in problems)
 
 
 TILE = """() => {
@@ -407,13 +410,16 @@ CUTS_A_TIME = """() => {
 def _playhead_inside_first_time(page) -> None:
     page.evaluate("""() => { const t = document.querySelector('.tick'), r = document.createRange(); r.selectNodeContents(t);
       const b = r.getBoundingClientRect(), c = document.getElementById('canvas').getBoundingClientRect(), st = window.__fcpApp.state;
-      st.playhead = ((b.left + b.right) / 2 - c.left - 48) / st.pps; window.__fcpApp.placePlayhead(); }""")
+      st.playhead = ((b.left + b.right) / 2 - c.left - window.__fcpApp.gutter) / st.pps; window.__fcpApp.placePlayhead(); }""")
 
 
 @pytest.mark.parametrize("how", ["select at 390", "inside the first time at 390", "inside the first time at 1440"])
 def test_the_playhead_never_cuts_through_a_ruler_time(browser, how):
     """With a clip selected the playhead sits at the clip's start; at 390 it cut
-    through "00:00:00:00" (critic round 5). The time under it is hidden while it is there."""
+    through "00:00:00:00" (critic round 5). Since 0.34 round 4 its head and its
+    line start under the times, so it cuts none and none is hidden (round 3
+    hid the time, and the critics saw 00:00:00:00 go on a tap). The
+    instrument: the playhead put back across the time row is seen."""
     page = _page(browser, width=1440 if how.endswith("1440") else 390)
     try:
         page.evaluate("p => window.__fcpApp.setPayload(p)", _base())
@@ -422,7 +428,7 @@ def test_the_playhead_never_cuts_through_a_ruler_time(browser, how):
         else:
             _playhead_inside_first_time(page)
         cut = page.evaluate(CUTS_A_TIME)
-        page.add_style_tag(content=".tick.under-playhead { visibility: visible !important; }")
+        page.add_style_tag(content=".playhead { top: 33px !important; }")
         exposed = page.evaluate(CUTS_A_TIME)
     finally:
         page.close()

@@ -54,6 +54,7 @@ from typing import Optional
 from . import filtergraph as fg
 from . import raster as rs
 from .rational import nominal_fps, rational_fps
+from .words import plural
 
 GROUND, PANEL = rs.colour("ground"), rs.colour("panel")
 INK, MUTE, ACCENT = rs.colour("ink"), rs.colour("mute"), rs.colour("accent")
@@ -137,7 +138,10 @@ def exact_frame(source: str, t: Fraction, fps, width: int, height: int) -> Optio
 
 
 def video_segments(graph) -> list:
-    return [s for s in graph.segments if s.kind == "clip" and s.has_video]
+    """The clips that put a picture on screen: a disabled clip (enabled="0")
+    is in the cut and in no picture, so every reader of the picture (layers,
+    flashes, the sheet, the burn-in) leaves it out, as the render does."""
+    return [s for s in graph.segments if s.kind == "clip" and s.has_video and getattr(s, "enabled", True)]
 
 
 def covers(graph, segment, height: int = 720) -> bool:
@@ -369,8 +373,14 @@ def _cell_text(cell: Cell, f: rs.Face, width: int, nominal: int) -> list:
     for note in cell.notes:
         lines += [(t, MUTE, "") for t in rs.fit(note, f, width)]
     if cell.flash:
-        for i, item in enumerate(cell.flash):
-            text = item if i == 0 else "· " + item  # a continuation, never read as the card's own src
+        # "flash 1f" and its record time break between them, never inside one;
+        # the flash's src is a continuation ("· src ...") where that fits, and
+        # on a phone card, where it does not, the red block alone says whose
+        # src it is: no line starts with a lone "·" (0.34: four lines at 390)
+        head, at = cell.flash[0].rsplit(" ", 1)
+        lines += [(t, DANGER, "") for t in wrap_items([head, at], f, width, sep=" ")]  # red: failure (a flash frame)
+        for item in cell.flash[1:]:
+            text = "· " + item if f.measure("· " + item) <= width else item
             lines += [(t, DANGER, "") for t in rs.fit(text, f, width)]  # red: failure (a flash frame)
     return lines
 
@@ -598,7 +608,8 @@ def kept_ranges(graph, source: str) -> list:
     plays ``source``, in file order: the parts of the file the edit keeps."""
     want = str(Path(source).resolve())
     out = []
-    for s in video_segments(graph) + [s for s in graph.segments if s.kind == "clip" and not s.has_video]:
+    for s in video_segments(graph) + [s for s in graph.segments
+                                      if s.kind == "clip" and not s.has_video and getattr(s, "enabled", True)]:
         if s.source and str(Path(s.source).resolve()) == want:
             out.append((s.file_in, s.file_in + s.duration, s.tl_in))
     return sorted(set(out))
@@ -640,6 +651,17 @@ def mark_problems(runs, marks, clear: int = MARK_CLEAR) -> list:
                 out.append(f"{run.text!r} meets the {kind} at x={mx}")
                 break
     return out
+
+
+SILENCE_PAD = 4  # a silence label keeps this far inside its span's edges
+
+
+def silence_end_fits(end: Fraction, b0: Fraction, b1: Fraction, span: int, texts: tuple, f) -> bool:
+    """Whether the part of a silence that carries into the band [b0, b1)
+    (from b0 to ``end``) is wide enough, on that band's ``span`` px, to hold
+    the shortest of ``texts`` inside it."""
+    px = float((min(end, b1) - b0) / (b1 - b0) * span)
+    return px - 2 * SILENCE_PAD >= min(f.measure(t) for t in texts)
 
 
 def clear_x(x: int, width: int, y: int, height: int, marks: list, low: int, high: int,
@@ -866,26 +888,38 @@ def visual_check(source: str, start: Fraction, end: Fraction, out_path: str, *, 
             nx = clear_x(x0 + 8, f.measure(note), y_wave + 4, f.height, marks, x0, x1)
             if nx is not None:
                 r.text(note, f, nx, y_wave + 4, MUTE)
-        # a silence named once, in the band it starts in, clear of every mark
+        # A silence is named once, in the band it starts in, INSIDE its own
+        # span and clear of every mark: a label never sits over the waveform
+        # (0.34: band 2's "silence to ..." covered its first second of
+        # sound). Where it ends is said in the band it carries into when that
+        # band's part of it can hold the words, else on a second line under
+        # its name here.
         last_right = x0 - 12
         for a, c in spans:
             lo, hi = max(a, b0), min(c, b1)
             if hi <= lo:
                 continue
             frames_long = int(c * nominal + Fraction(1, 2)) - int(a * nominal + Fraction(1, 2))
+            ends = (f"silence to {timecode(c, fps)}", f"to {timecode(c, fps)}")
             if a >= b0:  # named once, in the band it starts in
-                texts = (f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
-                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a))
-            else:  # carried over from the band before: where it ends
-                texts = (f"silence to {timecode(c, fps)}", f"to {timecode(c, fps)}")
-            for text in texts:
-                want = min(max(x0, to_x(lo) + 4), x1 - f.measure(text))
-                tx = clear_x(want, f.measure(text), y_wave + 2, f.height, marks, max(x0, last_right + 12), x1)
-                if tx is not None:
-                    r.fill(tx - 2, y_wave + 2, f.measure(text) + 4, f.height, PANEL)
-                    r.text(text, f, tx, y_wave + 2, INK)
-                    last_right = tx + f.measure(text)
-                    break
+                rows = [(f"silence {_seconds_label(c - a)} ({length_label(frames_long)})",
+                         f"silence {_seconds_label(c - a)}", _seconds_label(c - a))]
+                if c > b1 and not silence_end_fits(c, b1, b1 + (b1 - b0), span, ends, f):
+                    rows.append(ends[1:])
+            elif silence_end_fits(c, b0, b1, span, ends, f):  # carried over: where it ends
+                rows = [ends]
+            else:
+                continue  # said under its name in the band before
+            low, high = max(to_x(lo) + SILENCE_PAD, last_right + 12), to_x(hi) - SILENCE_PAD
+            for k, texts in enumerate(rows):
+                y = y_wave + 2 + k * f.height
+                for text in texts:
+                    tx = clear_x(low, f.measure(text), y, f.height, marks, low, high)
+                    if tx is not None:
+                        r.fill(tx - 2, y, f.measure(text) + 4, f.height, PANEL)
+                        r.text(text, f, tx, y, INK)
+                        last_right = max(last_right, tx + f.measure(text))
+                        break
         bands.append({"start": b0, "end": b1, "y_frames": y_f, "y_label": y_label, "y_ruler": y_ruler,
                       "y_wave": y_wave, "ticks": ticks, "base": base, "level": level, "scale": scale,
                       "label_step": step, "bottom": y_wave + WAVE_H})
@@ -985,7 +1019,7 @@ def scene_strip(rows: list, out_dir: Path, fps=24, *, scenes: Optional[list] = N
         height = margin + head_h + len(page) * row_h - gap + (gap + list_h if list_h else 0) + margin
         r = rs.Raster.filled(width, height, GROUND)
         first, final = p * per_page + 1, p * per_page + len(page)
-        clip_word = f"in clip {clips[0]}" if len(clips) == 1 else f"in {len(clips)} clips"
+        clip_word = f"in clip {clips[0]}" if len(clips) == 1 else f"in {plural(len(clips), 'clip')}"
         head = f"Cuts {first} to {final} of {len(rows)} {clip_word}: before | after"
         r.text(rs.fit(head, f, width - 2 * margin)[0], f, margin, margin, INK)
         sub = [f"{backend or 'scene'} score vs threshold {threshold:g}" if threshold is not None else
@@ -1274,7 +1308,9 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
         if segment.kind == "gap":
             return "." * span
         inner = segment.label if len(segment.label) <= span - 2 else ""
-        return ("[" + inner.ljust(span - 2, "=") + "]") if span >= 2 else "|"
+        # a disabled clip is drawn dashed: there, and off
+        fill = "=" if getattr(segment, "enabled", True) else "-"
+        return ("[" + inner.ljust(span - 2, fill) + "]") if span >= 2 else "|"
 
     def row(label: str, segments, name_after: bool = False) -> str:
         cells = [" "] * width
@@ -1306,7 +1342,8 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
             labels[c:c + len(text)] = list(text)
     lines.append(f"{'time':<{gutter}}" + "".join(labels).rstrip())
     lines.append(f"{'':<{gutter}}" + "".join(ruler).rstrip())
-    lines.append(f"{'legend':<{gutter}}" + LEGEND)
+    off = any(not getattr(s, "enabled", True) for s in graph.segments if s.kind == "clip")
+    lines.append(f"{'legend':<{gutter}}" + LEGEND + (", [-] off (disabled)" if off else ""))
 
     # markers on the timeline and on its clips, at their record time
     origin = Fraction(str(getattr(timeline, "origin_seconds", 0) or 0)).limit_denominator(100000)
@@ -1321,7 +1358,10 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
         seconds = getattr(at, "seconds", at)
         if seconds is None:
             continue
-        t = Fraction(str(seconds)).limit_denominator(100000) - origin
+        # a marker the parser placed (timeline_start) is on the sequence clock
+        # already; only a raw one (a sequence marker at 3600s) needs the origin off
+        shift = origin if getattr(m, "timeline_start", None) is None else 0
+        t = Fraction(str(seconds)).limit_denominator(100000) - shift
         if 0 <= t <= total:
             markers.append((t, m))
     if markers:
@@ -1363,7 +1403,9 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
     def tr_name(tr) -> str:
         return tr.name or ("Cross Dissolve" if tr.kind == "fade" else tr.kind)
 
-    name_w = max([len(s.label) for s in order] + [4] + [len(tr_name(t)) for t in graph.transitions])
+    storylines = list(getattr(timeline, "storylines", None) or [])
+    name_w = max([len(s.label) for s in order] + [4] + [len(tr_name(t)) for t in graph.transitions]
+                 + [len(t.name or "Transition") for s in storylines for t in s.transitions])
     file_w = max([len(source_name(s)) for s in order] + [6])
 
     def tcs(frames):
@@ -1382,9 +1424,11 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
         fa, fb = frame_of(s.tl_in), frame_of(s.tl_out)
         tr = into.get(id(s))
         track = track_kind(s) if s.lane == 0 else f"L{s.lane} {track_kind(s)}"
+        note = ", ".join(x for x in ("off (disabled: not seen, not heard)" if not getattr(s, "enabled", True)
+                                     else "", "MEDIA MISSING" if s.missing else "") if x)
         events.append((fa, 3, cols(str(n), track, tcs(fa), tcs(fb), length_label(fb - fa),
                                    f"D {length_label(tr.end - tr.start)}" if tr else "", s.label, source_name(s),
-                                   src_tc(s.src_in), src_tc(s.src_out), "MEDIA MISSING" if s.missing else "")))
+                                   src_tc(s.src_in), src_tc(s.src_out), note)))
     for t, m in markers:
         kind = getattr(getattr(m, "marker_type", None), "value", "") or "marker"
         # a marker has no clip or source: its name and kind are its note
@@ -1400,6 +1444,23 @@ def text_timeline(timeline, graph, width: int = 64, filepath: str = "") -> str:
         kind = "AV" if out_seg.has_audio and in_seg.has_audio else "V"
         events.append((tr.start, 2, cols("D", kind, tcs(tr.start), tcs(tr.end), length_label(tr.end - tr.start), "",
                                          tr_name(tr), "", "", "", f"{out_seg.label} > {in_seg.label}, {where}")))
+    # a transition inside a connected storyline: a D row on its lane, the
+    # same columns as the spine's (the proxy draws it as a cut and says so)
+    for s in storylines:
+        for tr in s.transitions:
+            cut = frame_of(fg._seconds(tr.start))
+            length = frame_of(fg._seconds(tr.duration))
+            lead = frame_of(fg._seconds(tr.lead)) if tr.lead is not None else length // 2
+            outgoing = next((c.name for c in s.clips
+                             if c.timeline_start.frames + c.duration.frames == tr.start.frames), None)
+            incoming = next((c.name for c in s.clips if c.timeline_start.frames == tr.start.frames), None)
+            sides = (f"{outgoing} > {incoming}" if outgoing and incoming
+                     else f"into {incoming}" if incoming else f"out of {outgoing}" if outgoing else "")
+            where = ("centred on " if 2 * lead == length else "starts on the cut " if lead == 0
+                     else f"starts {lead}f before the cut ") + tcs(cut)
+            events.append((cut - lead, 2, cols("D", f"L{tr.lane} V", tcs(cut - lead), tcs(cut - lead + length),
+                                                length_label(length), "", tr.name or "Transition", "", "", "",
+                                                f"{sides}, {where}" if sides else where)))
     for fa, fb, layers, before, after in flashes:
         top = layers[0]
         events.append((fa, 1, cols("!", track_kind(top) if top.lane == 0 else f"L{top.lane} {track_kind(top)}",

@@ -13,6 +13,8 @@ token budget only if the measurement is the one the wire uses.
 
 from __future__ import annotations
 
+from .words import plural
+
 PACK_LIMIT_BYTES = 60_000
 DEFAULT_GAP = 0.5
 
@@ -83,5 +85,5 @@ def truncate(text: str, limit: int = PACK_LIMIT_BYTES) -> str:
             break
         kept.append(line)
         used += size
-    kept.append(f"… truncated (pack is {total} bytes; wrote nothing beyond this line)")
+    kept.append(f"… truncated (pack is {plural(total, 'byte')}; wrote nothing beyond this line)")
     return "\n".join(kept)

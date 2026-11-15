@@ -8,10 +8,22 @@ whose every result is renderable keeps the contract simple: call ``view``,
 see the timeline.
 
 Two actions, both read-only. ``view_timeline`` returns the payload the app
-draws from (``fcpxml/timeline_app.py``); ``view_clip`` is the "inspect"
-button. Edits never go through here — the app calls ``edit``/``mark``
-directly, so the journal, the project guard and the review gate apply
-exactly as they do from chat.
+draws from (``fcpxml/timeline_app.py``) as the result's ``structuredContent``
+and a short text a client without Apps can read (0.34: the thumbnails left
+the text); ``view_clip`` is the "inspect" button. Edits never go through
+here — the app calls ``edit``/``mark`` directly, so the journal, the project
+guard and the review gate apply exactly as they do from chat.
+
+Why the thumbnails ride in ``structuredContent`` and are not fetched by the
+app afterwards: the ext-apps spec lets an app call a tool the model does not
+see (``_meta.ui.visibility: ["app"]``; the host "MUST NOT include" it in the
+agent's tool list, specification/draft/apps.mdx, Visibility), and the 2.x
+SDK stamps that field (mcp/server/apps.py, ``Apps.tool(visibility=...)``),
+but 1.28.1 has no such module and a client WITHOUT Apps lists every tool to
+its model: a thumbnails tool would grow the advertised schema
+(tests/test_schema_budget.py) and be one more tool the model can call. The
+structured payload reaches the app in the same ``ui/notifications/tool-result``
+and the spec keeps it out of the model's context, so nothing is fetched.
 """
 
 from __future__ import annotations
@@ -23,8 +35,11 @@ from pathlib import Path
 from typing import Optional
 
 import tools
+from fcpxml import index as _index
 from fcpxml import journal, render, timeline_app
+from fcpxml.mcp_compat import ToolReply
 from fcpxml.media_intel import media_src_to_path
+from fcpxml.words import plural
 from tools import find as _find
 from tools._common import parse_project, text_result
 
@@ -44,21 +59,100 @@ def _thumbnail(media_src: str, at: Fraction) -> Optional[str]:
         return None
     try:
         st = os.stat(path)
+        # the size and quality are in the key: 0.34 draws thumbnails at 180 px,
+        # and a 108 px one cached by 0.33 would otherwise come back upscaled
         key = hashlib.sha256(
-            f"{path}|{st.st_mtime_ns}|{st.st_size}|{at}".encode("utf-8")
+            f"{path}|{st.st_mtime_ns}|{st.st_size}|{at}|{timeline_app.THUMBNAIL_SHORT_SIDE}"
+            f"|q{timeline_app.THUMBNAIL_QUALITY}".encode("utf-8")
         ).hexdigest()[:20]
         out_dir = render.cache_dir() / "thumbs"
         out_dir.mkdir(exist_ok=True)
         target = out_dir / f"{key}.jpg"
         if not target.is_file():
             written = render.render_frame(
-                path, at, str(target), max_short_side=timeline_app.THUMBNAIL_SHORT_SIDE
+                path, at, str(target), max_short_side=timeline_app.THUMBNAIL_SHORT_SIDE,
+                quality=timeline_app.THUMBNAIL_QUALITY,
             )
             if not written:
                 return None
         return timeline_app.data_uri_jpeg(str(target))
     except OSError:
         return None
+
+
+# The waveform (0.34): one peak envelope per FILE, PEAK_RATE levels a second
+# (0-100 over -60..0 dBFS: the app draws them on that absolute scale, round
+# 4), measured once with ffmpeg and cached in the index as analysis kind
+# "peaks" (the floor is in the kind, so a cache written on the old -48 dB
+# scale is never read as this one); each clip then takes its own range of
+# it, down to timeline_app.WAVE_POINTS_PER_SECOND points (the loudest in
+# each), so a short array travels. FCP_MCP_INDEX=off measures every time.
+PEAK_RATE = 10
+PEAK_AUDIO_RATE = 4000
+PEAK_FLOOR_DB = -60.0
+PEAKS_KIND = f"peaks@{PEAK_RATE}/s,{int(PEAK_FLOOR_DB)}dB"
+
+
+def _measure_peaks(path: str) -> Optional[list]:
+    """The file's peak envelope, or [] for a file with no sound, or None
+    when ffmpeg is missing or cannot read it."""
+    import array
+    import math
+    import subprocess
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path, "-map", "0:a:0", "-ac", "1",
+           "-ar", str(PEAK_AUDIO_RATE), "-f", "s16le", "pipe:1"]
+    try:
+        run = subprocess.run(cmd, capture_output=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if run.returncode != 0:
+        # no audio stream is an answer (no waveform), not a failure to retry
+        return [] if b"matches no streams" in run.stderr or b"does not contain any stream" in run.stderr else None
+    samples = array.array("h")
+    samples.frombytes(run.stdout[: len(run.stdout) // 2 * 2])
+    per = PEAK_AUDIO_RATE // PEAK_RATE
+    out = []
+    for i in range(0, len(samples), per):
+        chunk = samples[i:i + per]
+        peak = max(max(chunk), -min(chunk)) / 32768 if chunk else 0
+        db = 20 * math.log10(peak) if peak > 0 else PEAK_FLOOR_DB
+        out.append(int(round(max(0.0, min(1.0, (db - PEAK_FLOOR_DB) / -PEAK_FLOOR_DB)) * 100)))
+    return out
+
+
+def _file_peaks(path: str) -> Optional[list]:
+    ix = _index.Index.open()
+    if ix is None:
+        return _measure_peaks(path)
+    with ix:
+        rows = ix.get_analysis(path, PEAKS_KIND)
+        if rows is not None:
+            return rows[0]["payload"]["levels"] if rows else []
+        levels = _measure_peaks(path)
+        if levels is not None:
+            ix.put_analysis(path, PEAKS_KIND, [{"start": 0, "end": Fraction(len(levels), PEAK_RATE),
+                                                "payload": {"levels": levels}}] if levels else [])
+        return levels
+
+
+def _waveform(media_src: str, file_start: Fraction, duration: Fraction) -> Optional[list]:
+    """Levels 0-100 for ``duration`` seconds of the file from ``file_start``:
+    the loudest of the file's envelope in each of the clip's points."""
+    path = media_src_to_path(media_src or "")
+    if not path or not Path(path).is_file() or duration <= 0:
+        return None
+    levels = _file_peaks(path)
+    if not levels:
+        return None
+    n = max(2, min(timeline_app.MAX_WAVE_POINTS, round(duration * timeline_app.WAVE_POINTS_PER_SECOND)))
+    out = []
+    for i in range(n):
+        a = int((file_start + duration * i / n) * PEAK_RATE)
+        b = max(a + 1, int((file_start + duration * (i + 1) / n) * PEAK_RATE + Fraction(999, 1000)))
+        window = levels[max(0, a):max(0, b)]
+        out.append(max(window) if window else 0)
+    return out
 
 
 def _transcript(media_src: str) -> Optional[dict]:
@@ -83,7 +177,7 @@ def _timeline_or_message(filepath):
 
 
 def _plural(n: int, word: str) -> str:
-    return f"{n} {word}{'' if n == 1 else 's'}"
+    return plural(n, word)
 
 
 def _marker_phrase(payload: dict) -> str:
@@ -118,6 +212,7 @@ async def handle_view_timeline(args: dict):
         return text_result(message)
     want_thumbs = args.get("thumbnails", True) is not False
     want_words = args.get("words", True) is not False
+    want_wave = args.get("waveforms", True) is not False
     sha = journal.file_hash(validated)
     payload = timeline_app.build_payload(
         timeline,
@@ -125,20 +220,22 @@ async def handle_view_timeline(args: dict):
         sha256=sha,
         thumbnail=_thumbnail if want_thumbs else None,
         transcript=_transcript if want_words else None,
+        waveform=_waveform if want_wave else None,
     )
     thumbs = sum(1 for c in payload["clips"] if c["thumb"])
     words = sum(len(c["words"]) for c in payload["clips"])
+    waves = sum(1 for c in payload["clips"] if c.get("wave"))
     summary = (
         f"**{timeline.name}** — {_plural(len(payload['clips']), 'clip')} across "
         f"{_plural(len(payload['lanes']), 'lane')}, {float(Fraction(payload['duration'])):.2f}s, "
         f"{_marker_phrase(payload)}, {_gap_phrase(timeline)}; "
-        f"{thumbs} thumbnails, {words} transcript words.\n"
+        f"{plural(thumbs, 'thumbnail')}, {plural(waves, 'waveform')}, {plural(words, 'transcript word')}.\n"
         f"sha256: {sha}\n"
-        "A host with MCP Apps renders this inline (`ui://fcp/timeline`); "
-        "otherwise the JSON below is the timeline, every time an exact "
-        "`numerator/denominator` in seconds."
+        "A host with MCP Apps draws this inline (`ui://fcp/timeline`) from the "
+        "result's structured payload, every time an exact `numerator/denominator` "
+        "in seconds; view_clip reads one clip in full."
     )
-    return text_result(timeline_app.wrap_payload(summary, payload))
+    return ToolReply(text_result(timeline_app.fallback_text(summary, payload)), payload)
 
 
 def _fmt(value: Fraction) -> str:

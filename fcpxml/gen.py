@@ -44,6 +44,7 @@ from xml.etree import ElementTree as ET
 
 from .models import MarkerType
 from .rational import format_seconds, parse_seconds
+from .words import plural
 from .writer import (
     SPINE_ELEMENT_TAGS,
     FCPXMLModifier,
@@ -312,7 +313,7 @@ def confirm_quote(
     held = _QUOTES.get(quote_id)
     if held is None or time.time() - held.created > QUOTE_TTL_SECONDS:
         raise RefusedError(
-            f"Refused: quote {quote_id} is unknown or older than {QUOTE_TTL_SECONDS // 60} minutes "
+            f"Refused: quote {quote_id} is unknown or older than {plural(QUOTE_TTL_SECONDS // 60, 'minute')} "
             f"(quotes live in this server process). Quote again: gen {how}"
         )
     if held.id != fresh.id:
@@ -483,7 +484,7 @@ class GeminiProvider(Provider):
                 "data": base64.b64encode(raw).decode("ascii"),
                 "mime_type": "image/png" if raw[:4] == b"\x89PNG" else "image/jpeg",
             })
-        content.append({"type": "text", "text": f"{prompt} Duration about {seconds} seconds."})
+        content.append({"type": "text", "text": f"{prompt} Duration about {plural(seconds, 'second')}."})
         body = json.dumps({
             "model": PRICES[("gemini", self.model)]["model_id"],
             "input": content,

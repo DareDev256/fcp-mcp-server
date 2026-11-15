@@ -20,7 +20,7 @@ from fcpxml.animation_curves import (
     MAX_SAMPLED_FRAMES,
 )
 from fcpxml.keyframes import KEYFRAME_CURVE_OPTIONS, KeyframeEditor
-from fcpxml.words import noun
+from fcpxml.words import noun, plural
 from tools import _common
 
 MAX_OPERATIONS = 100
@@ -115,8 +115,8 @@ _ANIMATION_CURVE = {
         "description": (
             "Maximum Euclidean vector / absolute scalar error at project frames, in property units. "
             f"Defaults: {', '.join(f'{prop} {value:g}' for prop, value in DEFAULT_TOLERANCE.items())}. "
-            f"Smaller values emit more keys; limits {MAX_SAMPLED_FRAMES} evaluated frames and "
-            f"{MAX_GENERATED_KEYFRAMES} output keys. Not a pixel or between-frame bound."
+            f"Smaller values emit more keys; limits {plural(MAX_SAMPLED_FRAMES, 'evaluated frame')} and "
+            f"{plural(MAX_GENERATED_KEYFRAMES, 'output key')}. Not a pixel or between-frame bound."
         ),
     },
 }
@@ -235,14 +235,14 @@ def _check_operation(operation: dict) -> None:
     if action == "set":
         points = operation["keyframes"]
         if not isinstance(points, list) or not 1 <= len(points) <= MAX_KEYFRAMES:
-            raise ValueError(f"keyframes must contain 1..{MAX_KEYFRAMES} points")
+            raise ValueError(f"keyframes must contain 1..{plural(MAX_KEYFRAMES, 'point')}")
     else:
         times = operation.get("times")
         if times is not None and (
             not isinstance(times, list) or not 1 <= len(times) <= MAX_KEYFRAMES
             or any(not isinstance(t, str) for t in times)
         ):
-            raise ValueError(f"times must be null or contain 1..{MAX_KEYFRAMES} rational time strings")
+            raise ValueError(f"times must be null or contain 1..{plural(MAX_KEYFRAMES, 'rational time string')}")
 
 
 def _apply(editor: KeyframeEditor, operation: dict) -> dict:
@@ -322,14 +322,14 @@ async def _write(arguments: dict, action: str) -> list:
     if action == "batch_keyframes":
         operations = arguments["operations"]
         if not isinstance(operations, list) or not 1 <= len(operations) <= MAX_OPERATIONS:
-            raise ValueError(f"operations must contain 1..{MAX_OPERATIONS} operations")
+            raise ValueError(f"operations must contain 1..{plural(MAX_OPERATIONS, 'operation')}")
     else:
         operations = [{"action": "set" if action == "set_keyframes" else "delete",
                        **{k: v for k, v in arguments.items() if k not in ("filepath", "output_path")}}]
     for operation in operations:
         _check_operation(operation)
     if sum(len(op.get("keyframes") or op.get("times") or []) for op in operations) > MAX_BATCH_KEYFRAMES:
-        raise ValueError(f"A batch may contain at most {MAX_BATCH_KEYFRAMES} keyframes/times")
+        raise ValueError(f"A batch may contain at most {plural(MAX_BATCH_KEYFRAMES, 'keyframe')}/times")
     filepath, editor = _editor(arguments)
     # No destination is registered until every operation succeeds, so a failed
     # batch cannot create an output or a misleading journal entry.

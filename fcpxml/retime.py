@@ -12,6 +12,7 @@ from collections import defaultdict
 from fractions import Fraction
 
 from .rational import format_exact_seconds, parse_seconds, parse_strict_seconds
+from .words import plural
 from .writer import FCPXMLModifier
 
 MAX_MAP_POINTS = 10_000
@@ -54,7 +55,7 @@ class LinearTimeMap:
     def __init__(self, points):
         self.points = tuple((_native_time(Fraction(time)), _native_time(Fraction(value))) for time, value in points)
         if not 2 <= len(self.points) <= MAX_MAP_POINTS:
-            raise ValueError(f"timeMap requires 2 to {MAX_MAP_POINTS} points")
+            raise ValueError(f"timeMap requires 2 to {plural(MAX_MAP_POINTS, 'point')}")
         if any(t1 <= t0 or v1 <= v0 for (t0, v0), (t1, v1) in zip(self.points, self.points[1:])):
             raise ValueError("timeMap must have strictly increasing time and source values; reverse/freeze is unsupported")
         self._times = tuple(point[0] for point in self.points)
@@ -250,7 +251,7 @@ class RetimeEditor:
     @staticmethod
     def _inputs(speed_keyframes, frame):
         if not isinstance(speed_keyframes, list) or not 2 <= len(speed_keyframes) <= MAX_SPEED_POINTS:
-            raise ValueError(f"speed_keyframes must contain 2 to {MAX_SPEED_POINTS} points")
+            raise ValueError(f"speed_keyframes must contain 2 to {plural(MAX_SPEED_POINTS, 'point')}")
         points = []
         for point in speed_keyframes:
             if not isinstance(point, dict) or set(point) - {"time", "frame", "speed", "transition"}:

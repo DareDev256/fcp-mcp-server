@@ -9,6 +9,7 @@ import math
 from fractions import Fraction
 
 from .rational import format_exact_seconds, parse_strict_seconds
+from .words import plural
 
 # tools/keyframes.py builds its schema from these names; keep limits here.
 MAX_AUTHORED_POINTS = 100
@@ -182,7 +183,7 @@ def _simplify(samples, knots, tolerance):
     candidates = [keys for keys in (_forward_reach(samples, knots, tolerance),
                                     _worst_point_split(samples, knots, tolerance)) if keys is not None]
     if not candidates:
-        raise ValueError(f"tolerance requires more than {MAX_GENERATED_KEYFRAMES} generated keyframes; increase tolerance or shorten the curve")
+        raise ValueError(f"tolerance requires more than {plural(MAX_GENERATED_KEYFRAMES, 'generated keyframe')}; increase tolerance or shorten the curve")
     keys = min(candidates, key=len)
     return keys, max(_worst(samples, a, b)[0] for a, b in zip(keys, keys[1:]))
 
@@ -205,7 +206,7 @@ def sample_animation_curve(prop, points, frame_duration: Fraction, duration: Fra
         if not isinstance(value, Fraction) or value <= 0:
             raise ValueError(f"{name} must be a positive Fraction")
     if not isinstance(points, list) or not 2 <= len(points) <= MAX_AUTHORED_POINTS:
-        raise ValueError(f"curve points must be a list of 2..{MAX_AUTHORED_POINTS} items")
+        raise ValueError(f"curve points must be a list of 2..{plural(MAX_AUTHORED_POINTS, 'item')}")
     tolerance = _number(DEFAULT_TOLERANCE[prop] if tolerance is None else tolerance, "tolerance")
     if tolerance <= 0:
         raise ValueError("tolerance must be positive")
@@ -239,7 +240,7 @@ def sample_animation_curve(prop, points, frame_duration: Fraction, duration: Fra
     first_frame, last_frame = authored[0]["frame"], authored[-1]["frame"]
     sample_count = last_frame - first_frame + 1
     if sample_count > MAX_SAMPLED_FRAMES:
-        raise ValueError(f"curve spans more than {MAX_SAMPLED_FRAMES} evaluated project frames")
+        raise ValueError(f"curve spans more than {plural(MAX_SAMPLED_FRAMES, 'evaluated project frame')}")
     samples = [authored[0]["value"]]
     for left, right in zip(authored, authored[1:]):
         span = right["frame"] - left["frame"]

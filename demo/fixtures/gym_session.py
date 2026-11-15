@@ -6,9 +6,13 @@ Test bars read as engineering artefacts, so the proof images are shown on
 real footage: the four silent 640x360 proxies the 0.31 README hero used
 (``demo/hero/footage/``, cut by ``demo/hero/footage.py`` from the 2026-08-08
 session; he is the only person in frame and the gym's music was never kept).
-This script gives each a synthesised test tone (silent over the rests between
-the squat sets, so silence detection has something real to find) and builds
-two timelines through the server's own tools:
+This script gives each a synthesised tone with an amplitude envelope (a beat
+every 0.6-0.9 s and a slower swell, peaks from about -1 to -26 dBFS, so the
+waveform has the dynamics real sound has: 0.34 round 4; until then a steady
+tone drew a flat slab), silent over the rests between the squat sets so
+silence detection has something real to find (the rests are the same
+samples as before: the envelope multiplies the old gate), and builds two
+timelines through the server's own tools:
 
 - ``imported.fcpxml``: Bench, Squat (three sets, two rests), Press, Finish,
   from an EDL (``generate · import_edl_json``), each clip trimmed to leave a
@@ -39,12 +43,26 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 FOOTAGE = REPO / "demo" / "hero" / "footage"
 
-# name -> (proxy, (in, out) seconds used from it, tone expression or None for a steady quiet tone)
+
+def _envelope(beat: float, swell: float, phase: float) -> str:
+    """A beat every ``beat`` s decaying fast to a floor, under a slower swell
+    of period ``swell``: 0.9 at the loudest beat (-1 dBFS), 0.049 at the
+    quietest moment (-26 dBFS peak): never under remove_media_silence's
+    -30 dB threshold, nor the check image's -40 dB RMS, so the cut and every
+    silence it finds are the same as with the steady tone before it."""
+    return (f"0.9*(0.12+0.88*exp(-mod(t+{phase},{beat})*9))"
+            f"*(0.45+0.55*(0.5+0.5*sin(2*PI*(t+{phase})/{swell})))")
+
+
+# The squat rests: silent samples, exactly where they were before the envelope.
+SQUAT_SETS = "(between(t,0,5)+between(t,6.5,11.5)+between(t,13,18))"
+
+# name -> (proxy, (in, out) seconds used from it, the tone: an aevalsrc expression)
 CLIPS = {
-    "Bench": ("bench.mp4", (0.25, 5.25), None),
-    "Squat": ("squat.mp4", (0.0, 18.0), "0.25*sin(2*PI*220*t)*(between(t,0,5)+between(t,6.5,11.5)+between(t,13,18))"),
-    "Press": ("press.mp4", (0.0, 4.75), None),
-    "Finish": ("finish.mp4", (0.25, 5.5), None),
+    "Bench": ("bench.mp4", (0.25, 5.25), f"sin(2*PI*330*t)*{_envelope(0.75, 3.7, 0)}"),
+    "Squat": ("squat.mp4", (0.0, 18.0), f"sin(2*PI*220*t)*{_envelope(0.75, 3.7, 0)}*{SQUAT_SETS}"),
+    "Press": ("press.mp4", (0.0, 4.75), f"sin(2*PI*330*t)*{_envelope(0.6, 3.1, 0.2)}"),
+    "Finish": ("finish.mp4", (0.25, 5.5), f"sin(2*PI*330*t)*{_envelope(0.9, 4.3, 0.4)}"),
 }
 LENGTHS = {"Bench": 5.5, "Squat": 18.0, "Press": 5.0, "Finish": 5.5}
 
@@ -59,15 +77,11 @@ def _media(out: Path) -> dict:
     paths = {}
     for name, (proxy, _span, tone) in CLIPS.items():
         seconds = LENGTHS[name]
-        audio = (f"aevalsrc='{tone}':s=48000:d={seconds}" if tone
-                 else f"sine=frequency=330:sample_rate=48000:duration={seconds}")
+        audio = f"aevalsrc='{tone}':s=48000:d={seconds}"
         target = media / f"{name}.mov"
         if not target.is_file():
-            cmd = ["-i", str(FOOTAGE / proxy), "-f", "lavfi", "-i", audio, "-map", "0:v", "-map", "1:a",
-                   "-t", str(seconds), "-c:v", "copy", "-c:a", "aac"]
-            if not tone:
-                cmd += ["-af", "volume=0.2"]
-            _ffmpeg(*cmd, str(target))
+            _ffmpeg("-i", str(FOOTAGE / proxy), "-f", "lavfi", "-i", audio, "-map", "0:v", "-map", "1:a",
+                    "-t", str(seconds), "-c:v", "copy", "-c:a", "aac", str(target))
         paths[name] = target
     return paths
 

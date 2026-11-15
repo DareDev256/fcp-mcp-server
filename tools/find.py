@@ -22,6 +22,7 @@ from fcpxml import progress as _progress
 from fcpxml.media_intel import file_in_point, media_src_to_path
 from fcpxml.models import TimeValue
 from fcpxml.rough_cut import RoughCutGenerator
+from fcpxml.words import plural
 from tools import media as _media
 from tools import scenes as _scenes
 from tools._common import parse_project, text_result
@@ -226,8 +227,8 @@ def _index_line(ctxs):
                     cold += 1
     warm = len(ctxs) - cold
     if cold:
-        return f"Index: cold ({cold} of {len(ctxs)} sources need find_index)"
-    return f"Index: warm ({warm} sources)"
+        return f"Index: cold ({cold} of {plural(len(ctxs), 'source')} need find_index)"
+    return f"Index: warm ({plural(warm, 'source')})"
 
 
 def _search(args):
@@ -277,7 +278,7 @@ async def handle_find_shots(args: dict):
         out += srv._markdown_table(["#", "Clip", "Source in", "Source out", "Timeline", "Tier", "Score", "Why"], rows)
         out += "\n\n*Next: `find_to_timeline` with the same query to assemble these into a selects reel.*"
     else:
-        out += (f"No shots matched '{r['query']}' across {len(r['ctxs'])} clips "
+        out += (f"No shots matched '{r['query']}' across {plural(len(r['ctxs']), 'clip')} "
                 "(searched transcript words, names, keywords, notes, markers, events"
                 + (", captions)" if "vision" in r["mode"] and "unavailable" not in r["mode"] else ")") + ".")
         if r["missing"]:
@@ -331,11 +332,11 @@ async def handle_find_index(args: dict):
                     ix.put_shots(ctx.media_path, rows)
             captioned += 1
     missing = [c.name for c in ctxs if c.transcript is None]
-    out = f"# Find Index\n\n- **Clips**: {len(ctxs)} ({len(seen)} sources)\n"
-    out += f"- **Transcripts**: {with_transcript} of {len(ctxs)} clips"
+    out = f"# Find Index\n\n- **Clips**: {len(ctxs)} ({plural(len(seen), 'source')})\n"
+    out += f"- **Transcripts**: {with_transcript} of {plural(len(ctxs), 'clip')}"
     if missing:
         out += f" — missing for {', '.join(missing[:10])}; make them with `transcript_media` (never done implicitly)"
-    out += f"\n- **Scenes**: {scenes_done} of {len(seen)} sources analysed\n"
+    out += f"\n- **Scenes**: {scenes_done} of {plural(len(seen), 'source')} analysed\n"
     if not captions:
         out += "- **Captions**: skipped (captions=false)\n"
     elif reason:
@@ -343,7 +344,7 @@ async def handle_find_index(args: dict):
     elif caption_note:
         out += f"- **Captions**: {caption_note}\n"
     else:
-        out += f"- **Captions**: {captioned} of {len(seen)} sources\n"
+        out += f"- **Captions**: {captioned} of {plural(len(seen), 'source')}\n"
     out += "- " + _index_line(ctxs)
     if skipped:
         out += "\n\n**Skipped**: " + "; ".join(f"{n} ({why})" for n, why in skipped)
@@ -375,7 +376,7 @@ async def handle_find_to_timeline(args: dict):
     total, _ = gen._build_output(selections, output_path, False, "00:00:00:01")
     score = diversity.score(kept)
     out = r["mode"] + "\n\n# Selects Reel\n\n"
-    out += f"- **Query**: {r['query']}\n- **Shots**: {len(kept)} of {len(r['hits'])} hits kept\n"
+    out += f"- **Query**: {r['query']}\n- **Shots**: {len(kept)} of {plural(len(r['hits']), 'hit')} kept\n"
     out += f"- **Duration**: {total:.2f}s\n- **{diversity.describe(score, kept)}**\n\n"
     out += f"Saved to: `{output_path}`"
     return text_result(out)

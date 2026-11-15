@@ -127,7 +127,7 @@ async def test_organize_auto_proposes_without_writing(derivable):
 async def test_organize_auto_apply_writes_keywords(derivable):
     text = await _call("organize_auto", {"filepath": derivable, "apply": True, "max_keywords": 2})
     out = derivable.replace(".fcpxml", "_organized.fcpxml")
-    assert "Applied to 1 clips" in text and os.path.exists(out)
+    assert "Applied to 1 clip" in text and os.path.exists(out)
     root = ET.parse(out).getroot()
     clip = next(c for c in root.iter("asset-clip") if c.get("name") == "interview")
     assert "budget" in clip.find("keyword").get("value")

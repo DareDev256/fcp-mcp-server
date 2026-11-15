@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from .words import plural
+
 DEFAULT_CEILING = 0.6
 _STOP = {"a", "an", "the", "of", "on", "in", "at", "and", "with", "to", "is", "are", "shot"}
 
@@ -63,5 +65,5 @@ def score(shots: list[dict]) -> float:
 def describe(value: float, shots: list[dict] | None = None) -> str:
     if shots is not None and len(shots) >= 2:
         pairs = len(shots) - 1
-        return f"Diversity: {value:.2f} ({round(value * pairs)} of {pairs} cuts change source)"
+        return f"Diversity: {value:.2f} ({round(value * pairs)} of {plural(pairs, 'cut')} change source)"
     return f"Diversity: {value:.2f}"

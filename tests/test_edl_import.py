@@ -280,7 +280,7 @@ class TestServerWiring:
         }))
         text = result[0].text
         assert "Authored" in text
-        assert "1 ranges" in text
+        assert "from 1 range." in text
         timeline = FCPXMLParser().parse_file(str(out)).primary_timeline
         assert len(timeline.clips) == 1
 

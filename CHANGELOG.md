@@ -1,6 +1,547 @@
 # Changelog
 
-## [Unreleased]
+## [0.34.0] - 2026-11-15
+
+A timeline that reads at a glance, in one look. James picked direction B
+(open, like Final Cut's timeline) on 2026-11-15, so the `view` app
+(`ui://fcp/timeline`) and `preview://` now draw only that: the cut's fit
+region at open (the whole cut, or a music video's picture; a phone zooms in
+to a 64 px median clip), an overview minimap, tall clips with the filmstrip
+over the waveform's own band on one -60..0 dBFS scale, Final Cut 12.4's own
+role colours (one set in both themes), transitions and titles drawn as Final
+Cut draws them, a glyph per marker kind with its name (or a bracketed run),
+names inside their clips, whole, or not at all (the hint strip counts them),
+grey lane tags on a desktop, a strip above the ruler for what a tap
+selects, a playhead on top that snaps to cuts, nothing that collides, and
+the host's or the OS's theme. The payload left the text: it is the result's
+`structuredContent`, so the text a client without Apps reads for a five-clip
+cut fell from 36,701 characters (0.33, thumbnails inlined) to 609. Also in
+this release: PR #44's parser fixes (connected storylines written the DTD way,
+`enabled="0"`, XMEML placement, a gap's markers, counted nouns), the 0.32
+residue and gauntlet-033 bug 6.
+
+For an editor mid-cut: nothing here changes what a write operation writes.
+What moved is what the reading tools SHOW (the app, `view_timeline`'s text,
+`preview_check`'s silence labels, the sheet's flash badge, the order of
+`validate_timeline`'s Issues table, `detect_flash_frames`' timecode for a
+lane clip) and what the parser READS from Final Cut's own files (below).
+
+### Changed (existing outputs moved)
+- **The timeline app has one look.** Direction A and the 0.32 look are gone,
+  with them the `direction` argument of `render_page_html`, clip numbers and
+  the key under the timeline. Measured in headless Chromium on the three
+  fixtures: see Gates below. Shaped over four rounds of frame checks and
+  four fresh critics; round 4 is a Fable advisor's ruling on the design
+  when the round-by-round fixes began to oscillate.
+- **Fit (round 4).** The track opens on the cut's fit region: the picture's
+  extent and 10% of it after when the picture covers under 25% of the
+  running time (the music video: 16 s of picture over a 164 s bed opens on
+  0-17.6 s), else the whole cut; and when the median picture clip would then
+  be under 16 px it zooms in to a 64 px median from the region's start and
+  scrolls (the interview at 430 and 390). Measured median picture clip at
+  open (1440 / 430 / 390): gym 218.9 / 58.5 / 51.8 px, music video 295.7 /
+  79.3 / 70.2, interview 29.3 / 63.0 / 63.0. Zoom + and - zoom from there.
+  The page never scrolls sideways. A connected lane with nothing in the part
+  in view collapses to a thin rule. (Round 3 opened on the whole cut at
+  every width; the first build on a 44 px median clip.)
+- **The overview is a minimap (round 4).** 48 px tall at every width: a
+  1 px tick per marker in its top band, the flash in a band of its own under
+  it, then every lane a row of bars in its clips' role colours, with a
+  window round the part the tracks show; a click scrolls the tracks there.
+- **Track area.** Clips are 88 px tall on picture lanes and 72 px on title
+  and sound lanes on a desktop, 56 px on a phone; the panel under the
+  timeline is a compact two-column card. The track area is 35.3% (gym),
+  47.0% (music video) and 45.0% (interview) of the page at 1440 (it was 26%
+  on the gym cut in the 0.33 direction B shot).
+- **Names (round 4, the Fable ruling).** A clip's name is drawn inside it,
+  whole, in 11 px type 6 px in from its edges (and clear of a transition
+  over its head or tail), or not at all: no name rows, no leaders, no scrim
+  pills, never an ellipsis (round 3 hung names on rows with leaders, which
+  the critics could not match to their clips). Over a picture the name is
+  white with a black halo (a shadow under the glyphs, an outline out to 2 px
+  and a soft shadow), which reads over a white frame. The hint strip counts the names the part in view shows:
+  "7 of 7 names shown" (gym at 1440), "2 of 58 names shown · tap or zoom"
+  (interview at 1440), "4 of 58" (interview at 390), "8 of 8" and "5 of 8"
+  (music video at 1440 and 390). A tap selects a clip (or a transition, or a
+  marker run) and shows its name, start and length in the strip above the
+  ruler, and the Selection panel updates; every time and length a person
+  reads is a timecode, the exact rational in its title, and a record time is
+  cyan there (round 4), a length or a source time is not. The playhead
+  snaps to a cut within 8 px.
+- **Lane tags (round 4).** On a desktop (a track 1,000 px or wider) every lane
+  carries a grey tag in a gutter 64 px wide (wider if its widest tag needs
+  it in the font drawn: CI's Linux font does), sticky as the tracks scroll:
+  "Storyline", "Lane 1", "Lane −1". A phone keeps its 16 px gutter.
+- **The playhead is on top of everything (round 4).** Its head sits in the
+  ruler's tick band under the times, so it never cuts a time and
+  00:00:00:00 stays when a tap moves it (round 3 hid the time under it). At
+  rest it touches nothing: names and connection stems sit 6 px into their
+  clips, and the first frame tick is 8 px out.
+- **Nothing collides.** A marker is its glyph and its name on the ruler,
+  nothing in the lanes; the flash line starts under the two marker rows (round
+  4: from the ruler's top it ran through the Press marker a frame after it);
+  a connection is a 2 px stem from its clip's edge ending in its 6 px anchor
+  dot ON the storyline's edge (round 3's dot sat 4 px inside the storyline,
+  behind it), 6 px into its clip or half its width when that is less, so the
+  dot is always on its clip (round 5: a 6 px title's dot sat past it); a
+  stem that passes another lane's clip is drawn in front of it as one line
+  to its single dot, moved along its clip clear of that clip's name (round
+  5: drawn behind, a lane-2 stem read as a second pin on the lane-1 clip:
+  "7 pins for 4 clips"); a stem within a dot's width of another moves
+  along its clip. Checked over every drawn primitive (below).
+- **Transitions** are an overlay across both clips at the edit, never under
+  14 px wide, its body filled with the transition's own colour in both
+  themes (round 5: round 4's translucent body let the two clips' rounded
+  ends show through, "two capsules" in the light theme). Each is named in
+  the ruler's marker rows (round 5): its bow-tie at the edit and
+  "Cross Dissolve 0.5s", placed with the markers (whole, or in a run as
+  theirs are: "2 items" with Finish at 430 and 390), tappable, and counted
+  in the hint ("8 of 8 names shown" on the gym at 1440). In the lane a
+  bow-tie shows only with its whole name beside it; the next clip's name
+  starts after the overlay.
+- **Titles** have the Titles role colour as their body (Final Cut 12.4's,
+  read from the app) and their name inside when it fits (white on #7E53D2,
+  5.2:1 in both themes, measured); a narrow title is a 24 px bar. Connected
+  clips are never drawn thinner than 6 px.
+- **The header** reads "gap spine + 8 connected" on a gap spine, gives the
+  length as a timecode, and never breaks inside "3840×2160 @ 23.98fps". It
+  wraps whole segments, each "·" kept to the segment before it by a
+  non-breaking space, and a "·" left at a line's end is hidden (round 5:
+  the music video's first line at 390 ended in one).
+- **Selecting a clip** no longer types its name into the marker-name field;
+  the placeholder stays (round 5).
+- **Roles.** A 3 px stripe in Final Cut 12.4's own role colours, read from
+  the installed app (`scripts/fcp_role_colours.m` loads its Flexo.framework
+  and asks `FFColorForRole +colorSchemeForIndex:` for each built-in role):
+  Video and Dialogue `#3763A1`, Titles `#7E53D2`, Music `#28A154`, Effects
+  `#2A9FA9` (the scheme's `roleFocusActiveColor`), one set in both themes
+  (round 4: round 3's light theme took the scheme's darker
+  `itemBackgroundColor`, which read as other colours). They are the one
+  documented exception to grey/cyan/red in `fcpxml/palette.py`: the stripe,
+  a title's body and the overview's bars. The light theme's panel is
+  `#FAFAFA` (was `#F4F4F4`), where the Effects teal reads 3.03:1. The 0.33
+  values were set by eye.
+- **Sound.** A waveform on every clip with sound, in its own band under the
+  filmstrip (Final Cut's clip anatomy: the filmstrip ends where the band
+  begins), the band on the clip's own grey, never the page's: one
+  bottom-anchored column per peak on one absolute -60..0 dBFS scale (round
+  4; round 3 scaled each clip to its own loudest peak, which drew a steady
+  tone as a slab), so two clips' heights compare; the clip's peak in dBFS is
+  in its tooltip and the panel. Measured once per file with ffmpeg (10
+  levels a second), cached in the index as analysis kind `peaks@10/s,-60dB`
+  (a cache on the old -48 dB scale is never read as this one), and sent at
+  10 points a second, at most 1,200 a clip (4 and 160 until round 4, which
+  drew a 164 s bed as 18 px blocks once the track opened on the picture).
+  `FCP_MCP_INDEX=off` measures every time and gives the same arrays.
+  `view_timeline` takes `waveforms=false` to skip it. The gym fixture's
+  tones have an amplitude envelope (a beat and a swell, -1 to -26 dBFS) with
+  the squat rests at the same samples as before, so its cut, its silences
+  and every proof test are unchanged.
+- **Markers.** Separate glyphs for standard, chapter, to-do and completed
+  to-do markers; a to-do is the open 10 px square and a completed to-do the
+  square filled with a check cut out of it (round 5: they differed by a
+  2 px dot). A glyph never shows without its whole name to its right:
+  each marker (after any flash flag) takes row 0 or row 1 if its name fits
+  there in view; only a run whose names cannot all be named is bracketed
+  (round 4): a bracket from its first marker to its last with a tick at
+  each and a chip centred on it ("3 markers", a tap lists them), never over
+  more than a quarter of the view (round 3 drew "7 markers" at 9.3 min for
+  markers out to 17.4 min). Every marker whose glyph and name are in view is
+  named or in a run; one whose name only the view's edge stops joins a run
+  with its neighbour when it can (round 5), else waits for a scroll.
+  With a gap's markers read (below), `view`'s
+  summary counts the real total on a gap-based edit ("3 markers", where it
+  said 0).
+- **The ruler** stacks the two marker rows, the time row, and the frame
+  ticks in their own band under it: no time touches a tick.
+- **Theme.** The app follows the host's `hostContext.theme` (and a
+  `host-context-changed` notification), then `prefers-color-scheme`;
+  `preview://` follows `prefers-color-scheme`. The computed background is
+  the palette's ground token in both themes (checked in a stand-in host).
+- **`view_timeline`'s reply.** The payload is the result's
+  `structuredContent` on both SDK generations (`mcp_compat.ToolReply`,
+  `call_tool_result`); the text is the summary and the clips in record
+  order (start, length, lane, name), twelve listed and the rest counted. No
+  thumbnail, waveform or JSON is in the text. Measured on a five-clip cut
+  with real thumbnails: 36,701 characters of text on 0.33, 609 now; the
+  structured payload is 57,223 bytes. On the 18-minute interview fixture
+  (58 clips, 44 pictures, 50 waveforms) the payload is 478,201 bytes, under
+  the 700,000-byte budget; the gym cut's is 63,318 and the music video's
+  71,284 (local paths rewritten to `/fcp-demo`). Why the app is not handed the thumbnails by a
+  second, app-only tool call: the ext-apps spec allows one
+  (`_meta.ui.visibility: ["app"]`, which a host MUST keep out of the
+  model's tool list) and the 2.x SDK stamps it (`Apps.tool(visibility=)`),
+  but 1.28.1 has no such module and a client without Apps would list the
+  extra tool to its model and grow the advertised schema. The structured
+  payload reaches the app in the same notification and the spec keeps it
+  out of the model's context, so nothing is fetched.
+- **The README picture** is the gym cut at 1440 in the dark theme, built by
+  `scripts/readme_timeline.py`, which refuses to save when a picture clip
+  has no filmstrip or a flat one, a clip with sound has no waveform, or the
+  markers drawn differ from the FCPXML's (the 0.33 picture: the music video
+  drawn without its media, empty clips and none of its markers).
+- **Thumbnails** are 180 px on their short side (twice the 88 px clip, for
+  a 2x display; 108 px before) at JPEG quality 5, and the cap is 64 of them
+  and 600 KB, so every clip of the interview fixture has its picture. The
+  size and quality are in the thumbnail cache key.
+- **Lanes under the storyline** come out -1 then -2, top to bottom, as Final
+  Cut stacks them (the payload listed -2 first).
+- **`preview_check`'s silence labels** stay inside their silence and never
+  over the sound: a silence that carries into band 2 says where it ends
+  there only when band 2's part of it can hold the words, else on a second
+  line under its name in band 1 (0.32 residue: band 2's "silence to
+  00:00:06:12" covered its first second of waveform). A name too long for
+  its silence falls back to a shorter one ("silence 1.0s").
+- **`preview_sheet`'s flash badge** breaks between "flash 1f" and its time,
+  never inside an item, and its src line keeps the "· " only where it fits:
+  three lines on the phone card where 0.32 drew four, one a lone "· src".
+- **`validate_timeline`'s Issues table** is FAIL, then WARN, then INFO, each
+  in check order (it was check order: on `examples/sample.fcpxml` three
+  INFO rows sat above nine offline FAILs). The Summary keeps check order.
+
+### Fixed
+- **`detect_flash_frames` placed a connected clip by its raw `offset`** (on
+  its parent's clock), so a lane clip on a trimmed parent was reported where
+  it does not play: a 2-frame lane clip over the gym fixture's third Squat
+  set read 00:00:14:23 instead of 00:00:17:03. It now reads the parser's
+  `timeline_start`, as `models.timeline_position` does (gauntlet-033 bug 6,
+  older than 0.33).
+- **Clips in a connected storyline were silently dropped.** Until now, every
+  clip in a connected storyline from a real Final Cut export was missing from
+  the model, so from every reader and from the render, and nothing said so.
+  Apple's DTD has no `<storyline>` element: a connected storyline is a
+  `<spine lane="N" offset="...">` hanging off a spine clip or a gap, and the
+  parser and the writer knew only the invented `<storyline>` tag. On two
+  real Final Cut 1.14 exports (not committed), 16 clips in 13 storylines and
+  4 clips in 4 storylines were read as nothing: 129 connected clips became
+  145, and 26 across one library's timelines became 30. A storyline keeps
+  its own clock, which starts at 0: its `offset` is on the parent's clock
+  and its items' offsets on its own, so an item plays at parent position +
+  (storyline offset - parent start) + item offset, in exact seconds rounded
+  to a frame once. Its clips join `connected_clips` on its lane (their
+  `offset` restated on the parent's clock, as for every connected clip), so
+  `analyze_timeline`, `list_connected_clips`, `view`, `preview_timeline`,
+  `detect_gaps` and `preview_render`'s graph all see them. Its gaps and
+  transitions are kept on the new `Timeline.storylines`, so every item is
+  accounted for; a transition sits on the cut before it (the storyline's
+  first frame when it comes first). The text timeline lists each as a `D`
+  row on its lane ("ONE > TWO, centred on 00:00:04:00"), `view`'s payload
+  carries it with its lane and lead, and `preview_render` draws it as a cut
+  and says so. The legacy `<storyline>` still reads as before (no offset:
+  the parent's clock).
+- **The writer placed storyline clips on the wrong clock, and snapping could
+  break a storyline.** `iter_connected_clips` now yields a storyline's clips
+  with the storyline as their host, and `connected_timeline_offset` /
+  `connected_offset_attribute` (now instance methods) put them on its own
+  clock, so `timeline_origin` and `timeline_marker_seconds` count them where
+  they play. `snap_connected_clips` moves a connected storyline as one, by
+  its `offset`, and keeps every cut inside it: moving one of its clips alone
+  would overlap the next or open a hole Final Cut never wrote.
+- **A disabled clip was drawn, heard and checked.** Final Cut writes
+  `enabled="0"` on a clip switched off: it stays in the cut and is in
+  neither the picture nor the sound. The flag was not read anywhere, so the
+  proxy drew and played it and diagnose could call it a flash, a duplicate,
+  reused source or offline media. It is now `enabled` on `Clip` and
+  `ConnectedClip`, read on spine clips, connected clips and clips in a
+  connected storyline. `preview_render` leaves it out of the picture and the
+  sound: on the spine it keeps its time as black and silence, on a lane or
+  an audio lane it is not there, and the render notes name each one.
+  `preview_sheet`, the burn-in and the picture flash check skip it the same
+  way. `validate_timeline`'s flash, duplicate, reused-source and offline
+  checks leave it out, and `validate_timeline`, `detect_flash_frames` and
+  `detect_duplicates` say how many clips are disabled. An editor still has
+  to see it is there: the text timeline draws it dashed (`[-]`) with "off"
+  in its row and keeps its event number; `view` greys it, marks it "off"
+  and says so in its tooltip. The XMEML export writes
+  `<enabled>FALSE</enabled>` for it. On one real export (not committed),
+  27 clips are disabled: the 22 footage clips are in the render graph,
+  marked, none drawn or heard; the 5 titles were never drawn by the proxy.
+- **The XMEML export put connected clips in the wrong place.** It placed
+  each connected clip at its raw `offset`, which is on the parent's clock:
+  right only when the parent's `offset` equals its `start`. A clip on a
+  trimmed parent, or on a gap whose clock starts at 3600s, landed somewhere
+  it never plays (an hour late on a real gap-based export). It now uses
+  `timeline_position()` (new in `fcpxml/models.py`), the one function the
+  render graph and `as_clip` use too: parent position + (offset - parent
+  start), plus a connected storyline's own clock. The Resolve export copies
+  the document at 1.9 and computes no position; a round trip now proves its
+  storylines and clocks come through whole.
+- **Markers on a gap were written and never read back.** On a gap-based
+  edit (the spine is one `<gap>` and every clip hangs off it, as
+  `examples/music-video.fcpxml` is), `mark · batch_add_markers` writes each
+  marker inside the gap, which is where Final Cut puts it, and the parser
+  skipped a gap's own `<marker>`/`<chapter-marker>` children. Three markers
+  written there read back as none: `analyze_timeline` said Total 0,
+  `list_markers` listed none, `view`'s payload carried none and
+  `preview_timeline` drew no `^`. The parser now reads them as timeline
+  markers at the gap's offset plus (marker start minus gap start), measured
+  in exact seconds and rounded to a frame once: subtracting two separately
+  truncated frame counts put all three one frame late at 23.976, because
+  the gap's 3600s start is not on that frame grid.
+- **The text timeline took the origin off twice.** `preview_timeline` drew a
+  marker the parser had already placed (`timeline_start`) on the sequence
+  clock and then subtracted the timeline's origin again, so on a timeline
+  whose earliest element sits at 01:00:00:00 (a gap-only spine) every placed
+  marker landed an hour before the start and was dropped. Only a raw
+  sequence marker has the origin taken off now.
+- **"Added 1 markers".** The 0.32 "(s)" sweep missed counts printed straight
+  into a plural noun (`f"{n} markers"`, or behind a modifier:
+  `f"{n} connected clips"`), which reads right for every n but one. All 75
+  of them in `server.py`, `tools/` and `fcpxml/` go through
+  `fcpxml.words.plural` ("Added 1 marker", "Split 1 clip into 3 pieces",
+  "Applied to 1 clip", "from 1 range.", "Index cleared: 1 media row
+  dropped", "1 flash frame"); the gap-based notes agree with their verb
+  ("1 connected clip in lanes carries the edit"). One test asserted "1 media
+  rows dropped" and now asserts the singular. A measured decimal ("2.5
+  frames") stays plural.
+
+### Gates, each broken once in the real code and seen red
+- `tests/test_app_glance.py`, round 5 (the gatekeeper's last round: five
+  defects both round-4 critics named; each gate also run on 379ae3b and red
+  there): the transition's body filled with its own colour in both themes
+  and its name in the marker rows, whole or in a run, and counted in the
+  hint (red with round 4's translucent body, with no ruler name, with the
+  bow-tie always drawn); every stem's dot over its own clip, the stem
+  starting at its clip's edge and nothing painted over it down to its dot
+  (red with round 4's 6 px inset, with the stems behind the clips they
+  pass, with round 3's stems); a to-do the open 10 px square and a
+  completed to-do filled with a cut-out check, both themes (red at 8 px,
+  with no check); no "·" at a header line's end or start on the three
+  fixtures at every width (red with the separator always drawn); a tap
+  leaving the marker-name field empty with its placeholder (red with
+  379ae3b's pre-fill).
+- `tests/test_app_glance.py`, round 4 (the Fable ruling on two critics'
+  FIX FIRST; each gate also run on the round-3 build, 035392a, and red
+  there): names inside their clip, whole, 11 px, 6 px in, no pill and no
+  name row, and the hint strip's count equal to the names the page shows
+  (red with 12 px names, a count of the storyline only, a scrim pill); the
+  zoom rule at open on every fixture and width (red with round 3's whole
+  cut and with no median zoom); the overview a minimap, 44 px or taller at
+  phone width, bars in their role colours at 3:1, a 1 px tick per marker and
+  the flash in a band of its own (red with grey bars, 30 px, glyph ticks);
+  the playhead on top of every name, by hit-testing (red at round 3's z);
+  every waveform column level / 100 of its band on one scale (red with each
+  clip scaled to its own peak), the band on the clip's grey (red on the
+  panel), the gym's sound with 12 dB or more of dynamics in every clip (red
+  with the old steady tone's levels); marker runs bracketed from first to
+  last marker, centred, within a quarter of the view, only where the names
+  cannot all be named, every marker in view drawn (red with a dropped
+  marker, with runs not split, with one row); the flash line under the
+  marker rows, crossing no glyph (red from the ruler's top); record times
+  cyan in the strip and the Selection, 00:00:00:00 kept on a tap (red with
+  white times, with round 3's playhead); every stem ending on the
+  storyline's edge with its dot clear of every clip (red with round 3's
+  stems); transitions with no glyph unless their whole name fits (red with
+  the bow-tie always drawn, with an opaque slab); titles' text 4.5:1 on the
+  Titles colour in both themes (red in the mute grey); lane tags at 1440
+  only, grey, whole in the gutter, which grows for a wider tag (red on a
+  phone, at a fixed 64 px with a wider tag, in cyan, missing); and a
+  collision check over every drawn primitive (text runs line by line,
+  marker glyphs, brackets and their ticks, frame and time ticks, the flash
+  and its flag, a transition's overlay, each stem's visible parts and its
+  dot, the playhead at rest), where two marks of one instant are one mark:
+  0 collisions on the three fixtures at 1440, 430 and 390 in both themes
+  and after taps; 116 on 035392a's nine frames, where round 3's text-only
+  check said 0 (red with a name row and leader put back, and with names
+  given no inset). `tests/test_palette.py`: one set of role colours in both
+  themes (red with round 3's light set); a name over a picture has its
+  outline out to 2 px on every side (red with a soft shadow only).
+  `tests/test_app_labels.py`: over a pure white frame, 95% or more of the
+  pixels round a name's text (taken round the pixels the text covers, so
+  its own edge pixels are measured) read 4.5:1 against it: 100% on macOS
+  and passing on CI's Linux, which draws text sub-pixel (the first push's
+  1 px outline left 24% of them light there); 25% with a soft shadow only,
+  0% with no halo (red).
+- `tests/test_app_glance.py` (0.34, replaces `tests/test_app_directions.py`;
+  CI's `rendered-labels` job): the three fixtures (the 32 s gym cut, the
+  164 s music video with three markers on its gap, the 18-minute interview)
+  at 1440, 430 and 390 in headless Chromium: no visible name shorter than 4
+  characters, none cut, no two texts on top of each other, the median clip
+  at least 44 px, the overview spanning the whole cut, no sideways page,
+  cyan text only on the record time; the track area at least 35% of the page
+  at 1440; clip heights by lane type; the middle ellipsis; the tap sheet's
+  name, start and length; the snap; the role stripes' colours and 3 px; a
+  waveform per clip with sound; the four marker glyphs; the flash in red and
+  00:00:00:00 showing; the background token in both themes for preview://
+  and for the app inside a stand-in host (its theme, then the OS, then a
+  change notification); the app drawing the payload from
+  `structuredContent`. Mutations, all red: KEEP_MIN 1 with LABEL_MIN 4 (a
+  2-3 character name), every rail name on one row, names measured without
+  padding with the fit pass removed, an overview mapping only the part in
+  view, the 0.32 fit (whole cut, no median rule), 36 px clips, the tap
+  sheet never opened, SNAP_PX 0, the host-theme hook removed, the
+  prefers-color-scheme block removed, `structuredContent` ignored. (Round 4
+  replaced the median, the middle ellipsis and the name rows; their gates
+  went with them.)
+- `tests/test_app_glance.py`, round 3 (two fresh critics on the round-2
+  build), the gates round 4 kept: the overview spanning the cut when zoomed
+  (red mapping only the view); a lane with nothing in view collapsing (red
+  without); titles Titles-coloured, narrow ones 24 px bars (red with a grey
+  body); connected clips 6 px or wider with 2 px connection lines (red at
+  1 px); the header whole at 390 (red with ordinary spaces); the waveform in
+  its own band, filled (red with fa9b811's overlay); the tap strip above the
+  ruler, nothing over the lanes (red floated over them). Round 4 replaced
+  its whole-cut fit, its name-share, hit-test and leader gates, its flash
+  and marker gates (above).
+  `tests/test_readme_picture.py`: the README builder's refusal on the old
+  empty render (no filmstrips, no waveform), on a flat picture and on a
+  missing marker; the gym cut saved.
+- `tests/test_app_glance.py`, round 2 (the gatekeeper's frame check of the
+  first build): every ruler time 2 px clear of every tick, on the three
+  fixtures at 1440, 430 and 390 in both themes (red with the first build's
+  ruler, where the frame ticks rose into a 15 px time row); every visible
+  marker glyph with its visible, whole name, on the three fixtures at every
+  width, and the interview's "Colour matched" turned to its glyph's left at
+  390 (red with names hidden and glyphs kept); no band of 4 or more rows of
+  one flat colour across a picture clip's body on the gym cut at 1440 and
+  390 in both themes (red with the first build's clip: the filmstrip
+  stopping 24 px short and the waveform on the panel colour under it).
+- `tests/test_view_budget.py` (0.34, no browser): on the wire of the
+  installed SDK (1.x and 2.x run it), the five-clip text under 2,000
+  characters with no picture in it and every clip named; the interview's
+  payload under 700,000 bytes; peaks measured once per file with the index
+  on and the same arrays with it off; a file with no sound has no
+  waveform. Mutations, all red: the 0.33 reply (the payload fenced into the
+  text), a full-rate waveform with no cap, a reader that skips the index.
+- `tests/test_diagnose_order.py` (0.34): the Issues table FAIL, WARN, INFO
+  (red in check order) and a 2-frame lane clip on a trimmed parent reported
+  at 00:00:17:03 (red by raw offset: 00:00:14:23).
+- `tests/test_proofs.py` (0.34): every label on a waveform strip inside a
+  silence of its band, the carried silence's end under its name in band 1
+  (red with the label let out of its span); the flash badge two lines on
+  the desktop card and three on the phone card, no line a lone dot (red
+  with 0.32's wrap: four lines).
+- `tests/test_palette.py` (0.34): every role token names its source
+  (`palette.ROLE_SOURCE`), and where Final Cut and clang are installed the
+  probe is compiled and run against the app and every token must equal what
+  Final Cut computes (red: the 0.33 set-by-eye video blue, a role whose
+  index moved); the stripes read at 3:1 on the track area in both modes.
+- `tests/test_disabled_clips.py`: a disabled spine clip, a disabled lane
+  clip over a visible spine clip, a disabled audio-lane clip and a disabled
+  clip in a connected storyline, rendered for real and read back by colour
+  and loudness: the spine picture where the lane clip is off, black and
+  silence for the spine clip's own two seconds, the next clip on time, no
+  tone from any disabled clip and a control that hears the enabled one.
+  Also the graph, the sheet, diagnose (a one-frame disabled clip that would
+  be a flash and a duplicate, an offline disabled lane clip), the text
+  timeline, the view payload, the app drawn in headless Chromium (class,
+  opacity, tooltip, tag) and the XMEML flag. `FCP_MCP_REAL_FCPXML` runs one
+  more against a real file. Mutations, all red: the flag not read (spine;
+  connected); a disabled spine clip drawn; heard; a disabled lane clip
+  drawn; a lane or audio-lane clip heard; the render note removed; the
+  picture readers seeing it; the text timeline dropping "off"; the flash,
+  duplicate and offline checks counting it; the count removed from the
+  report; the payload calling it enabled; the app not greying it; the
+  XMEML flag dropped.
+- `tests/test_connected_storylines.py` (export and transitions): the XMEML
+  export's clip starts and tracks against the same truth, the Resolve round
+  trip, the storyline `D` rows and the payload's storyline transitions.
+  Mutations, all red: XMEML placing by raw offset (the old code); Resolve
+  stripping offsets; `timeline_position` preferring the raw offset (also red
+  in `tests/test_preview_truth.py`); the `D` rows removed; the payload
+  dropping them.
+- `tests/test_connected_storylines.py`: a fixture in the real shape (a
+  storyline under a trimmed spine clip with two clips in sequence, a
+  transition between them and a gap inside; one under a broadcast gap whose
+  first item is a transition) is checked against positions the test
+  computes from the XML, pinned to a hand-worked table: the parse, the
+  storylines' clips, gaps and transitions, `analyze_timeline`,
+  `list_connected_clips`, `view`'s payload, `preview_timeline`'s rows,
+  `detect_gaps`, the render graph's lane tracks and its note, the writer's
+  placement and its inverse, a snap and the legacy tag. Red on 0.32.0 (6
+  of 8). `FCP_MCP_REAL_FCPXML=<export>` runs one more against a real file
+  (skipped without it): every item of every connected spine accounted for.
+  The fixture in `tests/test_features_v05.py` moved from the invented
+  `<storyline>` to `<spine lane offset>`. Mutations, all red: the spine
+  branch dropped, the storyline's offset ignored, its children read on the
+  parent's clock, its transitions dropped (each in the parser and, the
+  first three, in the writer); a snap moving storyline clips one by one; a
+  storyline clip's offset not restated on the parent's clock; its gaps
+  dropped; the render note removed.
+- `tests/test_gap_markers.py`: three markers (standard, chapter, to-do)
+  written with the real `batch_add_markers` on a copy of music-video come
+  back as timeline markers at the positions the test computes from the XML
+  itself, and `analyze_timeline` (Total 3, Chapters 1), `list_markers` (3
+  rows), `view`'s payload (3, as exact `n/d`) and `preview_timeline` (3 `^`
+  rows) all see them. Red on 0.32.0. Mutations, all red: the gap branch
+  deleted; placement from truncated frame counts; the text timeline
+  subtracting the origin from placed markers.
+- `tests/test_plurals.py`: an AST scan of `server.py`, `tools/` and
+  `fcpxml/` finds no f-string printing a value into a plural noun, straight
+  or behind up to two modifiers (verbs, units and the four values that are
+  not counts listed by name; 75 hits on 0.32.0, 0 now), and every
+  `plural()` call (95) is rendered at n=1 and n=2. Mutations, all red:
+  "Added {n} markers" put back; "{words} transcript words" put back;
+  "Index cleared: {before} media rows dropped" put back; the scanner
+  narrowed to the word right after the value; a `plural()` handed a plural
+  noun; `words.plural` always plural.
+
+### Not done
+- **Not verified in Claude Desktop.** Every shot is the app in headless
+  Chromium (preview:// inlined, and a stand-in host for the theme and
+  `structuredContent`); the ext-apps reference host and Claude Desktop were
+  not run for this release.
+- The app draws a transition inside a connected storyline as a dissolve box
+  on that storyline's lane; no test checks it.
+- A clip's name is not kept in view (sticky) when its clip is scrolled
+  half out of the track area; it is hidden until the name fits.
+- Custom roles take their kind's default colour (Final Cut gives each a
+  colour index the FCPXML does not carry).
+- The role stripe uses a clip's main role; a clip whose picture and sound
+  have different roles shows its picture's.
+- The empty-band gate covers clips with a picture. A clip with sound and no
+  picture is all waveform, under its name when it has one.
+- Few names on the interview: its 44 cuts are about 30 px at 1440 and a
+  camera name needs 47 px with its insets, so 2 of its 58 clips are named
+  there (6 before the lane gutter took 64 px of the track), 4 at 390 (zoomed
+  in); the rest are counted in the hint strip and named in the strip on a
+  tap, by the ruling (no name rows).
+- A crowd of markers denser than two rows and a quarter-view run allow
+  (none on the three fixtures) falls back to one wider run rather than
+  losing a marker; the marker gate reports such a run as too wide.
+- A transition's name shows inside it only when it fits whole (never on the
+  fixtures: the gym's 0.5 s dissolve is 23 px at 1440); otherwise it is in
+  the tooltip and the strip on a tap, and no bow-tie is drawn.
+- Once moved, the playhead is a cursor on top of everything and may cross a
+  name (the ruling); at rest it touches nothing.
+- **The critics' round-4 scores** (379ae3b, two fresh critics scored against
+  Final Cut's own timeline): critic K desktop 6.75, phone 7.75, several
+  lanes 7.0, light theme passing (targets 8, 7.5, 7.5); critic L desktop
+  6.75, phone 7.0, several lanes 6.5, light theme failing on the
+  transition's two capsules. Averages: desktop 6.75 (8 the target), phone
+  7.375, lanes 6.75. Round 5 fixed the five defects both named (above); by
+  the stop rule there is no further critic round for 0.34.0.
+- **Named by one critic only, or new design, so not built in 0.34** (the
+  gatekeeper's out-of-scope list): a desktop zoom for cuts of more than 30
+  clips (the interview names 2 of its 58 clips at 1440); role words in the
+  lane tags; the overview's marks drawn one way; the height of a title clip
+  (narrow ones are 24 px bars, "lollipops" to one critic); the empty band
+  in a sound clip between its name and its waveform; labels on the zoom
+  buttons.
+  Also not built: lane tags at phone width (deferred to 0.35 by the Fable
+  ruling), and the README picture's crop.
+- Storyline clips abut, so the 6 px minimum applies to connected clips only.
+- A gap's `<keyword>` and `<rating>` are still not read: `Timeline` has no
+  field for them, so reading them is a model change, not a parser fix.
+- `<audition>` as an anchored item or inside a connected storyline is not
+  read (in a storyline it is counted in `skipped` and keeps its time).
+  Clips anchored to a clip INSIDE a connected storyline are not read
+  (neither real export has one).
+- An effect switched off (`<filter-video enabled="0">`) is still listed
+  among what the proxy cannot draw.
+- `analysis-marker` and `hidden-clip-marker` are not parsed on any host.
+
+### Added
+No new operation. New in the repository: `demo/fixtures/interview.py` (the
+third fixture: two synthetic cameras, 18 minutes, 44 cuts, lower thirds, a
+music bed, whooshes, markers of all four kinds; testsrc and sine only, no
+person) and `scripts/fcp_role_colours.m` (reads the role colours from
+Final Cut).
+
+### Upgrading
+A client that read the timeline JSON out of `view_timeline`'s TEXT must read
+the result's `structuredContent` (`timeline_app.payload_of` does either). The
+app reads both. The thumbnail cache misses once (new size in the key).
 
 ## [0.33.0] - 2026-11-14
 

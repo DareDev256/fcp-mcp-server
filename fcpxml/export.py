@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 from fractions import Fraction
 from typing import Any, Dict, List
 
+from .models import timeline_position
 from .parser import FCPXMLParser
 from .rational import is_ntsc_rate, nominal_fps, rational_fps
 from .safe_xml import serialize_xml
@@ -24,6 +25,12 @@ def _to_frames(seconds: float, frame_rate: float) -> int:
     """
     exact = Fraction(seconds).limit_denominator(1000000) * rational_fps(frame_rate)
     return round(exact.numerator / exact.denominator)
+
+
+def _seconds_at(item) -> float:
+    """Where a connected clip plays, in seconds on the sequence clock."""
+    at = timeline_position(item)
+    return at.seconds if at is not None else 0
 
 
 class DaVinciExporter:
@@ -182,9 +189,14 @@ class DaVinciExporter:
                 'source_start_seconds': clip.source_start.seconds if clip.source_start else 0,
                 'media_path': clip.media_path,
                 'has_audio': True,
+                'enabled': clip.enabled,
             })
 
-        # Connected clips -> higher tracks
+        # Connected clips -> higher tracks, each at the position it PLAYS:
+        # parent position + (offset - parent start), plus a connected
+        # storyline's own clock (the parser resolves it; timeline_position
+        # reads it). Its raw ``offset`` is on the parent's clock, and was
+        # used here until 0.33.
         for cc in tl.connected_clips:
             if cc.lane > 0:
                 track_num = cc.lane
@@ -192,11 +204,12 @@ class DaVinciExporter:
                     video_tracks[track_num] = []
                 video_tracks[track_num].append({
                     'name': cc.name,
-                    'start_seconds': cc.offset.seconds if cc.offset else 0,
+                    'start_seconds': _seconds_at(cc),
                     'duration_seconds': cc.duration_seconds,
                     'source_start_seconds': cc.source_start.seconds if cc.source_start else 0,
                     'media_path': cc.media_path,
                     'has_audio': cc.clip_type not in ('title', 'video'),
+                    'enabled': cc.enabled,
                 })
             elif cc.lane < 0:
                 track_num = abs(cc.lane) - 1
@@ -204,11 +217,12 @@ class DaVinciExporter:
                     audio_tracks[track_num] = []
                 audio_tracks[track_num].append({
                     'name': cc.name,
-                    'start_seconds': cc.offset.seconds if cc.offset else 0,
+                    'start_seconds': _seconds_at(cc),
                     'duration_seconds': cc.duration_seconds,
                     'source_start_seconds': cc.source_start.seconds if cc.source_start else 0,
                     'media_path': cc.media_path,
                     'has_audio': True,
+                    'enabled': cc.enabled,
                 })
 
         return video_tracks, audio_tracks
@@ -221,6 +235,9 @@ class DaVinciExporter:
         ET.SubElement(clipitem, 'name').text = _sanitize_xml_value(
             clip_data['name'], 512
         )
+        if clip_data.get('enabled', True) is False:
+            # enabled="0" in Final Cut: in the cut, off in the picture and sound
+            ET.SubElement(clipitem, 'enabled').text = 'FALSE'
 
         duration_frames = _to_frames(clip_data['duration_seconds'], frame_rate)
         ET.SubElement(clipitem, 'duration').text = str(duration_frames)
