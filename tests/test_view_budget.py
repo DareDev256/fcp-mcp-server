@@ -192,7 +192,7 @@ def test_peaks_are_cached_in_the_index_and_the_same_without_it(five, monkeypatch
     second = _waves(five)
     # the five clips share one file: measured once, then read from the index
     assert after_first == 1 and len(measured) == after_first, "measured more than once: no cache"
-    assert first == second and all(w and len(w) == 10 for w in first)  # 2.5 s at 4 a second
+    assert first == second and all(w and len(w) == 25 == round(2.5 * timeline_app.WAVE_POINTS_PER_SECOND) for w in first)  # 2.5 s at 10 a second
     monkeypatch.setenv("FCP_MCP_INDEX", "off")
     assert _waves(five) == first
     assert len(measured) == after_first + 5  # off: measured for every clip, every time

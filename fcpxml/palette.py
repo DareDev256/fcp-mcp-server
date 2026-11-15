@@ -25,7 +25,9 @@ from __future__ import annotations
 # accent and the danger red are the only colours with a hue.
 TOKENS: dict[str, tuple[str, str]] = {
     "ground": ("#000000", "#FFFFFF"),       # page and app background
-    "panel": ("#121212", "#F4F4F4"),        # cards, the track area, the waveform plate
+    # (light #FAFAFA since 0.34 round 4: Final Cut's Effects teal, now the same
+    # hex in both themes, reads 3.03:1 on it; on #F4F4F4 it was 2.88:1)
+    "panel": ("#121212", "#FAFAFA"),        # cards, the track area, the waveform plate
     "raised": ("#1C1C1C", "#E4E4E4"),       # connected clips, buttons
     "raised-2": ("#2A2A2A", "#D9D9D9"),     # spine clips, titles
     "line": ("#262626", "#D4D4D4"),         # hairlines, lane rules
@@ -44,26 +46,31 @@ TOKENS: dict[str, tuple[str, str]] = {
     # shields draws #333 (8.7:1). Every other surface uses accent / accent-fill.
     "badge": ("#33EBFF", "#33EBFF"),
     "on-media": ("#FFFFFF", "#FFFFFF"),     # a label drawn over a thumbnail
-    "shade": ("#000000BF", "#000000BF"),    # the scrim under that label
+    "shade": ("#000000BF", "#000000BF"),    # a transition's translucent overlay
+    # the outline round a name drawn over a picture (0.34 round 4: no scrim
+    # pill; a 1 px black outline and a soft shadow, so white text reads over
+    # a white frame; tests/test_app_labels.py measures it)
+    "halo": ("#000000", "#000000"),
     "danger": ("#FF3B30", "#D70015"),       # FAIL (and missing media) only: never an intended edit
     # Final Cut Pro 12.4's own role colours, the ONE sanctioned exception to
     # "grey, cyan, red" (decision 4, 2026-11-12): drawn as the 3 px role
-    # stripe on a clip, and (0.34 round 3) the Titles colour as a title
-    # clip's body, as Final Cut draws a title; never text, never another
-    # fill (held by tests/test_palette.py). Read from the installed app, not typed from
-    # memory: scripts/fcp_role_colours.m loads Flexo.framework and asks
-    # FFColorForRole +colorSchemeForIndex: for each of FFRole
-    # +builtInMainRoles (Video 0, Music 1, Effects 2, Titles 3, Dialogue 0).
-    # Dark mode takes the scheme's roleFocusActiveColor (the role's colour in
-    # Final Cut's timeline index, the brightest of the scheme, so it reads on
-    # black); light mode its itemBackgroundColor (the clip body in Final Cut's
-    # own timeline), which reads on white. Both converted to sRGB by AppKit.
-    # Final Cut gives Video and Dialogue the same colour index, so they match.
-    "role-video": ("#3763A1", "#1D3454"),
-    "role-titles": ("#7E53D2", "#503585"),
-    "role-dialogue": ("#3763A1", "#1D3454"),
-    "role-music": ("#28A154", "#15542C"),
-    "role-effects": ("#2A9FA9", "#17575C"),
+    # stripe on a clip, the Titles colour as a title clip's body (0.34 round
+    # 3, as Final Cut draws a title), and (round 4) the lanes of the overview
+    # minimap; never text (held by tests/test_palette.py). Read from the
+    # installed app, not typed from memory: scripts/fcp_role_colours.m loads
+    # Flexo.framework and asks FFColorForRole +colorSchemeForIndex: for each
+    # of FFRole +builtInMainRoles (Video 0, Music 1, Effects 2, Titles 3,
+    # Dialogue 0) and takes the scheme's roleFocusActiveColor (the role's
+    # colour in Final Cut's timeline index), converted to sRGB by AppKit.
+    # ONE set in both themes (0.34 round 4, the Fable ruling): until then the
+    # light theme took the scheme's darker itemBackgroundColor, which read as
+    # different colours for the same role. Final Cut gives Video and
+    # Dialogue the same colour index, so they match.
+    "role-video": ("#3763A1", "#3763A1"),
+    "role-titles": ("#7E53D2", "#7E53D2"),
+    "role-dialogue": ("#3763A1", "#3763A1"),
+    "role-music": ("#28A154", "#28A154"),
+    "role-effects": ("#2A9FA9", "#2A9FA9"),
 }
 
 ACCENT_HUE_TOKENS = ("accent", "accent-fill", "accent-wash", "badge")
@@ -77,6 +84,7 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
     ("accent", "ground"), ("accent", "panel"),
     ("accent-ink", "accent-fill"),
     ("on-media", "shade"),
+    ("on-media", "halo"),  # a name over a picture, against its outline
     ("on-media", "role-titles"),  # a title's name on its Titles-coloured body
     ("danger", "ground"),
     ("ground", "mute"), ("ground", "ink"),  # names on the legacy preview's clip fills
@@ -92,15 +100,16 @@ FILL_PAIRS: tuple[tuple[str, str], ...] = (
 )
 
 # Where each role colour came from: (Final Cut role, FFColorForRole colour
-# index, dark-mode scheme colour, light-mode scheme colour). The test holds
-# TOKENS to it, and scripts/fcp_role_colours.m prints the same table from
-# the installed app (tests/test_palette.py runs it when Final Cut is there).
+# index, the scheme colour taken). The test holds TOKENS to it (one set in
+# both themes since 0.34 round 4), and scripts/fcp_role_colours.m prints the
+# same table from the installed app (tests/test_palette.py runs it when
+# Final Cut is there).
 ROLE_SOURCE = {
-    "role-video": ("Video", 0, "roleFocusActiveColor", "itemBackgroundColor"),
-    "role-titles": ("Titles", 3, "roleFocusActiveColor", "itemBackgroundColor"),
-    "role-dialogue": ("Dialogue", 0, "roleFocusActiveColor", "itemBackgroundColor"),
-    "role-music": ("Music", 1, "roleFocusActiveColor", "itemBackgroundColor"),
-    "role-effects": ("Effects", 2, "roleFocusActiveColor", "itemBackgroundColor"),
+    "role-video": ("Video", 0, "roleFocusActiveColor"),
+    "role-titles": ("Titles", 3, "roleFocusActiveColor"),
+    "role-dialogue": ("Dialogue", 0, "roleFocusActiveColor"),
+    "role-music": ("Music", 1, "roleFocusActiveColor"),
+    "role-effects": ("Effects", 2, "roleFocusActiveColor"),
 }
 
 # The README badges: black label, cyan message, dark text on the cyan.

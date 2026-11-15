@@ -133,13 +133,20 @@ ROLE_USE = re.compile(r"var\(--role-[a-z]+\)")
 TITLE_BODY = re.compile(r"\.clip\.k-title \{[^}]*\}")
 
 
+OVERVIEW_BAR = re.compile(r"#overview \.ob\.role-([a-z]+) \{ background: var\(--role-([a-z]+)\); \}")
+
+
 def role_uses_off_stripe(text: str) -> list:
     """Lines that paint with a role colour anywhere but a clip's role stripe,
-    or (0.34 round 3) the Titles colour on a title clip's body, as Final Cut
-    draws a title. Any other role on a title body, or any text, is caught."""
+    the Titles colour on a title clip's body (0.34 round 3, as Final Cut
+    draws a title), or (round 4) the overview minimap's bar for a clip of
+    that same role. Any other role on a title body, any text, is caught."""
     out = []
     for line in text.splitlines():
         if not ROLE_USE.search(line) or ".stripe.role-" in line:
+            continue
+        bar = OVERVIEW_BAR.search(line)
+        if bar and bar.group(1) == bar.group(2) and len(ROLE_USE.findall(line)) == 1:
             continue
         if TITLE_BODY.search(line) and set(ROLE_USE.findall(line)) == {"var(--role-titles)"} and "color: var(--role" not in line.replace("border-color", ""):
             continue
@@ -154,6 +161,7 @@ def test_role_colours_paint_stripes_and_title_bodies_only():
     assert role_uses_off_stripe("  .clip .label { color: var(--role-music); }")
     assert role_uses_off_stripe("  .clip.k-title { background: var(--role-music); }")
     assert role_uses_off_stripe("  .clip.k-title { color: var(--role-titles); }")
+    assert role_uses_off_stripe("  #overview .ob.role-video { background: var(--role-music); }")
 
 
 FAILURE_ONLY = ("fcpxml/proofs.py", "fcpxml/raster.py", "tools/preview.py", "tools/scenes.py")
@@ -227,28 +235,36 @@ def test_the_fill_rule_can_go_red():
     assert palette.contrast(palette.dark("raised"), palette.dark("panel")) < 3.0
 
 
-@pytest.mark.parametrize("frame", ["#FFFFFF", "#FFFF00", "#00FFFF", "#000000"])
-def test_a_clip_label_reads_over_any_frame(frame):
-    """A label over a thumbnail sits on the shade scrim, whatever the frame
-    is: worst case a white frame, where 0.31's half-faded scrim left 'Studio'
-    at 2.7:1."""
-    under = palette.composite(palette.dark("shade"), frame)
-    assert palette.contrast(palette.dark("on-media"), under) >= 4.5
+def halo_rule(html: str) -> list[str]:
+    """0.34 round 4 took the scrim pill from a name over a picture: its halo
+    is a 1 px outline of the halo token on all eight sides plus soft shadows
+    (tests/test_app_labels.py measures it over a white frame). What is
+    missing from that rule."""
+    rule = re.search(r"\.clip\.has-thumb \.label \{([^}]*)\}", html)
+    if not rule:
+        return ["no rule for a name over a picture"]
+    shadow = re.search(r"text-shadow:([^;]*);", rule.group(1))
+    if not shadow:
+        return ["no halo"]
+    parts = [p.split() for p in shadow.group(1).replace("\n", " ").split(",")]
+    offsets = {(p[0], p[1]) for p in parts if len(p) == 4 and p[2] == "0" and p[3] == "var(--halo)"}
+    need = {(x, y) for x in ("1px", "-1px", "0") for y in ("1px", "-1px", "0")} - {("0", "0")}
+    out = [f"no outline at {x} {y}" for x, y in sorted(need - offsets)]
+    if palette.dark("halo") != "#000000" or palette.light("halo") != "#000000":
+        out.append("the halo is not black in both themes")
+    return out
 
 
-def scrim_rule(html: str) -> tuple[float, float]:
-    """(where the scrim reaches full shade, where the label text starts), in px."""
-    rule = re.search(r"\.clip\.has-thumb \.label \{([^}]*)\}", html).group(1)
-    full = float(re.search(r"var\(--shade\)\s+([\d.]+)px", rule).group(1))
-    text = float(re.search(r"padding-top:\s*([\d.]+)px", rule).group(1))
-    return full, text
-
-
-def test_the_scrim_is_full_before_the_text_starts():
+def test_a_name_over_a_picture_has_its_halo():
     from fcpxml import timeline_app
 
-    full, text = scrim_rule(timeline_app.render_app_html())
-    assert full <= text, f"the scrim is still fading where the text starts ({full}px > {text}px)"
+    assert halo_rule(timeline_app.render_app_html()) == []
+    assert palette.contrast(palette.dark("on-media"), palette.dark("halo")) >= 4.5
+
+
+def test_the_halo_rule_can_go_red():
+    assert halo_rule(".clip.has-thumb .label { color: var(--on-media); }") == ["no halo"]
+    assert halo_rule(".clip.has-thumb .label { color: var(--on-media); text-shadow: 0 0 3px var(--halo); }")
 
 
 def test_text_over_a_thumbnail_is_the_label_colour():
@@ -275,9 +291,28 @@ FCP_APP = Path("/Applications/Final Cut Pro.app")
 
 def test_every_role_token_says_where_it_came_from():
     assert set(palette.ROLE_SOURCE) == set(palette.ROLE_TOKENS)
-    for name, (role, index, dark_col, light_col) in palette.ROLE_SOURCE.items():
+    for name, (role, index, column) in palette.ROLE_SOURCE.items():
         assert name == "role-" + role.lower() and isinstance(index, int)
-        assert dark_col == "roleFocusActiveColor" and light_col == "itemBackgroundColor"
+        assert column == "roleFocusActiveColor"
+
+
+def role_theme_problems(tokens: dict) -> list[str]:
+    """0.34 round 4 (the Fable ruling): ONE set of role colours, Final Cut's
+    own, in both themes. 035392a's light theme took the scheme's darker
+    itemBackgroundColor (#1D3454 for #3763A1), which read as another colour."""
+    return [f"{n}: dark {tokens[n][0]}, light {tokens[n][1]}" for n in palette.ROLE_TOKENS if tokens[n][0] != tokens[n][1]]
+
+
+def test_the_role_colours_are_one_set_in_both_themes():
+    assert role_theme_problems(palette.TOKENS) == []
+    assert {palette.dark(n) for n in palette.ROLE_TOKENS} == {"#3763A1", "#7E53D2", "#28A154", "#2A9FA9"}
+
+
+def test_the_one_set_check_goes_red():
+    """Mutation check: 035392a's light role colours."""
+    old = dict(palette.TOKENS, **{"role-video": ("#3763A1", "#1D3454"), "role-titles": ("#7E53D2", "#503585"),
+                                  "role-music": ("#28A154", "#15542C"), "role-effects": ("#2A9FA9", "#17575C")})
+    assert len(role_theme_problems(old)) == 4
 
 
 def role_mismatches(table: str) -> list[str]:
@@ -286,16 +321,16 @@ def role_mismatches(table: str) -> list[str]:
     head = lines[0].split("\t")
     rows = {r.split("\t")[0]: dict(zip(head, r.split("\t"))) for r in lines[1:]}
     out = []
-    for name, (role, index, dark_col, light_col) in palette.ROLE_SOURCE.items():
+    for name, (role, index, column) in palette.ROLE_SOURCE.items():
         row = rows.get(role)
         if row is None:
             out.append(f"{role}: not a built-in role in this Final Cut")
             continue
         if int(row["index"]) != index:
             out.append(f"{role}: colour index {row['index']}, the palette says {index}")
-        for mode, col, value in (("dark", dark_col, palette.dark(name)), ("light", light_col, palette.light(name))):
-            if row[col].upper() != value.upper():
-                out.append(f"{name} {mode}: Final Cut says {row[col]}, the palette says {value}")
+        for mode, value in (("dark", palette.dark(name)), ("light", palette.light(name))):
+            if row[column].upper() != value.upper():
+                out.append(f"{name} {mode}: Final Cut says {row[column]}, the palette says {value}")
     return out
 
 
@@ -318,8 +353,8 @@ def test_the_role_check_goes_red():
     """Mutation check: the 0.33 set-by-eye video blue, and a role whose index
     moved, are both seen against a table in the probe's shape."""
     table = ("role\tindex\tbaseColor\titemBackgroundColor\troleFocusActiveColor\taudioWaveformColor\n"
-             + "\n".join(f"{r}\t{i}\t-\t{palette.light(n)}\t{palette.dark(n)}\t-"
-                         for n, (r, i, _d, _l) in palette.ROLE_SOURCE.items()))
+             + "\n".join(f"{r}\t{i}\t-\t-\t{palette.dark(n)}\t-"
+                         for n, (r, i, _c) in palette.ROLE_SOURCE.items()))
     assert role_mismatches(table) == []
     assert role_mismatches(table.replace(palette.dark("role-video"), "#4A7FE0", 1))
     assert role_mismatches(table.replace("Music\t1", "Music\t4"))
@@ -348,14 +383,6 @@ def test_disabled_buttons_read_at_4_5_to_1():
 
 def test_the_disabled_rule_can_go_red():
     assert disabled_button_problems("button:disabled { opacity: .45; cursor: default; }")
-
-
-def test_the_scrim_rules_can_go_red():
-    """Mutation checks: a 25% scrim fails the arithmetic, and a fade that
-    ends below the text top fails the layout rule."""
-    assert palette.contrast(palette.dark("on-media"), palette.composite("#00000040", "#FFFFFF")) < 4.5
-    full, text = scrim_rule(".clip.has-thumb .label { padding-top: 12px; background: linear-gradient(transparent, var(--shade) 30px); }")
-    assert full > text
 
 
 def test_the_contrast_rule_can_go_red():

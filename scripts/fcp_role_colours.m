@@ -6,7 +6,8 @@
 // process), take each built-in main role (FFRole +builtInMainRoles), and ask
 // FFColorForRole +colorSchemeForIndex: for the role's colour index. Prints
 // one tab-separated row per role: name, index, then the scheme's colours as
-// sRGB hex. palette.ROLE_SOURCE names the two columns the palette uses.
+// sRGB hex. palette.ROLE_SOURCE names the column the palette uses (one set
+// in both themes since 0.34 round 4: roleFocusActiveColor).
 //
 //   clang -fobjc-arc -framework Foundation -framework AppKit \
 //     -o /tmp/fcp_role_colours scripts/fcp_role_colours.m

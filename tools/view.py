@@ -81,14 +81,16 @@ def _thumbnail(media_src: str, at: Fraction) -> Optional[str]:
 
 
 # The waveform (0.34): one peak envelope per FILE, PEAK_RATE levels a second
-# (0-100 over -48..0 dBFS), measured once with ffmpeg and cached in the index
-# as analysis kind "peaks"; each clip then takes its own range of it, down
-# to timeline_app.WAVE_POINTS_PER_SECOND points (the loudest in each), so a
-# short array travels. FCP_MCP_INDEX=off measures every time, same answer.
+# (0-100 over -60..0 dBFS: the app draws them on that absolute scale, round
+# 4), measured once with ffmpeg and cached in the index as analysis kind
+# "peaks" (the floor is in the kind, so a cache written on the old -48 dB
+# scale is never read as this one); each clip then takes its own range of
+# it, down to timeline_app.WAVE_POINTS_PER_SECOND points (the loudest in
+# each), so a short array travels. FCP_MCP_INDEX=off measures every time.
 PEAK_RATE = 10
 PEAK_AUDIO_RATE = 4000
-PEAK_FLOOR_DB = -48.0
-PEAKS_KIND = f"peaks@{PEAK_RATE}/s"
+PEAK_FLOOR_DB = -60.0
+PEAKS_KIND = f"peaks@{PEAK_RATE}/s,{int(PEAK_FLOOR_DB)}dB"
 
 
 def _measure_peaks(path: str) -> Optional[list]:
