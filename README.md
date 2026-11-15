@@ -54,8 +54,10 @@ inside a chat client. [MP4](docs/assets/hero-watch-claude-cut.mp4),
 [`demo/hero/build.py`](demo/hero/build.py).*
 
 **See it.** `view` returns the timeline as exact rational-time JSON, and a
-host with MCP Apps draws it inline: lanes, thumbnails, markers, transcript
-words, a playhead, buttons that call the other tools.
+host with MCP Apps draws it inline, like Final Cut's timeline: an overview of
+the whole cut, filmstrips over waveforms, Final Cut's role colours, a glyph
+per marker kind, a playhead that snaps to cuts, buttons that call the other
+tools.
 
 **Cut it.** 15 grouped tools, 102 operations: trims, splits, silence removal,
 markers from transcripts and beats, rough cuts, keyframes and speed ramps,
@@ -139,10 +141,13 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ### Where the timeline draws
 
-`view` returns a timeline an MCP Apps host draws inline (`ui://fcp/timeline`).
-Every other client gets the same result as text: a summary line and the
-exact JSON. `preview` returns images and an MP4 path everywhere. Checked
-2026-11-12; a host listed by its vendor but not yet captured here says so.
+`view` returns a timeline an MCP Apps host draws inline (`ui://fcp/timeline`)
+from the result's structured payload. Every other client gets the text: a
+summary line and the clips in record order (since 0.34 the JSON, thumbnails
+and all, rides as `structuredContent` and stays out of the text: 609
+characters for a five-clip cut, where 0.33 sent 36,701). `preview` returns
+images and an MP4 path everywhere. Checked 2026-11-12; a host listed by its
+vendor but not yet captured here says so.
 
 | Host | What you get | Source |
 |---|---|---|
@@ -150,7 +155,7 @@ exact JSON. `preview` returns images and an MP4 path everywhere. Checked
 | Claude on the web (claude.ai) | the timeline, inline | listed by the MCP Apps overview; not captured here |
 | VS Code GitHub Copilot, Microsoft 365 Copilot, Goose, Postman, MCPJam, Archestra.AI | the timeline, inline | listed by the MCP Apps overview; not captured here |
 | `ext-apps` basic host (the reference host) | the timeline, inline, with Inspect and Find calling back into the server | run here on 2026-11-12 against 0.30.0 |
-| Claude Code | text: the summary and the JSON; `preview` images | Claude's [MCP Apps quickstart](https://claude.com/docs/connectors/building/mcp-apps/quickstart): "Claude Code calls the tool as text and doesn't render the UI" |
+| Claude Code | text: the summary and the clip list; `preview` images | Claude's [MCP Apps quickstart](https://claude.com/docs/connectors/building/mcp-apps/quickstart): "Claude Code calls the tool as text and doesn't render the UI" |
 | ChatGPT | unconfirmed | not named on the MCP Apps overview |
 | any other MCP client | text | |
 
@@ -518,12 +523,15 @@ any browser or resource viewer with no host and no fetch. Outside an MCP Apps
 host it is read only; the edit buttons wait for one. (Until 0.32 this was a
 separate static render; there is now one timeline picture.)
 
-![Timeline preview: the 164-second music-video fixture as the preview:// page draws it, two connected video lanes above and the music bed on lane -1, on a true-black page](docs/assets/timeline-preview.png)
+![Timeline preview: the 164-second music-video fixture as the preview:// page draws it in 0.34, an overview bar with the whole cut over the tracks, two connected video lanes with their names on rails, the gap the clips hang from, and the music bed on lane -1 with its green music-role stripe, on a true-black page](docs/assets/timeline-preview.png)
 
-*`examples/music-video.fcpxml`, 164 seconds, drawn from its FCPXML alone:
-eight connected clips on three lanes over a gap-based storyline, the whole
-sequence in the width. A clip too narrow for its name shows its number,
-named in the key under the timeline.*
+*`examples/music-video.fcpxml`, 164 seconds, drawn from its FCPXML alone (its
+media paths do not exist here, so no pictures or sound): eight connected
+clips on three lanes over a gap-based storyline. The tracks open where the
+median clip is 44 px wide and the overview bar above carries the whole cut,
+the part in view boxed. A clip too narrow for its whole name has it on its
+lane's rail; one under 28 px opens a sheet with its name, start and length
+when tapped.*
 
 ### Proof you can read (v0.32.0)
 
@@ -624,20 +632,29 @@ filepath; a host that speaks MCP Apps opens the `ui://fcp/timeline`
 resource in a sandboxed iframe and posts the result into it. Which hosts do
 that, and which get text, is in [Where the timeline draws](#where-the-timeline-draws).
 
-![The MCP Apps timeline: a true-black ruler with chapter markers, spine clips carrying filmstrip thumbnails, a cyan playhead, and a selection panel with Inspect, Find similar, Add marker and Delete buttons](docs/screenshots/2026-11-12_timeline-app-1440-selected.png)
+![The MCP Apps timeline in 0.34 on an 18-minute two-camera interview: an overview bar with the whole cut, a ruler with chapter, standard and to-do marker glyphs, lower thirds named on a rail above the camera cuts, each cut a filmstrip over its waveform with a blue dialogue stripe, a music bed with a green stripe and whooshes with teal effects stripes below, a cyan playhead, and a compact selection panel](docs/screenshots/2026-11-15_034-interview-1440.png)
 
-*The app rendered in headless Chromium through a stub host, 1440 px, with a
-clip selected. It follows the host's theme (white ground, the same cyan as
-a fill, a darker cyan for text and lines):
-`docs/screenshots/2026-11-12_timeline-app-1440-light.png`. Phone width:
-`docs/screenshots/2026-11-12_timeline-app-390.png`.*
+*The app in headless Chromium, 1440 px, on `demo/fixtures/interview.py` (two
+synthetic cameras, 44 cuts, lower thirds, markers of all four kinds; ffmpeg
+test patterns and sine tones, no person). Light theme:
+`docs/screenshots/2026-11-15_034-interview-1440-light.png`. Phone width:
+`docs/screenshots/2026-11-15_034-interview-390.png`. The gym cut and the
+music video at 1440, 430 and 390 are beside them.*
 
-What it shows: every lane (spine, connected video lanes above, audio lanes
-below), clips sized to duration with their names and roles, markers, gaps,
-a timecode ruler with a playhead and drag-to-select range, cached
-transcript words under the clip they were said in, and a filmstrip
-thumbnail per clip when ffmpeg can make one (bounded; coloured blocks
-otherwise). Click a clip for its details. The buttons call back into the
+What it shows (one look since 0.34, open like Final Cut's timeline): an
+overview bar with the whole cut and a box round the part in view; every
+lane (the storyline, connected lanes above, sound lanes below, each
+connected clip with its line to the storyline); clips 88 px tall (titles
+and sound 72 px, every clip 56 px on a phone) with a filmstrip over the
+waveform of their sound and a 3 px stripe in Final Cut 12.4's own role
+colour (read from the installed app by `scripts/fcp_role_colours.m`); a
+glyph per marker kind (standard, chapter, to-do, completed); gaps;
+dissolves; a flash frame in red, the only red; a timecode ruler with frame
+ticks and a playhead that snaps to cuts. Names are whole, cut in the middle
+so the ending survives, or on their lane's rail, and never 1-3 characters;
+a clip too narrow for any name opens a sheet with its name, start and
+length. Click a clip for its details; drag on the ruler for a range. It
+follows the host's theme, then the OS's. The buttons call back into the
 server through the host: **Inspect** (`view_clip`) and **Find similar
 shots** (`find_shots`) are reads; **Add marker at playhead** (`mark`) and
 **Delete clip** (`edit`) are the ordinary edit actions, so the journal, the
@@ -646,8 +663,10 @@ the app re-renders from the new output file when the edit returns.
 
 The payload is exact: every position and duration is a
 `numerator/denominator` string straight from the model's Fractions, and
-the tests round-trip both fixtures through it. A host without MCP Apps gets
-a one-line summary and the JSON block as text, which is still the timeline.
+the tests round-trip both fixtures through it. It travels as the result's
+`structuredContent`, which the MCP Apps spec hands to the app and keeps out
+of the model's context; a host without MCP Apps gets the summary and the
+clips in record order as text.
 The shell loads nothing from the network. Two honest limits: the in-iframe
 protocol (`ui/initialize`, `ui/notifications/tool-result`, `tools/call`)
 follows the spec text and the `@modelcontextprotocol/ext-apps` client and
