@@ -58,8 +58,8 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   over its head or tail), or not at all: no name rows, no leaders, no scrim
   pills, never an ellipsis (round 3 hung names on rows with leaders, which
   the critics could not match to their clips). Over a picture the name is
-  white with a 2 px black outline and a soft shadow, which reads over a
-  white frame. The hint strip counts the names the part in view shows:
+  white with a black halo (a shadow under the glyphs, an outline out to 2 px
+  and a soft shadow), which reads over a white frame. The hint strip counts the names the part in view shows:
   "7 of 7 names shown" (gym at 1440), "2 of 58 names shown · tap or zoom"
   (interview at 1440), "4 of 58" (interview at 390), "8 of 8" and "5 of 8"
   (music video at 1440 and 390). A tap selects a clip (or a transition, or a
@@ -315,9 +315,11 @@ lane clip) and what the parser READS from Final Cut's own files (below).
   themes (red with round 3's light set); a name over a picture has its
   outline out to 2 px on every side (red with a soft shadow only).
   `tests/test_app_labels.py`: over a pure white frame, 95% or more of the
-  pixels just outside a name's glyphs read 4.5:1 against it (100% on
-  macOS with the 2 px outline; a 1 px outline read 97% there and 76% on
-  CI's Linux; red without the halo).
+  pixels round a name's text (taken round the pixels the text covers, so
+  its own edge pixels are measured) read 4.5:1 against it: 100% on macOS
+  and passing on CI's Linux, which draws text sub-pixel (the first push's
+  1 px outline left 24% of them light there); 25% with a soft shadow only,
+  0% with no halo (red).
 - `tests/test_app_glance.py` (0.34, replaces `tests/test_app_directions.py`;
   CI's `rendered-labels` job): the three fixtures (the 32 s gym cut, the
   164 s music video with three markers on its gap, the 18-minute interview)
