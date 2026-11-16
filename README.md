@@ -349,6 +349,8 @@ runs on a managed Mac and survives an FCP update.
 
 **Client notes or Frame.io comments to place?** [frameio-to-final-cut-pro](https://github.com/DareDev256/frameio-to-final-cut-pro) (Cut Review, built on this server's parser) writes them into the cut as Final Cut to-do markers on the right clips, then shows which notes the recut touched.
 
+**Generating b-roll, inserts or title plates with AI?** The [Ultimate Image & Video Prompt Generator](https://prompts.tdotssolutionsz.com) builds the prompt for Veo, Kling, Seedance or Nano Banana, and its [face blur](https://prompts.tdotssolutionsz.com/blur-face-in-photo) cleans a still on your device before it goes in the cut.
+
 ---
 
 ## How It Compares

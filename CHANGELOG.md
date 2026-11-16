@@ -4,6 +4,7 @@
 
 ### Docs
 - README: a "More from the same author" section after Credits linking Cut Review, the prompt generator, clickfix-protection-macos, jackpoint and the profile. PyPI shows it from the next release.
+- README: "When To Use This" links the prompt generator and its on-device face blur for AI b-roll and stills, next to the Cut Review line.
 
 ## [0.34.1] - 2026-11-15
 
