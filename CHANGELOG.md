@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Docs
+- README: a "More from the same author" section after Credits linking Cut Review, the prompt generator, clickfix-protection-macos, jackpoint and the profile. PyPI shows it from the next release.
+
 ## [0.34.1] - 2026-11-15
 
 Metadata only: nothing the server reads, writes or shows changed, so it is

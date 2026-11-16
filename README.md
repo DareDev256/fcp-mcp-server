@@ -1284,6 +1284,15 @@ PRs welcome. If you're a video editor who codes (or a coder who edits), let's bu
 
 Built by [@DareDev256](https://github.com/DareDev256) — former music video director, now building AI tools for creators.
 
+## More from the same author
+
+- **[frameio-to-final-cut-pro](https://github.com/DareDev256/frameio-to-final-cut-pro) (Cut Review):** Frame.io comments and client notes go into Final Cut Pro as to-do markers on the right clips, then one page shows which notes the recut touched. Built on this server's parser, free, no upload: `uvx cutreview`.
+- **[Ultimate Image & Video Prompt Generator](https://github.com/DareDev256/Ultimate-Image-Video-Prompt-Generator):** a prompt workbench for nine image and video engines, every suggestion credited to the creator it came from. [Live](https://prompts.tdotssolutionsz.com).
+- **[clickfix-protection-macos](https://github.com/DareDev256/clickfix-protection-macos):** defensive tools for macOS against paste-this-command (ClickFix) attacks, written after one came at me.
+- **[jackpoint](https://github.com/DareDev256/jackpoint):** one command installs Claude Code, Gemini CLI, Codex CLI and other AI coding tools on a Mac, for people who have never used a terminal.
+
+Everything else is on [my GitHub profile](https://github.com/DareDev256).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
