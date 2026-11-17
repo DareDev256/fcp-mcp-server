@@ -296,7 +296,14 @@ come back through the XML tools.
 Notes (all live-verified): pass a `library_location` ending in `.fcpbundle` for
 a true zero-click import (a new path is auto-created); omitting it makes FCP
 show a modal library picker that blocks until you answer. First use triggers a
-one-time macOS Automation permission prompt for your terminal/MCP host. The
+one-time macOS Automation permission prompt for your terminal/MCP host. Since
+v0.35.0 that prompt no longer blocks a push: if Final Cut does not answer
+Apple Events within 10 seconds, the reply quotes the waiting prompt and the
+push goes through Launch Services' `open` instead (no grant needed, no
+picker), then proves the import from the library on disk. Each media file
+keeps one asset uid, so revised versions of a cut can be pushed into the same
+library one after another (Final Cut refuses a file it already holds under a
+different uid). The
 [capability audit](docs/CAPABILITY-AUDIT-2026-06.md) maps the full surface and
 the optional SpliceKit/CommandPost bridges planned for v1.0.
 
@@ -1230,6 +1237,8 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **Front door** — one palette (true black, one cyan, red only for failure), the GitHub card and PyPI page rebuilt from scripts, current prices with their sources, a schema budget held by a test — *v0.31.0*
 - [x] **Proof you can read** — every preview picture labelled by the server and returned inline: a contact sheet with cut numbers and timecodes, a check with a ruler and named silences, a 720p proxy with burn-in, a before/after strip per cut; `preview://` is the app — *v0.32.0*
 - [x] **Media clock** — every authored asset and clip on its file's own timecode clock (`tmcd`), so an iPhone ProRes or camera clip no longer imports empty; `validate_timeline` checks it; `insert_clip` / `add_connected_clip` bring any file in by `src` (#45) — *v0.33.0*
+- [x] **MXF and broadcast WAV on their own clock, pushes that do not wait on a permission prompt** — checked in Final Cut 12.4: an MXF timecode and a BWF time reference are the file's clock (written at 0s they import empty); `push_to_fcp` falls back to `open` and verifies on disk; one uid per media file so a cut can be pushed again and again into one library — *v0.35.0*
+- [ ] **Read the open timeline back** — an Accessibility-driven `File > Export XML` so the round trip needs no click from you
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written
 - [ ] Audio sync detection
