@@ -27,6 +27,15 @@ Live-verified findings that shape the contract:
    which is why library creation stays an explicit argument and is never a
    default. ``inject_import_options`` normalises the location to
    ``.fcpbundle``; a bare path or ``.fcplibrary`` does not auto-create.
+   *FCP 12.4, 2026-11-16:* the picker is back for a document with no
+   location (``open -a`` on a bare FCPXML shows "Which library do you want
+   to import ... into?"), and a document whose ``<import-options>`` carries
+   the location imports with no picker. That holds for Launch Services'
+   ``open`` too, which needs no Automation grant: when Apple Events are
+   blocked (a pending "wants access to control Final Cut Pro" prompt held
+   every event for the full timeout), ``push_to_fcp`` sends the copy with
+   ``open`` and proves the import from the library bundle on disk
+   (``<event>/<project>/CurrentVersion.fcpevent``).
 2. **Media-identity collisions** — importing a project whose media already
    exists in the target library fails with "the media already exists with a
    unique identifier".  Push into a fresh library, or reuse the exact asset
@@ -74,13 +83,89 @@ def _applescript_quote(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _run_osascript(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True,
-        text=True,
-        timeout=_OSASCRIPT_TIMEOUT_SECONDS,
+_PROBE_TIMEOUT_SECONDS = 10
+_BLOCK_MEMORY_SECONDS = 60
+_fcp_answered = False
+_blocked_until = 0.0
+
+
+class FCPAutomationBlockedError(RuntimeError):
+    """Final Cut Pro is not answering Apple Events; the message says why."""
+
+
+def pending_consent_prompt(app: str = "Final Cut Pro") -> Optional[str]:
+    """The text of a macOS "wants access to control <app>" prompt that is
+    waiting for a click, or None.
+
+    Found 2026-11-16 on FCP 12.4: every Apple Event to Final Cut sat
+    unanswered for the full 120 s timeout because macOS was holding an
+    Automation consent prompt ("tmux wants access to control Final Cut
+    Pro") off to the side of the screen. Nothing said so.
+    """
+    script = (
+        'tell application "System Events"\n'
+        '  if not (exists process "UserNotificationCenter") then return ""\n'
+        '  set out to ""\n'
+        '  repeat with w in windows of process "UserNotificationCenter"\n'
+        '    repeat with t in static texts of w\n'
+        '      try\n'
+        '        set out to out & (value of t as text) & linefeed\n'
+        '      end try\n'
+        '    end repeat\n'
+        '  end repeat\n'
+        '  return out\n'
+        'end tell'
     )
+    try:
+        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in (proc.stdout or "").splitlines():
+        if "wants access to control" in line and app in line:
+            return line.strip()
+    return None
+
+
+def _blocked_message(prompt: Optional[str]) -> str:
+    if prompt:
+        return (f"Final Cut Pro is not answering because macOS is waiting for a permission click: "
+                f"\"{prompt}\" Click Allow in that dialog (it can sit behind other windows), "
+                f"or grant it later in System Settings > Privacy & Security > Automation, then try again.")
+    return (f"Final Cut Pro did not answer an Apple Event within {_PROBE_TIMEOUT_SECONDS}s. "
+            "Check for a permission dialog, a modal sheet in Final Cut, or a library still opening.")
+
+
+def _probe_fcp() -> None:
+    """A cheap Apple Event first, so a blocked Final Cut fails in seconds with
+    the reason, not after the 120 s import timeout."""
+    global _fcp_answered, _blocked_until
+    if _fcp_answered:
+        return
+    if time.monotonic() < _blocked_until:
+        # Blocked a moment ago: say so now rather than wait out another probe.
+        raise FCPAutomationBlockedError(_blocked_message(pending_consent_prompt()))
+    try:
+        proc = subprocess.run(["osascript", "-e", 'tell application "Final Cut Pro" to count libraries'],
+                              capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _blocked_until = time.monotonic() + _BLOCK_MEMORY_SECONDS
+        raise FCPAutomationBlockedError(_blocked_message(pending_consent_prompt())) from None
+    if proc.returncode == 0:
+        _fcp_answered = True
+
+
+def _run_osascript(script: str) -> subprocess.CompletedProcess:
+    if 'tell application "Final Cut Pro"' in script:
+        _probe_fcp()
+    try:
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=_OSASCRIPT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise FCPAutomationBlockedError(_blocked_message(pending_consent_prompt())) from None
 
 
 def fcp_is_running() -> bool:
@@ -299,6 +384,27 @@ def _library_contains(libraries: List[Dict[str, Any]], target: str,
     return False
 
 
+def _denied(stderr: str) -> bool:
+    """osascript's refusal when Automation was denied (errAEEventNotPermitted)."""
+    return "-1743" in (stderr or "") or "not allowed" in (stderr or "").lower()
+
+
+def _bundle_path(target: str) -> Optional[Path]:
+    """The library's ``.fcpbundle`` folder from a path or file URL, or None."""
+    from urllib.parse import unquote, urlparse
+    raw = unquote(urlparse(target).path) if target.startswith("file://") else target
+    path = Path(raw).expanduser()
+    return path if path.suffix == ".fcpbundle" else None
+
+
+def _projects_on_disk(bundle: Optional[Path]) -> set:
+    """Project names inside a library bundle: Final Cut writes each project
+    as ``<event>/<project>/CurrentVersion.fcpevent`` (12.4, 2026-11-16)."""
+    if bundle is None or not bundle.is_dir():
+        return set()
+    return {p.parent.name for p in bundle.glob("*/*/CurrentVersion.fcpevent")}
+
+
 def push_to_fcp(
     fcpxml_path: str,
     library_location: Optional[str] = None,
@@ -378,15 +484,39 @@ def push_to_fcp(
         f'open POSIX file "{_applescript_quote(str(send_path.resolve()))}"\n'
         'end tell'
     )
+    delivered_via, blocked_reason = "apple_event", None
+    on_disk_before = set()
     try:
         proc = _run_osascript(script)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"Final Cut Pro did not answer the Open Document event within "
-            f"{_OSASCRIPT_TIMEOUT_SECONDS}s. A modal dialog is most likely "
-            f"waiting in Final Cut (a library picker or an import warning); "
-            f"answer or dismiss it there. Sent: {send_path}"
-        ) from None
+    except FCPAutomationBlockedError as blocked:
+        # Apple Events are blocked (a pending or refused Automation grant).
+        # Launch Services' open needs no grant, and with the library location
+        # inside the document Final Cut 12.4 imports with no picker (verified
+        # 2026-11-16). Proof then comes from the library bundle on disk.
+        bundle = _bundle_path(target)
+        if bundle is None:
+            raise
+        on_disk_before = _projects_on_disk(bundle)
+        opened = subprocess.run(["open", "-a", "Final Cut Pro", str(send_path.resolve())],
+                                capture_output=True, text=True, timeout=30)
+        if opened.returncode != 0:
+            raise RuntimeError(f"{blocked} Opening the document directly also failed: "
+                               f"{opened.stderr.strip()}") from None
+        delivered_via, blocked_reason = "open", str(blocked)
+        proc = subprocess.CompletedProcess(opened.args, 0, "", "")
+    if proc.returncode != 0 and delivered_via == "apple_event" and _denied(proc.stderr):
+        # Automation refused outright (-1743, "Don't Allow"): the same
+        # Launch Services path as a pending prompt.
+        bundle = _bundle_path(target)
+        if bundle is not None:
+            on_disk_before = _projects_on_disk(bundle)
+            opened = subprocess.run(["open", "-a", "Final Cut Pro", str(send_path.resolve())],
+                                    capture_output=True, text=True, timeout=30)
+            if opened.returncode == 0:
+                delivered_via = "open"
+                blocked_reason = ("Apple Events to Final Cut Pro are not allowed for this process "
+                                  "(System Settings > Privacy & Security > Automation); sent with open instead.")
+                proc = subprocess.CompletedProcess(opened.args, 0, "", "")
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
         hint = ""
@@ -404,7 +534,34 @@ def push_to_fcp(
         "launched_fcp": not was_running,
         "stdout": proc.stdout.strip(),
         "expected_projects": expected_projects,
+        "delivered_via": delivered_via,
     }
+    if blocked_reason:
+        result["apple_events_blocked"] = blocked_reason
+
+    if delivered_via == "open":
+        if not verify or not expected_projects:
+            result["verified"] = None
+            return result
+        if set(expected_projects) & on_disk_before:
+            result["verified"] = None
+            result["verification_note"] = (
+                "a project with that name already existed in the library before this push, "
+                "so its presence afterwards proves nothing; import was not verified")
+            return result
+        bundle = _bundle_path(target)
+        deadline = time.monotonic() + verify_timeout
+        while True:
+            if set(expected_projects) <= _projects_on_disk(bundle):
+                result["verified"] = True
+                result["verified_by"] = "library bundle on disk"
+                return result
+            if time.monotonic() >= deadline:
+                raise ImportNotObservedError(
+                    f"Final Cut Pro was handed the document (Apple Events blocked, sent with open) but "
+                    f"{', '.join(repr(n) for n in expected_projects)} never appeared in {bundle} "
+                    f"within {verify_timeout:.0f}s.")
+            time.sleep(1.0)
 
     # osascript returning 0 means the Apple event was DELIVERED. It says
     # nothing about whether FCP imported anything. The only reading that

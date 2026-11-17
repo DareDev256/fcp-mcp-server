@@ -7,7 +7,7 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.34.1"
+version = "0.35.0"
 
 description = "AI tools for Final Cut Pro (MCP server): read, edit and generate FCPXML timelines from Claude. 15 grouped tools (102 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, media analysis (silence, beats, shot boundaries, Whisper or ElevenLabs transcripts), a SQLite cache, proxy preview with source-media checks, an export watch folder, EDL import, an undo journal, a review gate on delivery, bulk organize, shot search with offline captions."
 readme = "README.md"

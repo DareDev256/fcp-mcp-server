@@ -8,7 +8,9 @@ at 1950065/30s, whatever the document says. An asset written at ``start="0s"``
 with clips at 5s and 20s therefore asks for frames before the file begins, and
 Final Cut imports an empty timeline without a warning.
 
-Only the ``tmcd`` track counts. Sony XAVC ``.mp4`` (FX3, FX2, A7R V) keeps
+A QuickTime ``tmcd`` track, an MXF file's timecode and a broadcast WAV's
+``time_reference`` (samples since midnight) count: all three were checked in
+Final Cut 12.4 (2026-11-16). Sony XAVC ``.mp4`` (FX3, FX2, A7R V) keeps
 its timecode in an ``rtmd`` metadata track, ffprobe prints it as a
 ``timecode`` tag all the same, and Final Cut ignores it and starts the file
 at 0: written at that timecode, every clip became a gap (#45, tested by the
@@ -40,6 +42,12 @@ PROBE_TIMEOUT_SECONDS = 30
 # timecode (none); a timecode Final Cut does not use (ignored); or not read at
 # all (unread: no file, no ffprobe, a probe that failed).
 TMCD, NONE, IGNORED, UNREAD = "tmcd", "none", "ignored", "unread"
+# Checked in Final Cut 12.4 on 2026-11-16 (fcp-check: the same file imported at
+# 0s and at its own clock): an MXF file's timecode (mxf) and a broadcast WAV's
+# time reference (bwf) are its clock, exactly like tmcd. Written at 0s, Final
+# Cut warned "Invalid edit with no respective media" and imported the clip empty.
+MXF, BWF = "mxf", "bwf"
+ON_CLOCK = (TMCD, MXF, BWF)
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,11 @@ class MediaClock:
     drop: bool = False
     quicktime: bool = False
     note: Optional[str] = None
+
+    @property
+    def on_clock(self) -> bool:
+        """Final Cut plays this file on its own clock (``origin``), not from 0."""
+        return self.source in ON_CLOCK
 
     @property
     def start_attr(self) -> str:
@@ -235,6 +248,19 @@ def clock_from_probe(data: dict) -> MediaClock:
 
     other = next((t for t in [*(_timecode_tag(s) for s in streams), _timecode_tag(form)] if t), None)
     container = ((form.get("format_name") or "").split(",") or ["?"])[0] or "?"
+    if other and container == "mxf":
+        rate = _rate(video and video.get("avg_frame_rate")) or _rate(video and video.get("r_frame_rate"))
+        rate = exact_rate(rate) if rate else None
+        if rate is None:
+            return MediaClock(source=UNREAD, timecode=other, quicktime=quicktime,
+                              note=f"it carries timecode {other} in an mxf file with no video rate to count it in")
+        try:
+            frames = smpte_frames(other, rate)
+        except ValueError as exc:
+            return MediaClock(source=UNREAD, timecode=other, quicktime=quicktime, note=str(exc))
+        drop = bool(drop_per_minute(rate)) and (";" in other or "." in other)
+        return MediaClock(origin=frames / rate, source=MXF, timecode=other, rate=rate,
+                          drop=drop, quicktime=quicktime)
     if other and quicktime:
         # The one case with evidence: a QuickTime-family file whose timecode
         # is not in a tmcd track (Sony XAVC .mp4, rtmd) starts at 0 in Final Cut.
@@ -251,10 +277,18 @@ def clock_from_probe(data: dict) -> MediaClock:
         )
     reference = ((form.get("tags") or {}).get("time_reference") or "").strip()
     if reference.isdigit() and int(reference):
-        return MediaClock(
-            source=UNREAD, quicktime=quicktime,
-            note=f"it carries a broadcast WAV time reference (sample {reference}), which Final Cut may start it at; not verified",
-        )
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        try:
+            sample_rate = int((audio or {}).get("sample_rate") or 0)
+        except (TypeError, ValueError):
+            sample_rate = 0
+        if sample_rate <= 0:
+            return MediaClock(
+                source=UNREAD, quicktime=quicktime,
+                note=f"it carries a broadcast WAV time reference (sample {reference}) but no sample rate to place it",
+            )
+        return MediaClock(origin=Fraction(int(reference), sample_rate), source=BWF,
+                          timecode=f"sample {reference}", rate=Fraction(sample_rate), quicktime=quicktime)
     return MediaClock(source=NONE, quicktime=quicktime)
 
 
@@ -267,7 +301,7 @@ def read_clock(path: str) -> MediaClock:
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
-             "stream=codec_type,codec_tag_string,r_frame_rate,avg_frame_rate"
+             "stream=codec_type,codec_tag_string,r_frame_rate,avg_frame_rate,sample_rate"
              ":stream_tags=timecode:format=format_name:format_tags=timecode,time_reference",
              "-of", "json", str(path)],
             capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS,
@@ -303,7 +337,12 @@ def clock_lines(clocks: list) -> list:
     lines, unread = [], {}
     for entry in clocks:
         name, clock = Path(entry["source"]).name, entry["clock"]
-        if clock.source == TMCD:
+        if clock.source == BWF:
+            lines.append(
+                f"On its broadcast WAV clock: {name} starts at {clock.timecode} "
+                f"({float(clock.rate):g} Hz), so <asset start> is {clock.start_attr} and its clips are placed from there."
+            )
+        elif clock.on_clock:
             lines.append(
                 f"On its timecode clock: {name} starts at {clock.timecode} "
                 f"({float(clock.rate):g} fps{' drop-frame' if clock.drop else ''}), "

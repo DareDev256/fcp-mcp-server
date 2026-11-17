@@ -246,9 +246,11 @@ def test_a_matroska_timecode_tag_is_found_whatever_its_case(media):
 
 
 @needs_ffmpeg
-def test_mxf_and_broadcast_wav_clocks_are_reported_not_guessed(media):
-    """Final Cut may well honour an MXF timecode or a BWF time reference; it
-    is not verified, so they are written at 0s and SAID to be unknown."""
+def test_mxf_and_broadcast_wav_start_on_their_own_clock(media):
+    """Checked in Final Cut 12.4 (2026-11-16): an MXF timecode and a BWF time
+    reference are the file's clock. Written at 0s, Final Cut warned "Invalid
+    edit with no respective media" and imported the clip empty; written at
+    01:00:00 (3600s) both imported with media."""
     mxf = media["dir"] / "tc.mxf"
     subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
                     "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=25:duration=1",
@@ -256,13 +258,23 @@ def test_mxf_and_broadcast_wav_clocks_are_reported_not_guessed(media):
                    capture_output=True, timeout=60, check=True)
     wav = media["dir"] / "bwf.wav"
     subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
-                    "-f", "lavfi", "-i", "sine=d=1", "-c:a", "pcm_s16le", "-write_bext", "1",
+                    "-f", "lavfi", "-i", "sine=d=1:sample_rate=48000", "-c:a", "pcm_s16le", "-write_bext", "1",
                     "-metadata", "time_reference=172800000", str(wav)],
                    capture_output=True, timeout=60, check=True)
     m = read_clock(str(mxf))
     w = read_clock(str(wav))
-    assert m.source == UNREAD and "mxf" in m.note and m.start_attr == "0s"
-    assert w.source == UNREAD and "time reference (sample 172800000)" in w.note and w.start_attr == "0s"
+    assert m.source == "mxf" and m.on_clock and m.timecode == "01:00:00:00" and m.start_attr == "3600s"
+    assert w.source == "bwf" and w.on_clock and w.origin == 3600 and w.rate == 48000
+    # samples / rate, not a frame count: 1 h at 44.1 kHz is also 3600 s
+    w441 = clock_from_probe(_probe({"codec_type": "audio", "sample_rate": "44100"},
+                                   fmt="wav", tags={"time_reference": "158760000"}))
+    assert w441.origin == 3600 and w441.source == "bwf"
+
+
+def test_a_broadcast_wav_with_no_sample_rate_is_not_guessed():
+    clock = clock_from_probe(_probe({"codec_type": "audio"},
+                                    fmt="wav", tags={"time_reference": "48000"}))
+    assert clock.source == UNREAD and not clock.on_clock and clock.start_attr == "0s"
 
 
 def test_a_2997_over_100_rate_is_the_ntsc_rate_it_stands_for():
@@ -524,14 +536,19 @@ def test_writing_a_parsed_project_keeps_each_assets_clock(tmp_path):
 
 
 @needs_ffmpeg
-def test_validate_does_not_judge_a_container_whose_clock_is_unverified(media, tmp_path):
-    """An MXF with timecode written at 0s: unknown, so no FAIL and no WARN."""
+def test_validate_judges_an_mxf_on_its_timecode(media, tmp_path):
+    """The tool writes an MXF on its timecode (PASS); the same clip at 0s is
+    the empty import Final Cut showed (FAIL)."""
     mxf = media["dir"] / "tc.mxf"
     if not mxf.exists():
         pytest.skip("made by the MXF test")
     out = tmp_path / "mxf.fcpxml"
     edl_to_fcpxml({"sources": {"s": str(mxf)}, "ranges": [{"source": "s", "start": 0, "end": 1}]}, str(out), fps=25)
     assert _row(_validate(out)) == "PASS"
+    text = out.read_text().replace('start="3600s"', 'start="0s"')
+    zero = tmp_path / "mxf0.fcpxml"
+    zero.write_text(text)
+    assert _row(_validate(zero)) == "FAIL"
 
 
 @needs_ffmpeg
@@ -568,7 +585,7 @@ def test_validate_fails_the_empty_timeline_45_describes(media, tmp_path):
     path.write_text(fixed.replace('start="1950065/30s"', 'start="0s"').replace('start="1950095/30s"', 'start="1s"'))
     text = _validate(path)
     assert _row(text) == "FAIL" and "IMG_1968.mov" in text
-    assert "the file's timecode track starts at 18:03:22:05 (1950065/30s)" in text
+    assert "by the file's timecode track, its first frame is 18:03:22:05 (1950065/30s)" in text
     assert "Media clock: write each asset's start as its file's timecode" in text
 
     (tmp_path / "new.fcpxml").write_text(fixed)
@@ -762,3 +779,53 @@ def test_diagnose_probes_each_file_once(media, tmp_path, monkeypatch):
                               {"source": "a", "start": 2, "end": 3}]}, str(out), fps=30)
     _validate(out)
     assert sorted(calls) == sorted({str(media["iphone"]), str(media["plain"])})
+
+
+def test_validation_checks_alignment_at_the_sequences_own_rate(tmp_path):
+    """A 29.97 timeline warned "not frame-aligned at 24fps" on every clip
+    (2026-11-16): the validator assumed 24. It now reads the sequence."""
+    import xml.etree.ElementTree as ET
+
+    from fcpxml.writer import validate_fcpxml
+
+    def doc(duration):
+        return ET.fromstring(
+            '<fcpxml version="1.13"><resources>'
+            '<format id="r1" frameDuration="1001/30000s" width="1280" height="720"/>'
+            '</resources><library><event name="e"><project name="p">'
+            '<sequence format="r1" duration="180180/30000s"><spine>'
+            f'<gap name="g" offset="0s" duration="{duration}"/>'
+            '</spine></sequence></project></event></library></fcpxml>')
+
+    def misaligned(root):
+        return [i for i in validate_fcpxml(root) if "frame-aligned" in i.message]
+
+    assert misaligned(doc("180180/30000s")) == []        # 180 frames at 29.97
+    bad = misaligned(doc("1/48s"))
+    assert bad and "29.97" in bad[0].message
+
+
+def test_the_same_file_gets_the_same_asset_uid_on_every_write(tmp_path):
+    """Final Cut refuses a second import of a file under another uid, so a
+    revised cut pushed into the same library failed (2026-11-16). One file,
+    one uid; a changed file, a new one; a file not here, a random one."""
+    from fcpxml.writer import stable_media_uid
+    clip = tmp_path / "a.mov"
+    clip.write_bytes(b"x" * 10)
+    first = stable_media_uid(str(clip))
+    assert first == stable_media_uid(clip.as_uri()) == stable_media_uid(str(clip))
+    clip.write_bytes(b"y" * 11)
+    assert stable_media_uid(str(clip)) != first
+    missing = str(tmp_path / "gone.mov")
+    assert stable_media_uid(missing) != stable_media_uid(missing)
+
+
+def test_two_writes_of_one_cut_share_the_asset_uid(media, tmp_path):
+    import re
+    uids = []
+    for i in (1, 2):
+        out = tmp_path / f"v{i}.fcpxml"
+        edl_to_fcpxml({"sources": {"a": str(media["ndf"])}, "ranges": [{"source": "a", "start": 0, "end": i}]},
+                      str(out), fps=30)
+        uids.append(re.findall(r'<asset [^>]*uid="([^"]+)"', out.read_text()))
+    assert uids[0] == uids[1] and len(uids[0]) == 1

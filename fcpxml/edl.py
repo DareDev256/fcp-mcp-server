@@ -27,7 +27,12 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Optional
 
-from fcpxml.media_clock import MediaClock, clock_lines, media_url, read_clock  # noqa: F401  (clock_lines re-exported)
+from fcpxml.media_clock import (  # noqa: F401  (clock_lines re-exported)
+    MediaClock,
+    clock_lines,
+    media_url,
+    read_clock,
+)
 from fcpxml.models import TimeValue
 from fcpxml.rational import frame_duration_attr, frame_duration_seconds, nominal_fps
 from fcpxml.writer import _create_asset_element, write_fcpxml

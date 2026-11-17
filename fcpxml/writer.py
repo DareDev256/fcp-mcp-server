@@ -311,6 +311,30 @@ def build_marker_element(
     return elem
 
 
+def stable_media_uid(src: str) -> str:
+    """One uid per media file, the same on every write.
+
+    Final Cut keys a library's media on the asset uid: a second import of the
+    same file under a new uid is refused ("The media already exists in the
+    library with a different unique identifier", 12.4, 2026-11-16). A random
+    uid per write meant every revised cut pushed into the same library failed.
+    The uid is derived from the file's real path, size and modification time,
+    so it changes when the file does; a file that is not on this machine gets
+    a fresh random uid, as before.
+    """
+    from urllib.parse import unquote, urlparse
+    raw = unquote(urlparse(src).path) if src.startswith('file://') else src
+    try:
+        path = Path(raw).expanduser().resolve()
+        st = path.stat()
+    except (OSError, ValueError):
+        return str(uuid.uuid4()).upper()
+    if not path.is_file():
+        return str(uuid.uuid4()).upper()
+    key = f"fcp-mcp-server:{path}|{st.st_size}|{st.st_mtime_ns}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key)).upper()
+
+
 def _create_asset_element(
     resources: ET.Element,
     asset_id: str,
@@ -341,11 +365,10 @@ def _create_asset_element(
     Returns:
         The created <asset> Element.
     """
-    import uuid as _uuid
     asset = ET.SubElement(resources, 'asset')
     asset.set('id', asset_id)
     asset.set('name', _sanitize_xml_value(name, 512))
-    asset.set('uid', uid or str(_uuid.uuid4()).upper())
+    asset.set('uid', uid or stable_media_uid(src))
     asset.set('start', start)
     asset.set('duration', duration)
     asset.set('hasVideo', has_video)
@@ -976,12 +999,30 @@ def _check_effect_uids(root: ET.Element) -> List[ValidationIssue]:
     return issues
 
 
-def validate_fcpxml(root: ET.Element, fps: float = 24.0) -> List[ValidationIssue]:
+def _document_fps(root: ET.Element) -> Optional[Fraction]:
+    """The frame rate of the document's first sequence, from its format's
+    frameDuration (``1001/30000s`` -> 30000/1001). None when there is none."""
+    formats = {f.get('id'): f for f in root.iter('format')}
+    for seq in root.iter('sequence'):
+        fmt = formats.get(seq.get('format'))
+        dur = fmt.get('frameDuration') if fmt is not None else None
+        if dur:
+            try:
+                frame = parse_seconds(dur)
+                return 1 / frame if frame > 0 else None
+            except (ValueError, ZeroDivisionError):
+                return None
+    return None
+
+
+def validate_fcpxml(root: ET.Element, fps: Optional[float] = None) -> List[ValidationIssue]:
     """Run all DTD validation checks on an FCPXML element tree.
 
     Args:
         root: The <fcpxml> root Element to validate.
-        fps: Frame rate for alignment checks (default 24).
+        fps: Frame rate for alignment checks. None (the default) reads it from
+            the document's sequence; a 29.97 timeline was checked against 24
+            fps and every clip warned "not frame-aligned at 24fps" (2026-11-16).
 
     Returns:
         List of ValidationIssue objects. Empty list = clean.
@@ -990,6 +1031,8 @@ def validate_fcpxml(root: ET.Element, fps: float = 24.0) -> List[ValidationIssue
     issues.extend(_check_child_order(root))
     issues.extend(_check_required_attributes(root))
     issues.extend(_check_timebases(root))
+    if fps is None:
+        fps = _document_fps(root) or 24.0
     issues.extend(_check_frame_alignment(root, fps))
     issues.extend(_check_effect_refs(root))
     issues.extend(_check_asset_sources(root))
