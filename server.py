@@ -67,7 +67,7 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.34.1"
+__version__ = "0.35.0"
 
 server = Server("fcp-mcp-server", version=__version__)
 
@@ -3198,11 +3198,12 @@ def _clock_findings(tl, probes=None):
             continue
         name, written = Path(path).name, Fraction(media.origin)
         where = format_timecode(c.start)
-        if clock.source == "tmcd":
+        if clock.on_clock:
             if abs(written - clock.origin) * clock.rate >= Fraction(1, 2):
+                what = {"tmcd": "timecode track", "mxf": "MXF timecode", "bwf": "broadcast WAV time reference"}[clock.source]
                 out.append(("FAIL", where,
-                            f"{name}: <asset start> is {_seconds_attr(written)} but the file's timecode "
-                            f"track starts at {clock.timecode} ({clock.start_attr}); Final Cut plays it on "
+                            f"{name}: <asset start> is {_seconds_attr(written)} but by the file's {what}, "
+                            f"its first frame is {clock.timecode} ({clock.start_attr}); Final Cut plays it on "
                             f"its own clock, so these clips import empty or on the wrong frames"))
         elif clock.source in ("none", "ignored") and clock.quicktime and written != 0:
             why = ("its timecode is outside a QuickTime timecode track, which Final Cut does not use"
@@ -4894,6 +4895,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
         msg = f"Missing required argument: {missing}"
         return _text_result(f"{msg}\n\n{help_text}" if help_text else msg)
     except Exception as e:
+        from fcpxml.live import FCPAutomationBlockedError
+        if isinstance(e, FCPAutomationBlockedError):
+            # The one error whose message IS the fix (a permission click).
+            return _text_result(str(e))
         return _text_result(f"Error: {type(e).__name__}")
 
 

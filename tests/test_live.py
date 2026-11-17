@@ -144,6 +144,10 @@ def test_push_permission_error_hint(project_file, tmp_path, monkeypatch):
         lambda s: _fake_proc(returncode=1, stderr="Not authorized (-1743)"),
     )
     monkeypatch.setattr(live, "fcp_is_running", lambda: True)
+    # 0.35.0: a denied grant first tries open; when that fails too, the
+    # Automation hint is still what the user reads.
+    monkeypatch.setattr(live.subprocess, "run",
+                        lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", "open failed"))
     with pytest.raises(RuntimeError, match="Automation permission"):
         push_to_fcp(str(project_file), import_copy_path=str(tmp_path / "x.fcpxml"),
                     library_location="/tmp/Lib.fcpbundle", verify=False)

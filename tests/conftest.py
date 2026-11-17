@@ -42,3 +42,25 @@ def _never_paint_the_operators_screen(monkeypatch, tmp_path):
     from tools import preview
 
     monkeypatch.setattr(preview, "CMUX_PREVIEW", tmp_path / "no-cmux-preview.mjs")
+
+
+@pytest.fixture(autouse=True)
+def _never_open_final_cut(monkeypatch):
+    """push_to_fcp falls back to Launch Services' ``open -a "Final Cut Pro"``
+    when Apple Events are blocked (0.35.0). A test whose Apple Event is faked
+    to fail reached that fallback for real on 2026-11-16 and opened a scratch
+    library in the author's running Final Cut. No test may hand a document to
+    Final Cut: a test that wants the fallback fakes ``subprocess.run`` itself,
+    which replaces this guard."""
+    import subprocess
+
+    from fcpxml import live
+
+    real = subprocess.run
+
+    def guarded(cmd, *args, **kwargs):
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "open":
+            raise AssertionError(f"a test tried to open a document in Final Cut Pro: {cmd}")
+        return real(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(live.subprocess, "run", guarded)

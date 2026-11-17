@@ -124,12 +124,23 @@ def test_a_document_without_a_target_is_never_sent(bundle, tmp_path, osascript, 
 
 
 def test_a_blocked_apple_event_fails_with_the_reason(bundle, tmp_path, monkeypatch):
+    # Since 0.34.2 a hang surfaces as FCPAutomationBlockedError naming the cause
+    # (a permission prompt or a modal sheet); push then tries Launch
+    # Services' open, and says so when that fails too.
     def hang(script):
-        raise subprocess.TimeoutExpired(cmd="osascript", timeout=120)
+        raise live.FCPAutomationBlockedError(live._blocked_message(None))
+
+    real_run = subprocess.run
+
+    def run(cmd, **kwargs):
+        if cmd and cmd[0] == "open":
+            return subprocess.CompletedProcess(cmd, 1, "", "LSOpenURLsWithRole() failed")
+        return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(live, "_run_osascript", hang)
+    monkeypatch.setattr(live.subprocess, "run", run)
     monkeypatch.setattr(live, "fcp_is_running", lambda: True)
-    with pytest.raises(RuntimeError, match="modal dialog is most likely waiting"):
+    with pytest.raises(RuntimeError, match="modal sheet in Final Cut.*also failed"):
         push_to_fcp(str(bundle), library_location=str(tmp_path / "L.fcpbundle"),
                     import_copy_path=str(tmp_path / "Export_import.fcpxmld"),
                     verify=False)

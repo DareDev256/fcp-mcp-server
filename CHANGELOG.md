@@ -6,6 +6,55 @@
 - README: a "More from the same author" section after Credits linking Cut Review, the prompt generator, clickfix-protection-macos, jackpoint and the profile. PyPI shows it from the next release.
 - README: "When To Use This" links the prompt generator and its on-device face blur for AI b-roll and stills, next to the Cut Review line.
 
+## [0.35.0] - 2026-11-16
+
+Checked in Final Cut Pro 12.4 on the author's machine: the same files
+imported at 0s and on their own clock, side by side in one library.
+
+### Changed (the output of existing operations moves: take it between cuts)
+- **MXF and broadcast WAV files are written on their own clock.** Every
+  writer (`import_edl_json`, `apply_template`, `add_audio` with `src`, `gen`
+  inserts, insert and connected clips) now sets `<asset start>` from an MXF
+  file's timecode and from a BWF file's `time_reference` (samples divided by
+  the sample rate). Written at 0s, Final Cut 12.4 warned "Invalid edit with no
+  respective media" and imported the clip empty; written at 01:00:00 both
+  imported with media, and the first frame in the viewer was the 2 s mark the
+  edit asked for. Until now these files were written at 0s and reported as
+  "not verified". A BWF with no sample rate is still not guessed.
+- `validate_timeline`'s Media clock row now judges MXF and BWF assets too: a
+  FAIL when `<asset start>` is not the file's clock.
+- **push_to_fcp works without the Automation grant.** When Final Cut does not
+  answer Apple Events (macOS holds a "wants access to control Final Cut Pro"
+  prompt, or a modal sheet is up), the push sends the same options-carrying
+  copy with Launch Services' `open`, which needs no grant and, with the
+  library location inside the document, imports with no picker. The import is
+  then proven from the library bundle on disk
+  (`<event>/<project>/CurrentVersion.fcpevent`). The reply says
+  `delivered_via: open` and why.
+
+- **A revised cut can be pushed into the same library.** Asset uids were
+  random on every write, and Final Cut refuses a second import of a file
+  under a different uid ("The media already exists in the library with a
+  different unique identifier"), so only the first version of a cut ever
+  landed. A file now gets one uid, derived from its path, size and
+  modification time; six successive versions of one cut were pushed into one
+  library in Final Cut 12.4, about 2 s each.
+
+### Fixed
+- A blocked Final Cut now fails in about 10 seconds with the reason, quoting
+  the pending permission prompt and where to click, instead of hanging for
+  the full 120 s osascript timeout with no explanation. The reason reaches the
+  MCP reply (the dispatcher used to reduce it to the class name). A block is
+  remembered for a minute so a push does not wait twice.
+- The writer's validation checked frame alignment at 24 fps whatever the
+  sequence was: every clip on a 29.97 timeline logged "not frame-aligned at
+  24fps". It now reads the sequence's own frame rate.
+
+### Notes
+- FCP 12.4 shows the "Which library?" picker again for a document with no
+  library location (12.3 imported nothing, silently). push_to_fcp always
+  sends a location, so this only affects opening a bare FCPXML by hand.
+
 ## [0.34.1] - 2026-11-15
 
 Metadata only: nothing the server reads, writes or shows changed, so it is
