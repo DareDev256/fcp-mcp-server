@@ -95,7 +95,7 @@ class FCPAutomationBlockedError(RuntimeError):
 
 def pending_consent_prompt(app: str = "Final Cut Pro") -> Optional[str]:
     """The text of a macOS "wants access to control <app>" prompt that is
-    waiting for a click, or None.
+    waiting for a click, in whatever language macOS is set to, or None.
 
     Found 2026-11-16 on FCP 12.4: every Apple Event to Final Cut sat
     unanswered for the full 120 s timeout because macOS was holding an
@@ -120,8 +120,13 @@ def pending_consent_prompt(app: str = "Final Cut Pro") -> Optional[str]:
         proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=8)
     except (OSError, subprocess.TimeoutExpired):
         return None
+    # The sentence is macOS's and follows the system language ("wants access
+    # to control" is only its English form), while the app's name is the same
+    # in every language. UserNotificationCenter shows nothing but system
+    # alerts, so a line there naming the app is the prompt, whatever it is
+    # written in; the first such line is its headline.
     for line in (proc.stdout or "").splitlines():
-        if "wants access to control" in line and app in line:
+        if app in line:
             return line.strip()
     return None
 
@@ -129,7 +134,8 @@ def pending_consent_prompt(app: str = "Final Cut Pro") -> Optional[str]:
 def _blocked_message(prompt: Optional[str]) -> str:
     if prompt:
         return (f"Final Cut Pro is not answering because macOS is waiting for a permission click: "
-                f"\"{prompt}\" Click Allow in that dialog (it can sit behind other windows), "
+                f"\"{prompt}\" Click Allow (the confirming button, named in your system language) "
+                f"in that dialog (it can sit behind other windows), "
                 f"or grant it later in System Settings > Privacy & Security > Automation, then try again.")
     return (f"Final Cut Pro did not answer an Apple Event within {_PROBE_TIMEOUT_SECONDS}s. "
             "Check for a permission dialog, a modal sheet in Final Cut, or a library still opening.")

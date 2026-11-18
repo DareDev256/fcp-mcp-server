@@ -58,6 +58,25 @@ def test_the_prompt_reader_matches_only_the_app_asked_about(monkeypatch):
     assert "Final Cut Pro" in live.pending_consent_prompt("Final Cut Pro")
 
 
+@pytest.mark.parametrize("headline", [
+    "«tmux» quiere acceder para controlar «Final Cut Pro».",          # Spanish
+    "„tmux“ möchte Zugriff, um „Final Cut Pro“ zu steuern.",           # German
+    "« tmux » souhaite accéder à « Final Cut Pro » pour le contrôler.",  # French
+    "“tmux”想要控制“Final Cut Pro”。",                                   # Chinese
+])
+def test_the_prompt_reader_does_not_depend_on_the_system_language(monkeypatch, headline):
+    """macOS writes the prompt in the system language; only the app's name is
+    constant. The sentences above are illustrative, not copied from macOS:
+    the reader must not care what they say. On a non-English Mac the reader used to find nothing, and the
+    reply fell back to "check for a permission dialog" without naming it."""
+    class P:
+        stdout = f"{headline}\nmore words about Final Cut Pro\n"
+    monkeypatch.setattr(live.subprocess, "run", lambda *a, **k: P())
+    assert live.pending_consent_prompt("Final Cut Pro") == headline
+    P.stdout = headline.replace("Final Cut Pro", "Music") + "\n"
+    assert live.pending_consent_prompt("Final Cut Pro") is None
+
+
 @pytest.mark.asyncio
 async def test_the_mcp_reply_carries_the_fix_not_just_the_class_name(monkeypatch):
     import server
