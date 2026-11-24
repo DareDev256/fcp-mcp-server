@@ -60,6 +60,7 @@ __all__ = [
     "current_request",
     "initialization_options",
     "is_legacy_api",
+    "register_extension_methods",
     "register_handlers",
     "resource_mime_type",
     "tool_input_schema",
@@ -271,6 +272,7 @@ def register_handlers(
     get_prompt: Callable[[str, dict | None], Awaitable[Any]],
     list_tools: Callable[[], Awaitable[list]],
     call_tool: Callable[[str, dict[str, Any]], Awaitable[Any]],
+    runs_as_task: Callable[[str, dict[str, Any]], bool] | None = None,
 ) -> None:
     """Wire the six handlers onto *server* using whichever API it exposes.
 
@@ -278,6 +280,14 @@ def register_handlers(
     On 1.x they are handed straight to the decorators; on 2.x they are
     wrapped so that params come in unpacked and results go out as Result
     models.
+
+    On 2.x, ``tools/call`` also carries the two 2026-07-28 behaviours of
+    :mod:`fcpxml.interactive` (0.36): a handler that asks the person and has
+    no answer yet returns an ``InputRequiredResult``, and a call for which
+    *runs_as_task* is true on a request that opted into the tasks extension
+    runs in the background and returns a ``CreateTaskResult``. 1.x has
+    neither (it speaks only the handshake era); its handlers still ask over
+    ``elicitation/create``.
     """
     if is_legacy_api():
         server.list_resources()(list_resources)
@@ -319,12 +329,43 @@ def register_handlers(
     async def _on_list_tools(_ctx, _params):
         return types.ListToolsResult(tools=await list_tools())
 
-    async def _on_call_tool(ctx, params):
+    from fcpxml import interactive
+
+    async def _run_call(ctx, name: str, arguments: dict[str, Any]):
         token = _REQUEST_CTX.set(ctx)
         try:
-            content = await call_tool(params.name, params.arguments or {})
+            return await call_tool(name, arguments)
         finally:
             _REQUEST_CTX.reset(token)
+
+    async def _on_call_tool(ctx, params):
+        name, arguments = params.name, params.arguments or {}
+
+        if (
+            runs_as_task is not None
+            and interactive.client_declares_tasks(ctx)
+            and runs_as_task(name, arguments)
+        ):
+            async def _in_background() -> dict:
+                content = await _run_call(ctx, name, arguments)
+                return call_tool_result(content).model_dump(by_alias=True, mode="json", exclude_none=True)
+
+            label = arguments.get("action") if isinstance(arguments.get("action"), str) else name
+            return interactive.start_task(_in_background, label=f"Running {label}")
+
+        answers = interactive.answers_for_call(
+            getattr(params, "request_state", None), getattr(params, "input_responses", None)
+        )
+        answers_token = interactive.bind_answers(answers)
+        try:
+            content = await _run_call(ctx, name, arguments)
+        except interactive.InputNeeded as need:
+            return types.InputRequiredResult(
+                input_requests={need.key: types.ElicitRequest.model_validate(need.request)},
+                request_state=interactive.seal_state(answers),
+            )
+        finally:
+            interactive.reset_answers(answers_token)
         return call_tool_result(content)
 
     server.add_request_handler(
@@ -345,3 +386,85 @@ def register_handlers(
     server.add_request_handler(
         "tools/call", types.CallToolRequestParams, _on_call_tool
     )
+
+
+def register_extension_methods(server: Server) -> list[str]:
+    """Serve the tasks and skills extensions' request methods (2.x only, 0.36).
+
+    ``tasks/get``, ``tasks/update``, ``tasks/cancel`` (io.modelcontextprotocol/
+    tasks) and ``skills/list``, ``skills/get``, ``resources/directory/read``
+    (io.modelcontextprotocol/skills). None is a spec method, so the 2.x runner
+    routes each to its handler at every protocol version and stamps
+    ``resultType: "complete"`` on what it returns. 1.x keys its handlers by
+    request CLASS and has no route for a method its schema does not define,
+    so there these return nothing and the skills stay readable as plain
+    ``skill://`` resources.
+
+    Returns the extension identifiers to advertise.
+    """
+    if is_legacy_api():
+        return []
+
+    import mcp.types as types
+    from mcp.shared.exceptions import MCPError
+
+    from fcpxml import interactive, skills_ext
+
+    invalid_params = -32602
+
+    class _TaskParams(types.RequestParams):
+        task_id: str
+
+    class _TaskUpdateParams(types.RequestParams):
+        task_id: str
+        input_responses: dict[str, Any] = {}
+
+    class _UriParams(types.RequestParams):
+        uri: str
+
+    class _DirectoryParams(types.PaginatedRequestParams):
+        uri: str
+
+    def _refuse(exc: Exception):
+        return MCPError(code=invalid_params, message=str(exc))
+
+    async def _tasks_get(_ctx, params):
+        try:
+            return interactive.task_get(params.task_id)
+        except interactive.TaskError as exc:
+            raise _refuse(exc) from None
+
+    async def _tasks_update(_ctx, params):
+        try:
+            return interactive.task_update(params.task_id, params.input_responses)
+        except interactive.TaskError as exc:
+            raise _refuse(exc) from None
+
+    async def _tasks_cancel(_ctx, params):
+        try:
+            return interactive.task_cancel(params.task_id)
+        except interactive.TaskError as exc:
+            raise _refuse(exc) from None
+
+    async def _skills_list(_ctx, _params):
+        return skills_ext.list_skills()
+
+    async def _skills_get(_ctx, params):
+        try:
+            return skills_ext.get_skill(params.uri)
+        except skills_ext.SkillError as exc:
+            raise _refuse(exc) from None
+
+    async def _directory_read(_ctx, params):
+        try:
+            return skills_ext.directory_read(params.uri)
+        except skills_ext.SkillError as exc:
+            raise _refuse(exc) from None
+
+    server.add_request_handler("tasks/get", _TaskParams, _tasks_get)
+    server.add_request_handler("tasks/update", _TaskUpdateParams, _tasks_update)
+    server.add_request_handler("tasks/cancel", _TaskParams, _tasks_cancel)
+    server.add_request_handler("skills/list", types.PaginatedRequestParams, _skills_list)
+    server.add_request_handler("skills/get", _UriParams, _skills_get)
+    server.add_request_handler("resources/directory/read", _DirectoryParams, _directory_read)
+    return [interactive.TASKS_EXTENSION_ID, skills_ext.SKILLS_EXTENSION_ID]

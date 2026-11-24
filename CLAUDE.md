@@ -98,6 +98,28 @@ fcpxml/index.py     — SQLite cache at ~/.fcp-mcp/index.db (FCP_MCP_INDEX=off d
                       the suite runs green with it off (CI job `index-off`). Rows
                       keyed to (path, mtime, size); a re-exported source drops its
                       rows on the next touch. Time stored as integer num/den.
+fcpxml/interactive.py — (0.36) Elicitation + MCP tasks. ask() picks the route
+                      per request: inside a task -> input_required + tasks/update;
+                      a 2026-07-28 request -> raises InputNeeded (a BaseException,
+                      so handlers' `except Exception` cannot swallow it), which the
+                      2.x tools/call adapter turns into InputRequiredResult with an
+                      HMAC-sealed requestState carrying earlier answers; a
+                      handshake-era session -> session.elicit_form; else
+                      UNAVAILABLE and the caller keeps its old refusal. Every
+                      question is asked BEFORE the work it guards (a retry re-runs
+                      the handler from the top). Three askers: _ask_ship_unreviewed
+                      and _ask_library in server.py, _ask_spend in tools/gen.py.
+                      start_task() runs a call in the background (in-memory store,
+                      1 h TTL); server.TASK_ACTIONS says which actions. Claude Code
+                      opts a call into tasks only in interactive sessions
+                      (tengu_glowing_lark; off in -p), so verify tasks there.
+fcpxml/skills_ext.py — (0.36) Skills over MCP (io.modelcontextprotocol/skills,
+                      beta). Serves fcpxml/skills/<name>/ (package data):
+                      skills/list, skills/get, resources/directory/read, skill://
+                      resources. Frontmatter must be flat key: value (anything
+                      else is refused, never served altered); name == directory.
+                      tests/test_skills_ext.py checks every action a skill names
+                      against TOOL_GROUPS: a renamed action fails the suite.
 fcpxml/progress.py  — MCP progress notifications per clip. Resolves the request
                       context on either SDK (1.x property, 2.x contextvar set by
                       mcp_compat) and mutes itself on the first send failure.
