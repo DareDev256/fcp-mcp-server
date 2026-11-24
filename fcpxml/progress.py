@@ -22,11 +22,15 @@ logger = logging.getLogger(__name__)
 class Progress:
     """Counter that forwards to the current request's progress token."""
 
-    def __init__(self, total: Optional[int] = None, *, session: Any = None, token: Any = None):
+    def __init__(self, total: Optional[int] = None, *, session: Any = None, token: Any = None,
+                 task: Any = None):
         self.total = total
         self.current = 0.0
         self._session = session
         self._token = token
+        # 0.36: inside an MCP task the request that started it has already
+        # been answered, so progress goes to the task's statusMessage instead.
+        self._task = task
         self.sent: list[tuple] = []
 
     @property
@@ -41,6 +45,9 @@ class Progress:
         self.current = progress
         if total is not None:
             self.total = total
+        if self._task is not None:
+            self._task.progress(float(progress), self.total, message)
+            return
         if not self.live:
             return
         try:
@@ -63,6 +70,11 @@ def start(total: Optional[int] = None, server: Any = None) -> Progress:
             server = tools.server_module().server
         except Exception:
             server = None
+    from fcpxml import interactive
+
+    task = interactive.current_task()
+    if task is not None:
+        return Progress(total, task=task)
     ctx = mcp_compat.current_request(server)
     session = getattr(ctx, "session", None)
     meta = getattr(ctx, "meta", None)

@@ -33,8 +33,10 @@ from mcp.types import (
 )
 
 from fcpxml import diversity as _diversity
+from fcpxml import interactive as _interactive
 from fcpxml import journal as _journal
 from fcpxml import live
+from fcpxml import skills_ext as _skills
 from fcpxml import timeline_app as _timeline_app
 from fcpxml.diff import compare_timelines, format_diff
 from fcpxml.mcp_compat import (
@@ -42,6 +44,7 @@ from fcpxml.mcp_compat import (
     ToolReply,
     build_tool,
     initialization_options,
+    register_extension_methods,
     register_handlers,
     tool_input_schema,
 )
@@ -67,9 +70,17 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.35.0"
+__version__ = "0.36.0"
 
 server = Server("fcp-mcp-server", version=__version__)
+# Set after construction: the keyword arrived partway through 1.x, and both
+# generations read the attribute when they build the handshake or discover
+# result. Names the skill:// workflows for clients without the skills
+# extension (spec: "Pointer from Server Instructions").
+server.instructions = (
+    "Final Cut Pro timelines (FCPXML) and live Final Cut control. "
+    + _skills.instructions_pointer()
+).strip()
 
 
 def _parse_allowed_roots(
@@ -878,6 +889,10 @@ async def list_resources() -> list[Resource]:
             description=f"Timeline (the app, drawn from this file): {p.name}",
             mimeType="text/html",
         ))
+    # 0.36: the served workflow skills, as plain resources too, so a client
+    # without the skills extension can still read them.
+    for entry in _skills.skill_resources():
+        resources.append(Resource(**entry))
     return resources
 
 
@@ -903,6 +918,12 @@ def _uri_to_path(uri: str, scheme: str) -> str:
 async def read_resource(uri: str) -> str | list[ReadResourceContents]:
     """Read an FCPXML file and return a summary."""
     raw = str(uri)
+    if _skills.is_skill_uri(raw):
+        try:
+            text, mime = _skills.read_skill_file(raw)
+        except _skills.SkillError as e:
+            return str(e)
+        return [ReadResourceContents(content=text, mime_type=mime)]
     if raw == _timeline_app.APP_URI:
         return [ReadResourceContents(
             content=_timeline_app.render_app_html(),
@@ -4187,10 +4208,46 @@ from tools.retime import (  # noqa: E402
 )
 
 
+async def _ask_library(filepath: str) -> str | None:
+    """Ask which open library a push should land in (0.36, elicitation).
+
+    Only when Final Cut is running with two or more open libraries and no
+    library_location was given: the one case resolve_library_target refuses,
+    and the case where a send without a location raises Final Cut's own
+    blocking picker. Returns the chosen library's path, or None to leave the
+    old behaviour (refuse, naming the libraries) in place.
+    """
+    from fcpxml.live import fcp_is_running, list_fcp_libraries
+
+    try:
+        if not fcp_is_running():
+            return None
+        libs = [lib for lib in list_fcp_libraries() if lib.get("file")]
+    except RuntimeError:
+        return None
+    if len(libs) < 2:
+        return None
+    answer = await _interactive.ask(
+        "library",
+        f"Final Cut Pro has {plural(len(libs), 'library', 'libraries')} open. Which one should "
+        f"{Path(filepath).name} be imported into?",
+        _interactive.choice_schema(
+            "library", "Library", [(lib["file"], lib["name"]) for lib in libs]
+        ),
+    )
+    chosen = answer.value("library")
+    if answer.accepted and chosen in {lib["file"] for lib in libs}:
+        return chosen
+    if not answer.unavailable:
+        raise ValueError("Not pushed: no library was chosen in the dialog.")
+    return None
+
+
 async def handle_push_to_fcp(arguments: dict) -> Sequence[TextContent]:
     from fcpxml.live import push_to_fcp
 
     filepath = _validate_filepath(arguments["filepath"], ('.fcpxml', '.fcpxmld'))
+    library_location = arguments.get("library_location") or await _ask_library(filepath)
 
     # Every push sends an options-injected sibling copy (never the
     # original): `_import.fcpxml`, or `_import.fcpxmld` for a bundle, which
@@ -4203,7 +4260,7 @@ async def handle_push_to_fcp(arguments: dict) -> Sequence[TextContent]:
 
     result = push_to_fcp(
         filepath,
-        library_location=arguments.get("library_location"),
+        library_location=library_location,
         suppress_warnings=arguments.get("suppress_warnings", True),
         copy_assets=arguments.get("copy_assets"),
         import_copy_path=import_copy,
@@ -4728,6 +4785,38 @@ _UNREVIEWED_NOTE = (
     "matches this file's current state.*"
 )
 
+_UNREVIEWED_BY_USER_NOTE = (
+    "\n\n*Shipped UNREVIEWED, approved by the user in the review dialog: no "
+    "rendered preview matches this file's current state.*"
+)
+
+
+async def _ask_ship_unreviewed(action: str, arguments: dict) -> str | None:
+    """Put the review gate's question to the person (0.36, elicitation).
+
+    "ship": they chose to ship unreviewed. "review": they chose to watch it
+    first. "declined": they declined or dismissed the dialog. None: there is
+    nobody to ask (a client without elicitation, ``claude -p``), and the gate
+    refuses as it always has. The model cannot answer this one: the dialog is
+    the person's.
+    """
+    filepath = arguments.get("filepath")
+    name = Path(filepath).name if isinstance(filepath, str) else "this file"
+    answer = await _interactive.ask(
+        "review_gate",
+        f"{action} on {name}: no rendered preview matches this file as it is now, "
+        "so nobody has watched what is about to leave. Ship it anyway?",
+        _interactive.choice_schema("decision", "Before it ships", [
+            ("review", "Stop. I will watch a preview_render first"),
+            ("ship", "Ship it unreviewed"),
+        ]),
+    )
+    if answer.unavailable:
+        return None
+    if not answer.accepted:
+        return "declined"
+    return "ship" if answer.value("decision") == "ship" else "review"
+
 
 def _review_gate(action: str, arguments: dict) -> list[TextContent] | None:
     """The editors' checkpoint: watch it in full before it leaves.
@@ -4835,9 +4924,29 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
     against the input. Handlers change nothing for this: the seam is
     _validate_output_path, which every write already passes through.
     """
-    refusal = _project_guard(arguments) or _review_gate(action, arguments)
+    refusal = _project_guard(arguments)
     if refusal is not None:
         return refusal
+    approved_in_dialog = False
+    refusal = _review_gate(action, arguments)
+    if refusal is not None:
+        decision = await _ask_ship_unreviewed(action, arguments)
+        if decision is None:
+            return refusal
+        if decision != "ship":
+            # Says where the answer came from: the model never sees the
+            # dialog, and without this it reads the refusal as a stale
+            # approval rather than the person's choice a moment ago.
+            chose = ("chose \"Stop. I will watch a preview_render first\""
+                     if decision == "review" else "declined it")
+            return _text_result(
+                f"Not shipped: the review gate asked the user in a dialog and they {chose}. "
+                f"Render it with preview "
+                f"{json.dumps({'action': 'preview_render', 'args': {'filepath': arguments.get('filepath')}})} "
+                f"and run {action} again once it has been watched."
+            )
+        arguments = {**arguments, "confirm_unreviewed": True}
+        approved_in_dialog = True
     filepath = arguments.get("filepath")
     input_path = filepath if isinstance(filepath, str) else None
     token = _journal.begin(tool, action, arguments, input_path)
@@ -4860,7 +4969,8 @@ async def _journaled(tool: str, action: str, arguments: dict, handler) -> Sequen
         if pushed:
             result = _with_text(result, result[0].text + pushed)
     if action in GATED_ACTIONS and arguments.get("confirm_unreviewed") is True:
-        result = _with_text(result, result[0].text + _UNREVIEWED_NOTE)
+        note = _UNREVIEWED_BY_USER_NOTE if approved_in_dialog else _UNREVIEWED_NOTE
+        result = _with_text(result, result[0].text + note)
     return result
 
 
@@ -4909,6 +5019,23 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
 # Registered here rather than by decorator: mcp 2.0 removed the decorator API
 # entirely (issue #9). register_handlers detects which API the installed SDK
 # exposes and wires the same six functions either way — see fcpxml/mcp_compat.
+# Actions that run as MCP tasks (0.36) when the request opted into the tasks
+# extension: the ones that wait on ffmpeg, a model, a network provider or
+# Final Cut. Claude Code backgrounds a task and keeps working; the progress
+# each one already reports becomes the task's status line.
+TASK_ACTIONS = frozenset({
+    "transcribe_media", "index_build", "find_index", "find_shots",
+    "detect_scenes", "scenes_split", "detect_media_silence", "remove_media_silence",
+    "detect_beats", "preview_render", "preview_check", "export_role_stems",
+    "gen_fill_gap", "gen_broll", "gen_extend_clip",
+})
+
+
+def _runs_as_task(name: str, arguments: dict[str, Any]) -> bool:
+    action = arguments.get("action") if name in TOOL_GROUPS else name
+    return action in TASK_ACTIONS
+
+
 register_handlers(
     server,
     list_resources=list_resources,
@@ -4917,7 +5044,17 @@ register_handlers(
     get_prompt=get_prompt,
     list_tools=list_tools,
     call_tool=call_tool,
+    runs_as_task=_runs_as_task,
 )
+
+# tasks/* and skills/* (2.x only; an empty list on 1.x).
+EXTENSIONS = {APPS_EXTENSION_ID: {}}
+for _ext in register_extension_methods(server):
+    EXTENSIONS[_ext] = {"directoryRead": True} if _ext == _skills.SKILLS_EXTENSION_ID else {}
+if hasattr(server, "extensions"):
+    # server/discover (2026-07-28) reads this; the handshake era reads the
+    # init options built in main().
+    server.extensions.update(EXTENSIONS)
 
 
 # ============================================================================
@@ -4928,7 +5065,7 @@ async def main():
     # MCP Apps is advertised under capabilities.extensions where the SDK has
     # the slot (2.x). On 1.x the tool still carries _meta.ui and the ui://
     # resource is still served; only the up-front handshake is missing.
-    options = initialization_options(server, {APPS_EXTENSION_ID: {}})
+    options = initialization_options(server, EXTENSIONS)
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, options)
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import tools
-from fcpxml import dtd, gen, journal, render, timeline_app
+from fcpxml import dtd, gen, interactive, journal, render, timeline_app
 from fcpxml.media_intel import media_src_to_path
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
@@ -124,6 +124,42 @@ def _extend_target(args: dict, payload: dict) -> Target:
 
 # -- the runner ---------------------------------------------------------------
 
+async def _ask_spend(provider: str, seconds, prompt: str, model: Optional[str], note: str) -> Optional[str]:
+    """Ask the person to approve the spend (0.36, elicitation).
+
+    Called only when the call did not arrive with a confirmed quote. Prices
+    the job (registering the quote the gate will check), shows the price in
+    a dialog, and returns that quote's id when the person approves it. The
+    gate itself still runs: it recomputes the price from the job, applies
+    the cap and refuses a mismatch, so an approval buys exactly the job it
+    was shown. Returns None (the old refusal stands) when there is nobody to
+    ask, or when the quote cannot be spent anyway (no price on file, over the
+    cap, not implemented), so that refusal names the real reason.
+    """
+    q = gen.quote(provider, seconds, prompt, model)
+    if q.usd is None or q.over_cap or not q.available:
+        return None
+    shown = prompt if len(prompt) <= 200 else prompt[:197] + "..."
+    answer = await interactive.ask(
+        "approve_spend",
+        f"Generate {q.billable_seconds}s of video on {q.provider} ({q.model}) for about "
+        f"US${q.usd}? Per-call cap US${q.cap_usd}; prices as of {q.prices_as_of}, not "
+        f"invoice-checked. {note}. Prompt: \"{shown}\"",
+        interactive.choice_schema("decision", "Spend", [
+            ("spend", f"Spend about US${q.usd}"),
+            ("stop", "Do not spend"),
+        ]),
+    )
+    if answer.unavailable:
+        return None
+    if answer.value("decision") == "spend":
+        return q.id
+    raise gen.RefusedError(
+        "Not generated: the spend was put to the user in an approval dialog and they did not approve it. "
+        "Nothing was sent and nothing was charged."
+    )
+
+
 async def _run(args: dict, target_of: Callable[[dict, dict], Target], prompt_default: Optional[str] = None):
     srv = tools.server_module()
     prompt = (args.get("prompt") or prompt_default or "").strip()
@@ -141,8 +177,13 @@ async def _run(args: dict, target_of: Callable[[dict, dict], Target], prompt_def
 
         # The gate. Refuses before any key is read, any frame rendered, any
         # byte sent.
+        quote_id, confirm = args.get("quote_id"), args.get("confirm")
+        if not (quote_id and confirm is True):
+            approved = await _ask_spend(provider, target["seconds"], prompt, args.get("model"), target["note"])
+            if approved is not None:
+                quote_id, confirm = approved, True
         q = gen.confirm_quote(
-            args.get("quote_id"), args.get("confirm"), provider, target["seconds"], prompt, args.get("model")
+            quote_id, confirm, provider, target["seconds"], prompt, args.get("model")
         )
         gen.key_for(provider)
 

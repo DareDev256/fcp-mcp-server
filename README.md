@@ -740,6 +740,43 @@ file's sha256. `gen_broll` and `gen_extend_clip` condition the generation on
 a frame of the source clip when the media is present and say so when it is
 not.
 
+### Tasks, questions and skills over MCP (v0.36.0)
+
+On the 2026-07-28 protocol (`mcp` 2.x; Claude Code 2.1.331 negotiates it with
+this server over stdio) three things change for the person at the keyboard:
+
+- **The server asks you, not the model.** Three gates used to refuse and name a
+  flag the model could pass: shipping a deliver action with no matching
+  `preview_render`, spending money on `gen`, and choosing which open library
+  `push_to_fcp` imports into. With a client that supports MCP elicitation,
+  each now puts the question to you in a dialog ("Ship it anyway?", "Spend about
+  US$<the quoted price>?", "Which library?"). Your answer is what passes the gate,
+  and a shipped-unreviewed file says it was your call. Without a dialog (an
+  older client, `claude -p`) the old refusal stands, word for word.
+- **Long work runs in the background.** `transcribe_media`, `index_build`,
+  `find_index`, `find_shots`, `detect_scenes`, `scenes_split`, the media
+  silence and beat scans, `preview_render`, `preview_check`,
+  `export_role_stems` and the three `gen_*` generators run as MCP tasks when
+  the client asks for them: Claude keeps working while a render runs, the
+  progress each one reports becomes the task's status line, and a task that
+  needs your answer waits for it without blocking the conversation.
+- **The workflows ship with the server.** Six skills are served over MCP
+  (the `io.modelcontextprotocol/skills` extension): `rough-cut`,
+  `qc-and-deliver`, `push-to-final-cut`, `transcript-edit`,
+  `generative-fill` and `organize-and-undo`. In Claude Code they appear as
+  `/fcp:rough-cut` and so on, with no install step. Each lists its files with
+  sha256 digests, and every action a skill names is checked against the live
+  tool table by the test suite. Clients without the extension can read them as
+  `skill://<name>/SKILL.md` resources; the server instructions name them.
+
+Verified 2026-11-24 in an interactive Claude Code 2.1.331 session against this
+build: the skills listed under `/fcpdev:`, the review dialog shipped and
+refused on the person's answer, `preview_check` ran as a task, and a gated
+`export_role_stems` task stopped for the question and resumed on the answer.
+Not verified in Claude Desktop or VS Code, where Claude Code's own docs say
+tasks are off unless enabled for the account and a task's question is not
+shown.
+
 ### Claude Code skill
 
 A `final-cut-pro` skill ships in `skill/`, wrapping this server with the
@@ -919,7 +956,7 @@ default and every preview picture is labelled and returned inline (see
 | FCPXML format | reads v1.8 – v1.14 · writes v1.13 (modified files keep their source version) |
 | Final Cut Pro | **for Mac** 10.4+ through 12.4 (the newest release, 2026-09-29, per Apple's notes, checked 2026-11-12) · flat `.fcpxml` and `.fcpxmld` bundles (sidecars preserved). Final Cut Pro for iPad has no documented FCPXML import or export, so it is not supported |
 | Python | 3.10, 3.11, 3.12 |
-| MCP protocol | Spec versions are dates; the installed `mcp` SDK negotiates one. `mcp` 1.28.1 speaks up to 2025-11-25 and `mcp` 2.3.0 up to 2026-07-28, the current spec (checked 2026-11-12) |
+| MCP protocol | Spec versions are dates; the installed `mcp` SDK negotiates one. `mcp` 1.28.1 speaks up to 2025-11-25 and `mcp` 2.3.0 up to 2026-07-28, the current spec (checked 2026-11-12). Tasks, elicitation by `InputRequiredResult` and skills over MCP need 2026-07-28, so `mcp` 2.x; on 1.x elicitation still works over `elicitation/create` |
 | `mcp` SDK | 1.21.1 through 2.x — both the decorator API and the `add_request_handler` API that replaced it. CI tests the declared floor and 2.x on every push |
 | **Export targets** | |
 | → DaVinci Resolve | FCPXML v1.9 |
@@ -1238,6 +1275,7 @@ The full ecosystem analysis and the dual-mode architecture plan live in
 - [x] **Proof you can read** — every preview picture labelled by the server and returned inline: a contact sheet with cut numbers and timecodes, a check with a ruler and named silences, a 720p proxy with burn-in, a before/after strip per cut; `preview://` is the app — *v0.32.0*
 - [x] **Media clock** — every authored asset and clip on its file's own timecode clock (`tmcd`), so an iPhone ProRes or camera clip no longer imports empty; `validate_timeline` checks it; `insert_clip` / `add_connected_clip` bring any file in by `src` (#45) — *v0.33.0*
 - [x] **MXF and broadcast WAV on their own clock, pushes that do not wait on a permission prompt** — checked in Final Cut 12.4: an MXF timecode and a BWF time reference are the file's clock (written at 0s they import empty); `push_to_fcp` falls back to `open` and verifies on disk; one uid per media file so a cut can be pushed again and again into one library — *v0.35.0*
+- [x] **The person answers, long work runs in the background, workflows ship with the server** — MCP elicitation on the review, money and library gates; MCP tasks for sixteen long actions; six skills served over MCP (`/fcp:rough-cut` and the rest); verified in an interactive Claude Code 2.1.331 session — *v0.36.0*
 - [ ] **Read the open timeline back** — an Accessibility-driven `File > Export XML` so the round trip needs no click from you
 - [ ] **Shot embeddings** — tier-3 ranking is lexical over captions until embeddings land
 - [ ] **Live bridges** — SpliceKit / CommandPost are detected since v0.17.0; the adapters that would drive them are not written

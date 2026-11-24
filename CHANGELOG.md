@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-24
+
+Verified in an interactive Claude Code 2.1.331 session against this build
+(protocol 2026-07-28 over stdio): skills listed, the review dialog answered
+both ways, a task run to completion, and a task that stopped for a question
+and resumed on the answer. Not verified in Claude Desktop or VS Code.
+
+### Added
+- **Skills over MCP** (`io.modelcontextprotocol/skills`, beta revision): six
+  workflow skills in `fcpxml/skills/` (`rough-cut`, `qc-and-deliver`,
+  `push-to-final-cut`, `transcript-edit`, `generative-fill`,
+  `organize-and-undo`) served through `skills/list`, `skills/get` and
+  `resources/directory/read`, every file a `skill://` resource with a sha256
+  digest and size. Claude Code 2.1.331+ shows them as `/<server>:<skill>`.
+  The server's `instructions` name each `SKILL.md` for clients without the
+  extension. Needs `mcp` 2.x for the methods; on 1.x the files are still
+  plain resources.
+- **MCP tasks** (`io.modelcontextprotocol/tasks`, 2026-07-28): sixteen long
+  actions run in the background when the request opts in, with `tasks/get`,
+  `tasks/update` and `tasks/cancel`. Progress becomes the task's
+  `statusMessage`; a finished task is kept for an hour. In-memory: a task does
+  not outlive the server process.
+- **Elicitation** on three gates: the deliver review gate, the `gen` money
+  gate and the library choice in `push_to_fcp` (two or more open libraries,
+  no `library_location`). On 2026-07-28 the question travels as an
+  `InputRequiredResult` (earlier answers ride back in an HMAC-sealed
+  `requestState`, so a call that asks twice does not loop); inside a task as
+  `input_required`; on older sessions as `elicitation/create`. With no client
+  support, nothing changes.
+
+### Changed (the output of existing operations moves: take it between cuts)
+- A gated deliver action on an unreviewed file, called by a client that
+  supports elicitation and without `confirm_unreviewed`, now asks instead of
+  refusing. A ship approved in the dialog is stamped "approved by the user in
+  the review dialog"; a refusal names the dialog and the choice.
+- `gen_fill_gap`, `gen_broll` and `gen_extend_clip` called without a confirmed
+  quote, on such a client, now show the price and ask instead of refusing.
+  The gate still recomputes the price from the job and applies the cap, so an
+  approval buys only the job it showed.
+- `push_to_fcp` with two or more open libraries and no `library_location`
+  asks which one instead of refusing.
+
 ### Docs
 - README: a "More from the same author" section after Credits linking Cut Review, the prompt generator, clickfix-protection-macos, jackpoint and the profile. PyPI shows it from the next release.
 - README: "When To Use This" links the prompt generator and its on-device face blur for AI b-roll and stills, next to the Cut Review line.

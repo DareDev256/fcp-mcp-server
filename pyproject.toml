@@ -7,7 +7,7 @@ name = "fcp-mcp-server"
 
 
 
-version = "0.35.0"
+version = "0.36.0"
 
 description = "AI tools for Final Cut Pro (MCP server): read, edit and generate FCPXML timelines from Claude. 15 grouped tools (102 operations): timeline analysis, batch editing, QC, generation, multi-track, NLE export, media relink, .fcpxmld bundles, media analysis (silence, beats, shot boundaries, Whisper or ElevenLabs transcripts), a SQLite cache, proxy preview with source-media checks, an export watch folder, EDL import, an undo journal, a review gate on delivery, bulk organize, shot search with offline captions."
 readme = "README.md"
@@ -107,7 +107,9 @@ include = ["fcpxml*", "tools*"]
 # (Spleen, BSD-2-Clause; the licence ships beside it). Not Python, so
 # setuptools leaves it out unless named here; tests/test_packaging.py builds a
 # wheel and looks for it, and the publish job draws text from the installed one.
-fcpxml = ["fonts/*.bdf", "fonts/LICENSE-spleen.txt"]
+# The skills served over MCP (0.36): every file of every skill directory.
+# tests/test_skills_ext.py builds a wheel and requires each one in it.
+fcpxml = ["fonts/*.bdf", "fonts/LICENSE-spleen.txt", "skills/*/*", "skills/*/*/*"]
 
 [tool.black]
 line-length = 100

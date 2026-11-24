@@ -144,3 +144,10 @@ def test_a_built_wheel_carries_the_font_and_its_licence(tmp_path):
     for name in ("fcpxml/fonts/spleen-12x24.bdf", "fcpxml/fonts/spleen-16x32.bdf",
                  "fcpxml/fonts/LICENSE-spleen.txt", "fcpxml/raster.py", "fcpxml/proofs.py"):
         assert name in names, f"{name} missing from {wheel.name}"
+    # 0.36: the skills served over MCP are package data too; a wheel without
+    # them advertises the skills extension and serves an empty catalogue.
+    skills = [p.relative_to(ROOT).as_posix() for p in (ROOT / "fcpxml" / "skills").rglob("*")
+              if p.is_file() and "__pycache__" not in p.parts]
+    assert skills
+    for name in skills:
+        assert name in names, f"{name} missing from {wheel.name}"
