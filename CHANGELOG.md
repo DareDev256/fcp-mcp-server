@@ -44,6 +44,15 @@ and resumed on the answer. Not verified in Claude Desktop or VS Code.
 - `push_to_fcp` with two or more open libraries and no `library_location`
   asks which one instead of refusing.
 
+### Fixed
+- **The waiting permission prompt is named on a Mac in any language.**
+  `pending_consent_prompt` matched macOS's English sentence ("wants access to
+  control"), so on a Mac set to Spanish, German, Japanese and others the
+  prompt was never found and the reply fell back to "check for a permission
+  dialog". It now matches the app's name, which macOS does not translate, in
+  `UserNotificationCenter`, which shows only system alerts. Thanks to
+  @19s94 (#54).
+
 ### Docs
 - README: a "More from the same author" section after Credits linking Cut Review, the prompt generator, clickfix-protection-macos, jackpoint and the profile. PyPI shows it from the next release.
 - README: "When To Use This" links the prompt generator and its on-device face blur for AI b-roll and stills, next to the Cut Review line.

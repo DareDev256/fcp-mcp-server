@@ -69,6 +69,7 @@ __all__ = [
     "MODERN_PROTOCOL_VERSION",
     "TASKS_EXTENSION_ID",
     "ask",
+    "can_ask",
     "choice_schema",
     "client_declares_tasks",
     "current_task",
@@ -293,6 +294,23 @@ def elicit_request(message: str, schema: dict) -> dict:
 # ---------------------------------------------------------------------------
 # ask()
 # ---------------------------------------------------------------------------
+
+def can_ask() -> bool:
+    """True when :func:`ask` has a route to the person for this request.
+
+    For callers whose QUESTION costs something to build (the library picker
+    asks Final Cut for its open libraries): check this first, so a client
+    that can never show the dialog never pays for the probe.
+    """
+    if current_task() is not None:
+        return True
+    ctx = _current_ctx()
+    if ctx is None or not _declares_elicitation(ctx):
+        return False
+    if is_modern(ctx):
+        return _ANSWERS.get() is not None
+    return getattr(getattr(ctx, "session", None), "elicit_form", None) is not None
+
 
 async def ask(key: str, message: str, schema: dict) -> Answer:
     """Put one question to the person. Never raises for a missing client.

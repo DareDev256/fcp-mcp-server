@@ -153,6 +153,7 @@ def _patch_libs(monkeypatch, libs, running=True):
 
 def _answer(monkeypatch, answer):
     seen = []
+    monkeypatch.setattr(interactive, "can_ask", lambda: not answer.unavailable)
 
     async def fake(key, message, schema):
         seen.append((key, message, schema))
@@ -181,6 +182,26 @@ def test_a_library_the_dialog_did_not_offer_is_refused(monkeypatch, project):
     _answer(monkeypatch, interactive.Answer("accept", {"library": "/tmp/Elsewhere.fcpbundle"}))
     with pytest.raises(ValueError, match="no library was chosen"):
         asyncio.run(server._ask_library(str(project)))
+
+
+def test_no_client_means_no_probe_of_final_cut(monkeypatch, project):
+    """CI 2026-11-24: with nobody to ask, the picker still asked Final Cut for
+    its libraries, and on a runner where pgrep said it was running that was
+    an osascript call on Linux. No route to the person, no probe."""
+    import fcpxml.live as live
+    monkeypatch.setattr(live, "fcp_is_running", lambda: True)
+    monkeypatch.setattr(live, "list_fcp_libraries",
+                        lambda allow_launch=False: (_ for _ in ()).throw(AssertionError("probed")))
+    assert asyncio.run(server._ask_library(str(project))) is None
+
+
+def test_a_probe_that_cannot_run_is_not_a_question(monkeypatch, project):
+    import fcpxml.live as live
+    monkeypatch.setattr(interactive, "can_ask", lambda: True)
+    monkeypatch.setattr(live, "fcp_is_running", lambda: True)
+    monkeypatch.setattr(live, "list_fcp_libraries",
+                        lambda allow_launch=False: (_ for _ in ()).throw(FileNotFoundError("osascript")))
+    assert asyncio.run(server._ask_library(str(project))) is None
 
 
 def test_no_dialog_leaves_the_named_refusal_to_resolve_library_target(monkeypatch, project):

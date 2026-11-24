@@ -4219,11 +4219,16 @@ async def _ask_library(filepath: str) -> str | None:
     """
     from fcpxml.live import fcp_is_running, list_fcp_libraries
 
+    # Nobody to ask: do not probe Final Cut at all. The probe is an Apple
+    # event (and on a machine without osascript, an OSError), and the old
+    # path, resolve_library_target, makes the same probe itself when it must.
+    if not _interactive.can_ask():
+        return None
     try:
         if not fcp_is_running():
             return None
         libs = [lib for lib in list_fcp_libraries() if lib.get("file")]
-    except RuntimeError:
+    except (RuntimeError, OSError):
         return None
     if len(libs) < 2:
         return None
