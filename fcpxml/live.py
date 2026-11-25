@@ -72,6 +72,25 @@ from .words import plural
 _OSASCRIPT_TIMEOUT_SECONDS = 120  # FCP cold-launch + import can be slow
 _FCP_BUNDLE_ID = "com.apple.FinalCut"
 
+# The free trial is its own app, with its own name and bundle id
+# (com.apple.FinalCutTrial) and the same scripting dictionary.
+_FCP_APP_NAMES = ("Final Cut Pro", "Final Cut Pro Trial")
+_APPLICATIONS = Path("/Applications")
+
+
+def fcp_app_name() -> str:
+    """The name of the Final Cut Pro to drive.
+
+    AppleScript, pgrep and open all address an app by its name, and with only
+    the trial installed nothing answers to "Final Cut Pro" (osascript: -1728).
+    The full app wins when both are installed; when neither is found in
+    /Applications the usual name is kept and the commands behave as before.
+    """
+    for name in _FCP_APP_NAMES:
+        if (_APPLICATIONS / f"{name}.app").is_dir():
+            return name
+    return _FCP_APP_NAMES[0]
+
 # Field separators for AppleScript list output — ASCII unit/record
 # separators cannot appear in user-facing library/project names.
 _FIELD_SEP = "\x1f"
@@ -151,7 +170,7 @@ def _probe_fcp() -> None:
         # Blocked a moment ago: say so now rather than wait out another probe.
         raise FCPAutomationBlockedError(_blocked_message(pending_consent_prompt()))
     try:
-        proc = subprocess.run(["osascript", "-e", 'tell application "Final Cut Pro" to count libraries'],
+        proc = subprocess.run(["osascript", "-e", f'tell application "{fcp_app_name()}" to count libraries'],
                               capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _blocked_until = time.monotonic() + _BLOCK_MEMORY_SECONDS
@@ -161,7 +180,7 @@ def _probe_fcp() -> None:
 
 
 def _run_osascript(script: str) -> subprocess.CompletedProcess:
-    if 'tell application "Final Cut Pro"' in script:
+    if f'tell application "{fcp_app_name()}"' in script:
         _probe_fcp()
     try:
         return subprocess.run(
@@ -177,7 +196,7 @@ def _run_osascript(script: str) -> subprocess.CompletedProcess:
 def fcp_is_running() -> bool:
     """True when a Final Cut Pro process is active (no launch side-effect)."""
     proc = subprocess.run(
-        ["pgrep", "-x", "Final Cut Pro"], capture_output=True, text=True
+        ["pgrep", "-x", fcp_app_name()], capture_output=True, text=True
     )
     return proc.returncode == 0
 
@@ -485,7 +504,7 @@ def push_to_fcp(
 
     was_running = fcp_is_running()
     script = (
-        'tell application "Final Cut Pro"\n'
+        f'tell application "{fcp_app_name()}"\n'
         'activate\n'
         f'open POSIX file "{_applescript_quote(str(send_path.resolve()))}"\n'
         'end tell'
@@ -503,7 +522,7 @@ def push_to_fcp(
         if bundle is None:
             raise
         on_disk_before = _projects_on_disk(bundle)
-        opened = subprocess.run(["open", "-a", "Final Cut Pro", str(send_path.resolve())],
+        opened = subprocess.run(["open", "-a", fcp_app_name(), str(send_path.resolve())],
                                 capture_output=True, text=True, timeout=30)
         if opened.returncode != 0:
             raise RuntimeError(f"{blocked} Opening the document directly also failed: "
@@ -516,7 +535,7 @@ def push_to_fcp(
         bundle = _bundle_path(target)
         if bundle is not None:
             on_disk_before = _projects_on_disk(bundle)
-            opened = subprocess.run(["open", "-a", "Final Cut Pro", str(send_path.resolve())],
+            opened = subprocess.run(["open", "-a", fcp_app_name(), str(send_path.resolve())],
                                     capture_output=True, text=True, timeout=30)
             if opened.returncode == 0:
                 delivered_via = "open"
@@ -650,7 +669,7 @@ def list_fcp_libraries(allow_launch: bool = False) -> List[Dict[str, Any]]:
         'set fieldSep to (ASCII character 31)\n'
         'set recSep to (ASCII character 30)\n'
         'set out to ""\n'
-        'tell application "Final Cut Pro"\n'
+        f'tell application "{fcp_app_name()}"\n'
         '  repeat with lib in libraries\n'
         '    set libName to name of lib\n'
         '    set libPath to ""\n'

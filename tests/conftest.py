@@ -64,3 +64,14 @@ def _never_open_final_cut(monkeypatch):
         return real(cmd, *args, **kwargs)
 
     monkeypatch.setattr(live.subprocess, "run", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _no_installed_final_cut(monkeypatch, tmp_path):
+    """Live mode names the app after what is installed in /Applications (the
+    trial is "Final Cut Pro Trial"). Tests see no installed app, so the name
+    they read does not depend on the machine; tests/test_live_trial.py
+    installs its own."""
+    from fcpxml import live
+
+    monkeypatch.setattr(live, "_APPLICATIONS", tmp_path / "no-applications")
