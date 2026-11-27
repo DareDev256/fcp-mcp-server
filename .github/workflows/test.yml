@@ -11,6 +11,10 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+# Every job only reads the repo; none writes to it, opens issues or publishes.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
