@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-11-27
+
+Security release. Safe to take mid-project: no operation's output changes for
+a call that was already allowed.
+
+### Security
+- **`preview_render` now validates `output_path`** (GHSA-wcpc-pq5j-rgff,
+  high). The handler passed a caller-supplied `output_path` straight to
+  ffmpeg, so an assistant steered by a prompt-injected file could write the
+  render anywhere the server could write, or name a URL (`http://...`) and
+  have ffmpeg send the rendered project media to that server. It broke the
+  invariant in SECURITY.md that every write goes through
+  `_validate_output_path(anchor_dir=...)`. Now a supplied `output_path` must
+  be a local file under the timeline's own folder (a relative path lands
+  beside the timeline), anything shaped like a protocol (`http:`, `file:`,
+  `pipe:`, `tcp:`) is refused before ffmpeg runs, and `render_proxy` itself
+  refuses any out_path that is not absolute as a backstop at the sink. With no
+  `output_path` the proxy still goes to the private cache, as before.
+  Affected: every release that shipped `preview_render` up to 0.36.0.
+  Reported by **@RossKeddy** on 2026-11-10, with a working reproduction
+  against 0.30.0. The acknowledgment took 17 days against the 48 hours
+  SECURITY.md promises; that was our miss.
+- 13 regression tests in `tests/test_security.py`
+  (`TestPreviewRenderOutputPath`), each mutation-checked: removing the
+  handler check fails 8, removing the sink backstop fails 3.
+
 ## [0.36.0] - 2026-11-24
 
 Verified in an interactive Claude Code 2.1.331 session against this build

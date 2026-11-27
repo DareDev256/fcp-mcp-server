@@ -14,6 +14,7 @@ import subprocess
 from fractions import Fraction
 from pathlib import Path
 
+import tools
 from fcpxml import filtergraph, journal, proofs, render
 from fcpxml import raster as rs
 from fcpxml.words import plural
@@ -96,6 +97,43 @@ def _timeline_or_message(filepath: str):
     return timeline, None
 
 
+# An output path that names a protocol ("http://...", "file:...", "pipe:1")
+# would reach ffmpeg as a URL, not a file. Absolute paths start with "/", so
+# they never match. GHSA-wcpc-pq5j-rgff.
+_PROTOCOL_LIKE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+
+
+def _checked_output_path(args: dict):
+    """Return (validated output path or None, refusal text or None).
+
+    No output_path keeps the private cache default. A supplied one goes
+    through the same sandbox as every other write: it must be a local file
+    under the timeline's own folder, and it reaches ffmpeg resolved and
+    absolute, never as the raw string the caller sent.
+    """
+    raw = args.get("output_path")
+    if raw is None or raw == "":
+        return None, None
+    raw = str(raw)
+    if _PROTOCOL_LIKE.match(raw):
+        return None, (
+            f"output_path must be a local file path, not a URL or protocol: {raw!r}"
+        )
+    srv = tools.server_module()
+    try:
+        source = srv._validate_filepath(args.get("filepath"), (".fcpxml", ".fcpxmld"))
+        anchor = Path(source).resolve().parent
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = anchor / candidate
+        checked = srv._validate_output_path(
+            str(candidate), anchor_dir=str(anchor), note_output=False,
+        )
+    except ValueError as exc:
+        return None, f"Refused output_path: {exc}"
+    return checked, None
+
+
 def _crossfade_line(transitions) -> list[str]:
     """One line naming the transitions that actually made it into the render.
 
@@ -161,8 +199,12 @@ async def handle_preview_render(args: dict):
     except (TypeError, ValueError):
         return text_result(f"height must be an integer, got {args.get('height')!r}")
 
+    out_path, refusal = _checked_output_path(args)
+    if refusal:
+        return text_result(refusal)
+
     result = render.render_proxy(
-        timeline, out_path=args.get("output_path"), height=height,
+        timeline, out_path=out_path, height=height,
         burn_in=bool(args.get("burn_in", False)),
     )
     if not result.get("path"):

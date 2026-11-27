@@ -70,7 +70,7 @@ from fcpxml.transcribe import transcribe  # noqa: F401  (patched by tests; see a
 from fcpxml.words import plural
 from fcpxml.writer import FCPXMLModifier
 
-__version__ = "0.36.0"
+__version__ = "0.36.1"
 
 server = Server("fcp-mcp-server", version=__version__)
 # Set after construction: the keyword arrived partway through 1.x, and both

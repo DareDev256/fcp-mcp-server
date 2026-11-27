@@ -1841,3 +1841,67 @@ class TestSymlinkedLibraryMedia:
         monkeypatch.setattr(server_module, "READ_ROOTS", [str(movies)])
         with pytest.raises(ValueError, match="escapes the allowed roots"):
             _validate_filepath(str(movies / ".." / "escape.fcpxml"), ('.fcpxml',))
+
+
+# ============================================================================
+# preview_render output_path (GHSA-wcpc-pq5j-rgff)
+# ============================================================================
+
+class TestPreviewRenderOutputPath:
+    """preview_render's output_path reached ffmpeg unvalidated: a path outside
+    the project, or a URL that made ffmpeg send the render to a server.
+    Reported by RossKeddy (GHSA-wcpc-pq5j-rgff)."""
+
+    SAMPLE = "examples/sample.fcpxml"
+
+    def _never_render(self, monkeypatch):
+        from fcpxml import render
+
+        def boom(*a, **k):
+            raise AssertionError("render_proxy must not run for a refused output_path")
+        monkeypatch.setattr(render, "render_proxy", boom)
+
+    @pytest.mark.parametrize("bad", [
+        "http://127.0.0.1:9/exfil.ts",
+        "https://example.com/x.mp4",
+        "tcp://127.0.0.1:9",
+        "file:/tmp/escape.mp4",
+        "pipe:1",
+        "ftp://example.com/x.mp4",
+    ])
+    def test_protocol_outputs_refused(self, monkeypatch, bad):
+        from tools import preview
+        self._never_render(monkeypatch)
+        result = asyncio.run(preview.handle_preview_render(
+            {"filepath": self.SAMPLE, "output_path": bad}))
+        text = result[0].text if isinstance(result, list) else str(result)
+        assert "not a URL" in text
+
+    @pytest.mark.parametrize("bad", ["/tmp/escape_proxy.mp4", "../escape_proxy.mp4"])
+    def test_outside_project_refused(self, monkeypatch, bad):
+        from tools import preview
+        self._never_render(monkeypatch)
+        result = asyncio.run(preview.handle_preview_render(
+            {"filepath": self.SAMPLE, "output_path": bad}))
+        text = result[0].text if isinstance(result, list) else str(result)
+        assert "Refused output_path" in text
+        assert not Path("escape_proxy.mp4").exists()
+
+    def test_relative_path_lands_beside_the_timeline(self):
+        from tools import preview
+        path, refusal = preview._checked_output_path(
+            {"filepath": self.SAMPLE, "output_path": "proxy_under_test.mp4"})
+        assert refusal is None
+        assert Path(path) == Path(self.SAMPLE).resolve().parent / "proxy_under_test.mp4"
+
+    def test_no_output_path_keeps_cache_default(self):
+        from tools import preview
+        assert preview._checked_output_path({"filepath": self.SAMPLE}) == (None, None)
+
+    @pytest.mark.parametrize("bad", ["http://127.0.0.1:9/x.ts", "relative.mp4", "pipe:1"])
+    def test_render_proxy_backstop(self, bad):
+        from fcpxml import render
+        from fcpxml.parser import FCPXMLParser
+        timeline = FCPXMLParser().parse_file(self.SAMPLE).primary_timeline
+        with pytest.raises(ValueError, match="absolute local out_path"):
+            render.render_proxy(timeline, out_path=bad)

@@ -3,13 +3,13 @@
   "name": "io.github.DareDev256/fcpxml-mcp-server",
   "title": "AI tools for Final Cut Pro (MCP server)",
   "description": "AI tools for Final Cut Pro (MCP server): 15 grouped tools, 102 operations on FCPXML timelines.",
-  "version": "0.36.0",
+  "version": "0.36.1",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "fcp-mcp-server",
-      "version": "0.36.0",
+      "version": "0.36.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

@@ -345,6 +345,11 @@ def render_proxy(
     if out_path is None:
         name = str(getattr(timeline, "name", "timeline")).replace("/", "_")
         out_path = str(cache_dir() / f"{name}_proxy.mp4")
+    elif not os.path.isabs(str(out_path)):
+        # ffmpeg reads "http://...", "pipe:" and the like as protocols, so only
+        # an absolute local path may reach it (GHSA-wcpc-pq5j-rgff). Callers
+        # validate first; this is the backstop at the sink.
+        raise ValueError(f"render_proxy needs an absolute local out_path, got {out_path!r}")
 
     attempts = [dict(with_transitions=True, with_lanes=True, with_audio=True)]
     if graph.audio:
