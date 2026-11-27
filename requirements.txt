@@ -10,7 +10,7 @@
 mcp>=1.21.1
 
 # XML Parsing
-lxml>=4.9.0
+lxml>=6.1.3
 
 # Dev / Testing
 pytest>=7.0.0
